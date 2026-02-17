@@ -77,6 +77,10 @@ class HCADFormService:
         pdf.set_font("Helvetica", size=10)
         pdf.cell(0, 8, "[X] Incorrect appraised (market) value", ln=True)
         pdf.cell(0, 8, "[X] Value is unequal compared with other properties (Equity)", ln=True)
+        
+        vision_detected = len(protest_data.get('vision_data', [])) > 0
+        condition_check = "[X]" if vision_detected else "[ ]"
+        pdf.cell(0, 8, f"{condition_check} Property condition (Physical damage/defects)", ln=True)
         pdf.ln(5)
         
         # Section 3: Evidence Summary
@@ -125,7 +129,8 @@ class HCADFormService:
             pdf.set_fill_color(255, 240, 240)
             pdf.set_font("Helvetica", 'B', 11)
             pdf.cell(130, 10, "JUSTIFIED VALUE PER EQUITY (Floor Analysis)", 1, 0, 'R')
-            pdf.cell(60, 10, f"${equity_data['justified_value_floor']:,.0f}", 1, 1, 'C', True)
+            justified_val = equity_data.get('justified_value_floor', 0)
+            pdf.cell(60, 10, f"${justified_val:,.0f}", 1, 1, 'C', True)
 
         # --- PAGE 4: PHOTOGRAPHIC EVIDENCE ---
         pdf.add_page()
@@ -144,16 +149,42 @@ class HCADFormService:
         
         # Detected Issues Table
         vision_data = protest_data.get('vision_data', [])
-        if vision_data:
-            pdf.set_font("Helvetica", 'B', 10)
-            pdf.set_fill_color(248, 248, 248)
-            pdf.cell(120, 8, "Condition Issue Identified via Computer Vision", 1, 0, 'L', True)
-            pdf.cell(40, 8, "Est. Deduction", 1, 1, 'R', True)
-            
-            pdf.set_font("Helvetica", size=10)
-            for issue in vision_data:
-                pdf.cell(120, 8, clean_text(issue.get('issue', 'Unknown')), 1, 0, 'L')
-                pdf.cell(40, 8, f"-${issue.get('deduction', 0):,}", 1, 1, 'R')
+        # Safety guard: ensure it's a list of dicts
+        if isinstance(vision_data, list) and len(vision_data) > 0:
+            valid_issues = [i for i in vision_data if isinstance(i, dict)]
+            if valid_issues:
+                pdf.set_font("Helvetica", 'B', 10)
+                pdf.set_fill_color(248, 248, 248)
+                pdf.cell(60, 8, "Condition Issue", 1, 0, 'L', True)
+                pdf.cell(100, 8, "Visual Observation", 1, 0, 'L', True)
+                pdf.cell(30, 8, "Deduction", 1, 1, 'R', True)
+                
+                pdf.set_font("Helvetica", size=9)
+                for issue in valid_issues:
+                    name = clean_text(issue.get('issue', 'Unknown'))
+                    desc = clean_text(issue.get('description', 'Visual defect detected'))
+                    deduct = issue.get('deduction', 0)
+                    
+                    # Store current Y to draw the border later
+                    start_y = pdf.get_y()
+                    
+                    # Column 1
+                    pdf.set_xy(10, start_y)
+                    pdf.multi_cell(60, 10, name, border=1)
+                    end_y1 = pdf.get_y()
+                    
+                    # Column 2
+                    pdf.set_xy(70, start_y)
+                    pdf.multi_cell(100, 10, desc, border=1)
+                    end_y2 = pdf.get_y()
+                    
+                    # Column 3
+                    pdf.set_xy(170, start_y)
+                    pdf.multi_cell(30, 10, f"-${deduct:,}", border=1, align='R')
+                    end_y3 = pdf.get_y()
+                    
+                    # Set Y to the max height of the row
+                    pdf.set_y(max(end_y1, end_y2, end_y3))
 
         # Footer / Signature
         pdf.set_y(260)

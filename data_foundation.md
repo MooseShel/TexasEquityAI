@@ -6,13 +6,13 @@ This document outlines the strategic datasets that provide a competitive advanta
 *   **Source**: City of Houston / Harris County Permit Portals (Public Record).
 *   **The Advantage**: Identifies major renovations in neighboring "comparable" properties.
 *   **The Argument**: If a comparable has a major renovation permit and the subject property does not, the comparable's value should be adjusted downward for "superior condition," lowering the equity floor for the subject property.
-*   **Status**: Investigating Discovery/API availability.
+*   **Status**: COMPLETE - Integrated via City of Houston CKAN API.
 
 ## 2. FEMA Flood Zone & Elevation Data
 *   **Source**: FEMA National Flood Hazard Layer (NFHL) / Harris County Flood Control District (GIS).
 *   **The Advantage**: Quantifies locational risk and insurance burden.
 *   **The Argument**: Properties in high-risk flood zones (Zone AE) suffer from "External Obsolescence" and have a smaller buyer pool compared to properties in low-risk zones (Zone X).
-*   **Status**: Investigating GIS layer integration.
+*   **Status**: COMPLETE - Integrated via FEMA NFHL ArcGIS REST API.
 
 ## 3. MLS Closed Sales (Non-Disclosure Bridge)
 *   **Source**: HAR (Houston Association of Realtors) / Proprietary aggregators like Attom or CoreLogic.

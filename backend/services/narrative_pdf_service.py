@@ -31,8 +31,10 @@ class NarrativeAgent:
     def __init__(self):
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
+        self.xai_key = os.getenv("XAI_API_KEY")
         self.gemini_llm = None
         self.openai_llm = None
+        self.xai_llm = None
 
         if self.gemini_key:
             try:
@@ -57,13 +59,26 @@ class NarrativeAgent:
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI: {e}")
 
+        if self.xai_key:
+            try:
+                # Grok AI is OpenAI-compatible
+                self.xai_llm = ChatOpenAI(
+                    model="grok-2-latest",
+                    api_key=self.xai_key,
+                    base_url="https://api.x.ai/v1",
+                    temperature=0.7
+                )
+                logger.info("xAI (Grok) LLM initialized.")
+            except Exception as e:
+                logger.error(f"Failed to initialize xAI: {e}")
+
     def generate_protest_narrative(self, property_data: dict, equity_data: dict, vision_data: list, market_value: float = None) -> str:
         """
         Synthesize Scraper, Equity, Market, and Vision data into a formal protest narrative.
         LCEL Syntax: prompt | llm | output_parser
         """
-        if not self.gemini_llm and not self.openai_llm:
-            return "Narrative Generation Unavailable: No LLM keys (Gemini/OpenAI) found or initialization failed."
+        if not self.gemini_llm and not self.openai_llm and not self.xai_llm:
+            return "Narrative Generation Unavailable: No LLM keys (Gemini/OpenAI/xAI) found or initialization failed."
 
         prompt_template = """
         You are an expert Property Tax Consultant in Texas. 
@@ -82,51 +97,77 @@ class NarrativeAgent:
         - Median Justified Value: ${justified_value}
         - Key Comparables on the same street: {comparables}
         
-        Evidence 3: Condition Issues (Vision Agent Detections)
+        Evidence 3: Condition & Location Issues
         - Identified Issues: {issues}
         - Total Condition Deduction: ${total_deduction}
+        
+        Evidence 4: Comparative Permit History
+        - Subject Renovation Status: {subject_permits}
+        - Comparable Renovations: {comp_renovations}
+        
+        Evidence 5: Flood Risk Analysis
+        - FEMA Flood Zone: {flood_zone}
         
         The narrative MUST cite:
         - Texas Tax Code §41.43 (Uniform and Equal)
         - Texas Tax Code §41.41 (Market Value)
         
         Structure it professionally for an HCAD Appraisal Review Board (ARB) hearing.
-        Focus on how the Appraised Value exceeds both the actual market value and the median equity value of similar homes.
+        Focus on how the Appraised Value exceeds both the actual market value and the median equity value of similar homes. Use the Flood Risk and Permit lack-of-renovation to argue for additional 'External Obsolescence' and 'Physical Depreciation' adjustments.
         """
         
         prompt = PromptTemplate.from_template(prompt_template)
+        # Safety Guard: Ensure vision_data is a list
+        visible_issues = []
+        if isinstance(vision_data, list):
+            # Further protect against non-dict items in list
+            visible_issues = [d for d in vision_data if isinstance(d, dict)]
+        
         inputs = {
             "address": property_data.get('address', 'N/A'),
             "account_number": property_data.get('account_number', 'N/A'),
             "appraised_value": property_data.get('appraised_value', 0),
             "building_area": property_data.get('building_area', 0),
             "market_value": f"{market_value:,.0f}" if market_value else "N/A",
-            "justified_value": f"{equity_data.get('justified_value_floor', 0):,.0f}",
-            "comparables": ", ".join([c['address'] for c in equity_data.get('equity_5', [])]),
-            "issues": ", ".join([d['issue'] for d in vision_data]) if vision_data else "None cited",
-            "total_deduction": sum(d['deduction'] for d in vision_data)
+            "justified_value": f"{equity_data.get('justified_value_floor', 0):,.0f}" if isinstance(equity_data, dict) else "0",
+            "comparables": ", ".join([c.get('address', 'N/A') for c in equity_data.get('equity_5', [])]) if isinstance(equity_data, dict) and 'equity_5' in equity_data else "None cited",
+            "issues": ", ".join([d.get('issue', 'Unknown') for d in visible_issues]) if visible_issues else "None cited",
+            "total_deduction": sum(d.get('deduction', 0) for d in visible_issues) if visible_issues else 0,
+            "subject_permits": property_data.get('permit_summary', {}).get('status', 'No major permits found'),
+            "comp_renovations": "; ".join([f"{c['address']} has {len(c['renovations'])} major permits" for c in property_data.get('comp_renovations', [])]) or "No major renovations found in comps",
+            "flood_zone": property_data.get('flood_zone', 'Zone X (Minimal Risk)')
         }
 
-        # Try Gemini First
-        if self.gemini_llm:
-            try:
-                logger.info("Attempting narrative generation with Gemini...")
-                chain = prompt | self.gemini_llm | StrOutputParser()
-                narrative = chain.invoke(inputs)
-                return clean_text(narrative)
-            except Exception as e:
-                logger.warning(f"Gemini failed or quota hit: {e}. Falling back to OpenAI...")
-        
-        # Fallback to OpenAI
+        # Try OpenAI First
         if self.openai_llm:
             try:
-                logger.info("Attempting narrative generation with OpenAI (Fallback)...")
+                logger.info("Attempting narrative generation with OpenAI (Primary)...")
                 chain = prompt | self.openai_llm | StrOutputParser()
                 narrative = chain.invoke(inputs)
                 return clean_text(narrative)
             except Exception as e:
-                logger.error(f"OpenAI Fallback failed as well: {e}")
-                return f"Error: All LLM providers (Gemini & OpenAI) failed to generate narrative. Last error: {e}"
+                logger.warning(f"OpenAI failed: {e}. Falling back to Grok AI...")
+        
+        # Fallback to xAI (Grok)
+        if self.xai_llm:
+            try:
+                logger.info("Attempting narrative generation with xAI Grok (Fallback)...")
+                chain = prompt | self.xai_llm | StrOutputParser()
+                narrative = chain.invoke(inputs)
+                return clean_text(narrative)
+            except Exception as e:
+                logger.warning(f"xAI Fallback failed: {e}. Falling back to Gemini...")
+        
+        # Fallback to Gemini
+        if self.gemini_llm:
+            try:
+                logger.info("Attempting narrative generation with Gemini (Fallback)...")
+                chain = prompt | self.gemini_llm | StrOutputParser()
+                narrative = chain.invoke(inputs)
+                return clean_text(narrative)
+            except Exception as e:
+                logger.error(f"Gemini Fallback failed: {e}")
+                return f"Error: All LLM providers (OpenAI, xAI, Gemini) failed to generate narrative. Last error: {e}"
 
         return "Error: No viable LLM available for generation."
 

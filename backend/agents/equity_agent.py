@@ -13,14 +13,20 @@ class EquityAgent:
         Selection: Sort neighbors by 'Assessed Value per SqFt' ascending. Select the top 5 (The 'Equity 5').
         Calculation: Calculate the median of the Equity 5 to determine the 'Justified Value Floor.'
         """
+        subj_val = subject_property.get('appraised_value', 0)
+        subj_area = subject_property.get('building_area', 1) or 1
         if not neighborhood_properties:
-            return {}
+            return {
+                'equity_5': [],
+                'justified_value_floor': subj_val,
+                'subject_value_per_sqft': subj_val / subj_area
+            }
 
         df = pd.DataFrame(neighborhood_properties)
         
         # Features for KNN: Building Area, Year Built (if available)
         features = ['building_area']
-        subject_vals = [subject_property['building_area']]
+        subject_vals = [subj_area]
         
         if 'year_built' in df.columns and subject_property.get('year_built'):
             # Filter out neighbors with no year_built for this calc
@@ -51,10 +57,10 @@ class EquityAgent:
         # Select top 5
         equity_5 = top_20_sorted.head(5)
         
-        justified_value_floor = equity_5['value_per_sqft'].median() * subject_property['building_area']
+        justified_value_floor = equity_5['value_per_sqft'].median() * subj_area
         
         return {
             'equity_5': equity_5.to_dict('records'),
             'justified_value_floor': justified_value_floor,
-            'subject_value_per_sqft': subject_property['appraised_value'] / subject_property['building_area']
+            'subject_value_per_sqft': subj_val / subj_area
         }
