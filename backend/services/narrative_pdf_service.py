@@ -1,5 +1,6 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from fpdf import FPDF
@@ -28,28 +29,41 @@ logger = logging.getLogger(__name__)
 
 class NarrativeAgent:
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        self.openai_key = os.getenv("OPENAI_API_KEY")
+        self.gemini_llm = None
+        self.openai_llm = None
+
+        if self.gemini_key:
             try:
-                # Configure for Gemini 3
-                self.llm = ChatGoogleGenerativeAI(
-                    model="gemini-3-flash-preview", 
-                    google_api_key=self.api_key,
+                # Configure for Gemini 2.0 Flash (Verified available in this environment)
+                self.gemini_llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.0-flash", 
+                    google_api_key=self.gemini_key,
                     temperature=0.7
                 )
+                logger.info("Gemini LLM initialized.")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini: {e}")
-                self.llm = None
-        else:
-            self.llm = None
+
+        if self.openai_key:
+            try:
+                self.openai_llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    api_key=self.openai_key,
+                    temperature=0.7
+                )
+                logger.info("OpenAI LLM initialized.")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI: {e}")
 
     def generate_protest_narrative(self, property_data: dict, equity_data: dict, vision_data: list, market_value: float = None) -> str:
         """
         Synthesize Scraper, Equity, Market, and Vision data into a formal protest narrative.
         LCEL Syntax: prompt | llm | output_parser
         """
-        if not self.llm:
-            return "Narrative Generation Unavailable: GEMINI_API_KEY missing or initialization failed."
+        if not self.gemini_llm and not self.openai_llm:
+            return "Narrative Generation Unavailable: No LLM keys (Gemini/OpenAI) found or initialization failed."
 
         prompt_template = """
         You are an expert Property Tax Consultant in Texas. 
@@ -81,26 +95,40 @@ class NarrativeAgent:
         """
         
         prompt = PromptTemplate.from_template(prompt_template)
+        inputs = {
+            "address": property_data.get('address', 'N/A'),
+            "account_number": property_data.get('account_number', 'N/A'),
+            "appraised_value": property_data.get('appraised_value', 0),
+            "building_area": property_data.get('building_area', 0),
+            "market_value": f"{market_value:,.0f}" if market_value else "N/A",
+            "justified_value": f"{equity_data.get('justified_value_floor', 0):,.0f}",
+            "comparables": ", ".join([c['address'] for c in equity_data.get('equity_5', [])]),
+            "issues": ", ".join([d['issue'] for d in vision_data]) if vision_data else "None cited",
+            "total_deduction": sum(d['deduction'] for d in vision_data)
+        }
+
+        # Try Gemini First
+        if self.gemini_llm:
+            try:
+                logger.info("Attempting narrative generation with Gemini...")
+                chain = prompt | self.gemini_llm | StrOutputParser()
+                narrative = chain.invoke(inputs)
+                return clean_text(narrative)
+            except Exception as e:
+                logger.warning(f"Gemini failed or quota hit: {e}. Falling back to OpenAI...")
         
-        # LCEL Chain
-        chain = prompt | self.llm | StrOutputParser()
-        
-        try:
-            narrative = chain.invoke({
-                "address": property_data.get('address', 'N/A'),
-                "account_number": property_data.get('account_number', 'N/A'),
-                "appraised_value": property_data.get('appraised_value', 0),
-                "building_area": property_data.get('building_area', 0),
-                "market_value": f"{market_value:,.0f}" if market_value else "N/A",
-                "justified_value": f"{equity_data.get('justified_value_floor', 0):,.0f}",
-                "comparables": ", ".join([c['address'] for c in equity_data.get('equity_5', [])]),
-                "issues": ", ".join([d['issue'] for d in vision_data]) if vision_data else "None cited",
-                "total_deduction": sum(d['deduction'] for d in vision_data)
-            })
-            return clean_text(narrative)
-        except Exception as e:
-            logger.error(f"Error in narrative generation: {e}")
-            return f"Error generating narrative: {e}"
+        # Fallback to OpenAI
+        if self.openai_llm:
+            try:
+                logger.info("Attempting narrative generation with OpenAI (Fallback)...")
+                chain = prompt | self.openai_llm | StrOutputParser()
+                narrative = chain.invoke(inputs)
+                return clean_text(narrative)
+            except Exception as e:
+                logger.error(f"OpenAI Fallback failed as well: {e}")
+                return f"Error: All LLM providers (Gemini & OpenAI) failed to generate narrative. Last error: {e}"
+
+        return "Error: No viable LLM available for generation."
 
 class PDFService:
     def generate_evidence_packet(self, narrative: str, property_data: dict, equity_data: dict, vision_data: list, output_path: str):

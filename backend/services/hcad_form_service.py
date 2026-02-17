@@ -1,29 +1,73 @@
 from fpdf import FPDF
 import os
+import datetime
+import random
 from backend.services.narrative_pdf_service import clean_text
 
 class HCADFormService:
     def generate_form_41_44(self, property_data: dict, protest_data: dict, output_path: str):
         """
-        Generates a simplified version of HCAD Form 41.44 (Notice of Protest).
+        Generates a comprehensive property tax protest report including a cover page,
+        HCAD Form 41.44 summary, equity evidence grid, and photographic evidence.
         """
         pdf = FPDF()
+        
+        # --- PAGE 1: COVER PAGE ---
         pdf.add_page()
+        pdf.set_fill_color(30, 41, 59) # Dark Slate Blue
+        pdf.rect(0, 0, 210, 297, 'F') # Full page background
+        
+        # Title
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", 'B', 28)
+        pdf.ln(60)
+        pdf.cell(0, 15, "PROPERTY ANALYSIS", ln=True, align='C')
+        pdf.set_font("Helvetica", 'B', 32)
+        pdf.cell(0, 15, "EVIDENCE PACKET", ln=True, align='C')
+        
+        pdf.ln(10)
+        pdf.set_font("Helvetica", '', 14)
+        pdf.cell(0, 10, "Tax Year 2025 Protest Submission", ln=True, align='C')
+        
+        # Blue accent line
+        pdf.set_draw_color(59, 130, 246)
+        pdf.set_line_width(1)
+        pdf.line(40, 115, 170, 115)
+        
+        pdf.ln(30)
+        pdf.set_font("Helvetica", 'B', 12)
+        pdf.cell(0, 10, "SUBJECT PROPERTY:", ln=True, align='C')
+        pdf.set_font("Helvetica", '', 14)
+        pdf.cell(0, 10, f"{clean_text(property_data.get('address', 'Unknown Address'))}", ln=True, align='C')
+        pdf.cell(0, 10, f"Account #: {property_data.get('account_number', 'N/A')}", ln=True, align='C')
+        
+        # Info Box at Bottom
+        pdf.set_y(240)
+        pdf.set_font("Helvetica", 'B', 10)
+        case_id = f"TX-REQ-{random.randint(10000, 99999)}"
+        timestamp = datetime.datetime.now().strftime("%B %d, %Y")
+        
+        pdf.cell(0, 6, f"CASE ID: {case_id}", ln=True, align='C')
+        pdf.cell(0, 6, f"Generated On: {timestamp}", ln=True, align='C')
+        pdf.cell(0, 6, "Prepared for Harris County Appraisal Review Board", ln=True, align='C')
+        
+        # --- PAGE 2: FORM 41.44 SUMMARY ---
+        pdf.add_page()
+        pdf.set_text_color(0, 0, 0) # Reset to black
         
         # Header
         pdf.set_font("Helvetica", 'B', 16)
-        pdf.cell(0, 10, "Form 41.44: Property Tax Notice of Protest", ln=True, align='C')
+        pdf.cell(0, 10, "Form 41.44: Property Tax Notice of Protest (Summary)", ln=True, align='C')
         pdf.set_font("Helvetica", size=10)
         pdf.cell(0, 10, "Appraisal Review Board for the Harris Central Appraisal District", ln=True, align='C')
         pdf.ln(10)
         
         # Section 1: Property Description
-        pdf.set_fill_color(230, 230, 230)
+        pdf.set_fill_color(240, 244, 255) # Light blue header
         pdf.set_font("Helvetica", 'B', 12)
         pdf.cell(0, 10, " STEP 1: Property Description ", ln=True, fill=True)
         pdf.set_font("Helvetica", size=10)
         pdf.cell(0, 8, f"Account Number: {property_data.get('account_number')}", ln=True)
-        # Use clean_text here too in case address has weird chars
         pdf.cell(0, 8, f"Property Address: {clean_text(property_data.get('address', ''))}", ln=True)
         pdf.ln(5)
         
@@ -32,80 +76,90 @@ class HCADFormService:
         pdf.cell(0, 10, " STEP 2: Reason for Protest ", ln=True, fill=True)
         pdf.set_font("Helvetica", size=10)
         pdf.cell(0, 8, "[X] Incorrect appraised (market) value", ln=True)
-        pdf.cell(0, 8, "[X] Value is unequal compared with other properties", ln=True)
-        pdf.cell(0, 8, "[ ] Other: __________________________________________", ln=True)
+        pdf.cell(0, 8, "[X] Value is unequal compared with other properties (Equity)", ln=True)
         pdf.ln(5)
         
         # Section 3: Evidence Summary
         pdf.set_font("Helvetica", 'B', 12)
         pdf.cell(0, 10, " STEP 3: Evidence & Narrative Summary ", ln=True, fill=True)
         pdf.set_font("Helvetica", size=10)
-        pdf.multi_cell(0, 8, txt=clean_text(protest_data.get('narrative', 'N/A')))
+        pdf.multi_cell(0, 6, txt=clean_text(protest_data.get('narrative', 'N/A')))
         pdf.ln(5)
 
-        # Section 4: Photographic Evidence (New Feature)
+        # --- PAGE 3: EQUITY EVIDENCE GRID ---
+        equity_data = protest_data.get('equity_results')
+        if equity_data and 'equity_5' in equity_data:
+            pdf.add_page()
+            pdf.set_font("Helvetica", 'B', 14)
+            pdf.cell(0, 10, "COMPARATIVE EQUITY ANALYSIS GRID", ln=True, align='C')
+            pdf.set_font("Helvetica", '', 10)
+            pdf.cell(0, 8, "The following 5 properties are structurally similar and geographically proximate.", ln=True, align='C')
+            pdf.ln(5)
+            
+            # Table Header
+            pdf.set_font("Helvetica", 'B', 9)
+            pdf.set_fill_color(240, 240, 240)
+            col_widths = [70, 30, 30, 30, 30]
+            headers = ["Comparable Address", "Appraised Val", "Sq Ft", "$/SqFt", "Similarity"]
+            
+            for i, h in enumerate(headers):
+                pdf.cell(col_widths[i], 8, h, 1, 0, 'C', True)
+            pdf.ln()
+
+            # Table Rows
+            pdf.set_font("Helvetica", size=9)
+            for comp in equity_data['equity_5']:
+                addr = clean_text(comp.get('address', 'N/A'))
+                val = comp.get('appraised_value', 0)
+                area = comp.get('building_area', 1) # Avoid div by zero if any
+                vps = comp.get('value_per_sqft', val/area if area > 0 else 0)
+                sim = comp.get('similarity_score', 0)
+                
+                pdf.cell(col_widths[0], 8, addr, 1, 0, 'L')
+                pdf.cell(col_widths[1], 8, f"${val:,.0f}", 1, 0, 'C')
+                pdf.cell(col_widths[2], 8, f"{area:,.0f}", 1, 0, 'C')
+                pdf.cell(col_widths[3], 8, f"${vps:.2f}", 1, 0, 'C')
+                pdf.cell(col_widths[4], 8, f"{sim:.2f}", 1, 1, 'C')
+            
+            pdf.ln(10)
+            pdf.set_fill_color(255, 240, 240)
+            pdf.set_font("Helvetica", 'B', 11)
+            pdf.cell(130, 10, "JUSTIFIED VALUE PER EQUITY (Floor Analysis)", 1, 0, 'R')
+            pdf.cell(60, 10, f"${equity_data['justified_value_floor']:,.0f}", 1, 1, 'C', True)
+
+        # --- PAGE 4: PHOTOGRAPHIC EVIDENCE ---
         pdf.add_page()
         pdf.set_font("Helvetica", 'B', 12)
-        pdf.cell(0, 10, " STEP 4: Photographic Evidence ", ln=True, fill=True)
+        pdf.cell(0, 10, " STEP 4: Condition Analysis & Photographic Evidence ", ln=True, fill=True)
         pdf.ln(5)
         
-        # Embed Image
         evidence_image_path = protest_data.get('evidence_image_path')
         if evidence_image_path and os.path.exists(evidence_image_path):
             try:
-                # Keep aspect ratio. Width=170mm (leaving margins)
                 pdf.image(evidence_image_path, x=20, w=170)
-                pdf.ln(5) # Space after image. Note: pdf.image flow can be tricky, relying on auto-placement generally works if space permits.
-                # However, FPDF image doesn't move cursor automatically in all versions. 
-                # Let's verify cursor Y or just move it down manually assuming a standard aspect ratio.
-                # 600x400 img -> 3:2 ratio. 170mm width -> ~113mm height.
+                pdf.ln(5)
                 pdf.set_y(pdf.get_y() + 115) 
             except Exception as e:
                 pdf.cell(0, 10, f"Error embedding image: {str(e)}", ln=True)
-        else:
-             pdf.cell(0, 10, "No photographic evidence available.", ln=True)
-        
-        pdf.ln(5)
         
         # Detected Issues Table
         vision_data = protest_data.get('vision_data', [])
         if vision_data:
-            pdf.set_font("Helvetica", 'B', 11)
-            pdf.cell(0, 10, "Detected Condition Issues:", ln=True)
-            
-            # Table Header
             pdf.set_font("Helvetica", 'B', 10)
-            pdf.set_fill_color(240, 240, 240)
-            pdf.cell(100, 8, "Issue Detected", 1, 0, 'L', True)
-            pdf.cell(40, 8, "Deduction", 1, 1, 'R', True) # ln=1 moves to next line
+            pdf.set_fill_color(248, 248, 248)
+            pdf.cell(120, 8, "Condition Issue Identified via Computer Vision", 1, 0, 'L', True)
+            pdf.cell(40, 8, "Est. Deduction", 1, 1, 'R', True)
             
-            # Table Rows
             pdf.set_font("Helvetica", size=10)
-            total_deduction = 0
             for issue in vision_data:
-                # Clean text just in case
-                issue_name = clean_text(issue.get('issue', 'Unknown'))
-                deduction = issue.get('deduction', 0)
-                total_deduction += deduction
-                
-                pdf.cell(100, 8, issue_name, 1, 0, 'L')
-                pdf.cell(40, 8, f"-${deduction:,.0f}", 1, 1, 'R')
-            
-            # Total Row
-            pdf.set_font("Helvetica", 'B', 10)
-            pdf.cell(100, 8, "TOTAL CONDITION DEDUCTION", 1, 0, 'R')
-            pdf.cell(40, 8, f"-${total_deduction:,.0f}", 1, 1, 'R')
-        else:
-             pdf.set_font("Helvetica", 'I', 10)
-             pdf.cell(0, 10, "No specific condition issues cited via computer vision.", ln=True)
-
+                pdf.cell(120, 8, clean_text(issue.get('issue', 'Unknown')), 1, 0, 'L')
+                pdf.cell(40, 8, f"-${issue.get('deduction', 0):,}", 1, 1, 'R')
 
         # Footer / Signature
-        pdf.ln(20)
+        pdf.set_y(260)
         pdf.set_font("Helvetica", 'I', 8)
-        pdf.cell(0, 10, "Generated by Texas Equity AI automate platform. This is a computer-generated summary for protest purposes.", ln=True)
-        pdf.cell(100, 10, "Signature: __________________________________________", ln=False)
-        pdf.cell(0, 10, "Date: ____________________", ln=True)
+        pdf.cell(0, 10, "Signature: __________________________________________    Date: ____________________", ln=True, align='C')
+        pdf.cell(0, 10, "Generated by Texas Equity AI. This is a computer-aided protest evidence packet.", ln=True, align='C')
         
         pdf.output(output_path)
         return output_path

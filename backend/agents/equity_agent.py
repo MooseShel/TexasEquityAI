@@ -18,18 +18,29 @@ class EquityAgent:
 
         df = pd.DataFrame(neighborhood_properties)
         
-        # Features for KNN: Building Area, Year Built (if available), Lot Size (if available)
-        # For MVP: [Building Area]
+        # Features for KNN: Building Area, Year Built (if available)
         features = ['building_area']
+        subject_vals = [subject_property['building_area']]
+        
+        if 'year_built' in df.columns and subject_property.get('year_built'):
+            # Filter out neighbors with no year_built for this calc
+            # Or fill with median as a safeguard
+            df['year_built'] = pd.to_numeric(df['year_built'], errors='coerce').fillna(df['year_built'].median() if not df[df['year_built'].notnull()].empty else 1980)
+            features.append('year_built')
+            subject_vals.append(subject_property['year_built'])
         
         X = df[features].values
-        subject_X = np.array([[subject_property['building_area']]])
+        subject_X = np.array([subject_vals])
         
+        # Fit KNN on similarity features
+        self.knn = NearestNeighbors(n_neighbors=min(20, len(df)), metric='euclidean')
         self.knn.fit(X)
         distances, indices = self.knn.kneighbors(subject_X)
         
         # Get the 20 most similar neighbors
         top_20 = df.iloc[indices[0]].copy()
+        # Add similarity score (inverse of distance)
+        top_20['similarity_score'] = 1 / (1 + distances[0])
         
         # Calculate 'Assessed Value per SqFt' (using appraised_value as proxy for assessed)
         top_20['value_per_sqft'] = top_20['appraised_value'] / top_20['building_area']
