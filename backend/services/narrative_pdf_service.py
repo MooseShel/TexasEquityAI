@@ -2,7 +2,7 @@ import os
 import google.generativeai as genai
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
-from langchain.chains import LLMChain
+from langchain_core.output_parsers import StrOutputParser
 from fpdf import FPDF
 import logging
 
@@ -12,18 +12,26 @@ class NarrativeAgent:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=self.api_key)
+            try:
+                # Configure for 1.5 Flash
+                self.llm = ChatGoogleGenerativeAI(
+                    model="gemini-1.5-flash", 
+                    google_api_key=self.api_key,
+                    temperature=0.7
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini: {e}")
+                self.llm = None
         else:
             self.llm = None
 
     def generate_protest_narrative(self, property_data: dict, equity_data: dict, vision_data: list) -> str:
         """
         Synthesize Scraper, Equity, and Vision data into a formal protest narrative.
-        Cite Texas Tax Code §41.43 and §41.41.
+        LCEL Syntax: prompt | llm | output_parser
         """
         if not self.llm:
-            return "LLM not configured. Mock Narrative: The property is over-appraised relative to its conditions and market comparables."
+            return "Narrative Generation Unavailable: GEMINI_API_KEY missing or initialization failed."
 
         prompt_template = """
         You are an expert Property Tax Consultant in Texas. 
@@ -50,25 +58,26 @@ class NarrativeAgent:
         Structure it professionally for an HCAD Appraisal Review Board (ARB) hearing.
         """
         
-        prompt = PromptTemplate(
-            input_variables=["address", "account_number", "appraised_value", "building_area", "justified_value", "comparables", "issues", "total_deduction"],
-            template=prompt_template
-        )
+        prompt = PromptTemplate.from_template(prompt_template)
         
-        chain = LLMChain(llm=self.llm, prompt=prompt)
+        # LCEL Chain
+        chain = prompt | self.llm | StrOutputParser()
         
-        narrative = chain.run(
-            address=property_data.get('address', 'N/A'),
-            account_number=property_data.get('account_number', 'N/A'),
-            appraised_value=property_data.get('appraised_value', 0),
-            building_area=property_data.get('building_area', 0),
-            justified_value=equity_data.get('justified_value_floor', 0),
-            comparables=", ".join([c['address'] for c in equity_data.get('equity_5', [])]),
-            issues=", ".join([d['issue'] for d in vision_data]),
-            total_deduction=sum(d['deduction'] for d in vision_data)
-        )
-        
-        return narrative
+        try:
+            narrative = chain.invoke({
+                "address": property_data.get('address', 'N/A'),
+                "account_number": property_data.get('account_number', 'N/A'),
+                "appraised_value": property_data.get('appraised_value', 0),
+                "building_area": property_data.get('building_area', 0),
+                "justified_value": equity_data.get('justified_value_floor', 0),
+                "comparables": ", ".join([c['address'] for c in equity_data.get('equity_5', [])]),
+                "issues": ", ".join([d['issue'] for d in vision_data]) if vision_data else "None cited",
+                "total_deduction": sum(d['deduction'] for d in vision_data)
+            })
+            return narrative
+        except Exception as e:
+            logger.error(f"Error in narrative generation: {e}")
+            return f"Error generating narrative: {e}"
 
 class PDFService:
     def generate_evidence_packet(self, narrative: str, property_data: dict, equity_data: dict, vision_data: list, output_path: str):
