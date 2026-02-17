@@ -1,5 +1,6 @@
 from fpdf import FPDF
 import os
+from backend.services.narrative_pdf_service import clean_text
 
 class HCADFormService:
     def generate_form_41_44(self, property_data: dict, protest_data: dict, output_path: str):
@@ -22,7 +23,8 @@ class HCADFormService:
         pdf.cell(0, 10, " STEP 1: Property Description ", ln=True, fill=True)
         pdf.set_font("Helvetica", size=10)
         pdf.cell(0, 8, f"Account Number: {property_data.get('account_number')}", ln=True)
-        pdf.cell(0, 8, f"Property Address: {property_data.get('address')}", ln=True)
+        # Use clean_text here too in case address has weird chars
+        pdf.cell(0, 8, f"Property Address: {clean_text(property_data.get('address', ''))}", ln=True)
         pdf.ln(5)
         
         # Section 2: Reason for Protest
@@ -38,9 +40,66 @@ class HCADFormService:
         pdf.set_font("Helvetica", 'B', 12)
         pdf.cell(0, 10, " STEP 3: Evidence & Narrative Summary ", ln=True, fill=True)
         pdf.set_font("Helvetica", size=10)
-        pdf.multi_cell(0, 8, txt=protest_data.get('narrative', 'N/A'))
+        pdf.multi_cell(0, 8, txt=clean_text(protest_data.get('narrative', 'N/A')))
+        pdf.ln(5)
+
+        # Section 4: Photographic Evidence (New Feature)
+        pdf.add_page()
+        pdf.set_font("Helvetica", 'B', 12)
+        pdf.cell(0, 10, " STEP 4: Photographic Evidence ", ln=True, fill=True)
         pdf.ln(5)
         
+        # Embed Image
+        evidence_image_path = protest_data.get('evidence_image_path')
+        if evidence_image_path and os.path.exists(evidence_image_path):
+            try:
+                # Keep aspect ratio. Width=170mm (leaving margins)
+                pdf.image(evidence_image_path, x=20, w=170)
+                pdf.ln(5) # Space after image. Note: pdf.image flow can be tricky, relying on auto-placement generally works if space permits.
+                # However, FPDF image doesn't move cursor automatically in all versions. 
+                # Let's verify cursor Y or just move it down manually assuming a standard aspect ratio.
+                # 600x400 img -> 3:2 ratio. 170mm width -> ~113mm height.
+                pdf.set_y(pdf.get_y() + 115) 
+            except Exception as e:
+                pdf.cell(0, 10, f"Error embedding image: {str(e)}", ln=True)
+        else:
+             pdf.cell(0, 10, "No photographic evidence available.", ln=True)
+        
+        pdf.ln(5)
+        
+        # Detected Issues Table
+        vision_data = protest_data.get('vision_data', [])
+        if vision_data:
+            pdf.set_font("Helvetica", 'B', 11)
+            pdf.cell(0, 10, "Detected Condition Issues:", ln=True)
+            
+            # Table Header
+            pdf.set_font("Helvetica", 'B', 10)
+            pdf.set_fill_color(240, 240, 240)
+            pdf.cell(100, 8, "Issue Detected", 1, 0, 'L', True)
+            pdf.cell(40, 8, "Deduction", 1, 1, 'R', True) # ln=1 moves to next line
+            
+            # Table Rows
+            pdf.set_font("Helvetica", size=10)
+            total_deduction = 0
+            for issue in vision_data:
+                # Clean text just in case
+                issue_name = clean_text(issue.get('issue', 'Unknown'))
+                deduction = issue.get('deduction', 0)
+                total_deduction += deduction
+                
+                pdf.cell(100, 8, issue_name, 1, 0, 'L')
+                pdf.cell(40, 8, f"-${deduction:,.0f}", 1, 1, 'R')
+            
+            # Total Row
+            pdf.set_font("Helvetica", 'B', 10)
+            pdf.cell(100, 8, "TOTAL CONDITION DEDUCTION", 1, 0, 'R')
+            pdf.cell(40, 8, f"-${total_deduction:,.0f}", 1, 1, 'R')
+        else:
+             pdf.set_font("Helvetica", 'I', 10)
+             pdf.cell(0, 10, "No specific condition issues cited via computer vision.", ln=True)
+
+
         # Footer / Signature
         pdf.ln(20)
         pdf.set_font("Helvetica", 'I', 8)
