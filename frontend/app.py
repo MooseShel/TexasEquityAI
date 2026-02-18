@@ -203,7 +203,17 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         cached_property = await supabase_service.get_property_by_account(current_account)
         connector = DistrictConnectorFactory.get_connector(current_district, current_account)
         original_address = account_number if any(c.isalpha() for c in account_number) else None
-        property_details = await connector.get_property_details(current_account, address=original_address)
+
+        # Use cached data directly if it has real content — skip the scraper entirely
+        if (cached_property
+                and cached_property.get('address')
+                and cached_property.get('appraised_value')
+                and not manual_value and not manual_address):
+            logger.info(f"Using Supabase cached record for {current_account} — skipping scraper.")
+            property_details = cached_property
+        else:
+            property_details = await connector.get_property_details(current_account, address=original_address)
+
         if property_details and property_details.get('account_number'):
             current_account = property_details.get('account_number')
         if not property_details:
