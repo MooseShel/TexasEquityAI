@@ -104,34 +104,84 @@ class NarrativeAgent:
         Evidence 5: Flood Risk Analysis
         - FEMA Flood Zone: {flood_zone}
         
+        EQUITY SITUATION: {equity_situation}
+        
         The narrative MUST cite:
         - Texas Tax Code §41.43 (Uniform and Equal)
         - Texas Tax Code §41.41 (Market Value)
         
-        Structure it professionally for an HCAD Appraisal Review Board (ARB) hearing.
-        Focus on how the Appraised Value exceeds both the actual market value and the median equity value of similar homes. Use the Flood Risk and Permit lack-of-renovation to argue for additional 'External Obsolescence' and 'Physical Depreciation' adjustments.
+        Structure it professionally for an Appraisal Review Board (ARB) hearing.
+        {equity_argument}
+        Use the Flood Risk and Permit lack-of-renovation to argue for additional 'External Obsolescence' and 'Physical Depreciation' adjustments where applicable.
+        IMPORTANT: Only argue positions that are supported by the data above. Do NOT claim the appraised value exceeds comparable values if the justified value is higher than the appraised value.
         """
         
         prompt = PromptTemplate.from_template(prompt_template)
         # Safety Guard: Ensure vision_data is a list
         visible_issues = []
         if isinstance(vision_data, list):
-            # Further protect against non-dict items in list
             visible_issues = [d for d in vision_data if isinstance(d, dict)]
+        
+        # ── Equity Direction Analysis ─────────────────────────────────────────
+        appraised_val = property_data.get('appraised_value', 0) or 0
+        justified_val = equity_data.get('justified_value_floor', 0) if isinstance(equity_data, dict) else 0
+        justified_val = justified_val or 0
+        market_val = market_value or appraised_val
+        
+        # Determine if the property is over or under assessed
+        is_over_assessed_equity = justified_val > 0 and appraised_val > justified_val
+        is_over_assessed_market = market_val > 0 and appraised_val > market_val
+        potential_savings = max(0, appraised_val - justified_val) if justified_val > 0 else 0
+        
+        if is_over_assessed_equity:
+            equity_situation = (
+                f"OVER-ASSESSED: The appraised value (${appraised_val:,.0f}) EXCEEDS the "
+                f"median justified value of comparable properties (${justified_val:,.0f}), "
+                f"suggesting a potential over-assessment of ${potential_savings:,.0f}."
+            )
+            equity_argument = (
+                "Focus on how the Appraised Value exceeds both the actual market value and the "
+                "median equity value of similar homes (Equity 5). Argue for a reduction to the "
+                "justified value floor under Texas Tax Code §41.43 (Uniform and Equal)."
+            )
+        elif justified_val > appraised_val:
+            equity_situation = (
+                f"UNDER-ASSESSED relative to comps: The median justified value of comparable "
+                f"properties (${justified_val:,.0f}) is HIGHER than the appraised value "
+                f"(${appraised_val:,.0f}). The equity argument does NOT support a reduction. "
+                f"Focus protest on market value and condition/location issues instead."
+            )
+            equity_argument = (
+                "The comparable property analysis does NOT show over-assessment — do NOT claim "
+                "the appraised value exceeds comparable values. Instead, focus the protest on: "
+                "(1) any gap between appraised value and actual market value, "
+                "(2) physical condition issues identified in the property inspection, "
+                "(3) external obsolescence factors (flood risk, deferred maintenance). "
+                "If the appraised value is already below market, acknowledge this but argue "
+                "that condition and location factors justify a lower value."
+            )
+        else:
+            equity_situation = "Equity data unavailable or insufficient comparables found."
+            equity_argument = (
+                "Focus the protest on market value evidence and any condition/location issues. "
+                "Do not make equity uniformity arguments without supporting comparable data."
+            )
         
         inputs = {
             "address": property_data.get('address', 'N/A'),
             "account_number": property_data.get('account_number', 'N/A'),
-            "appraised_value": property_data.get('appraised_value', 0),
+            "appraised_value": f"{appraised_val:,.0f}",
             "building_area": property_data.get('building_area', 0),
-            "market_value": f"{market_value:,.0f}" if market_value else "N/A",
-            "justified_value": f"{equity_data.get('justified_value_floor', 0):,.0f}" if isinstance(equity_data, dict) else "0",
+            "market_value": f"{market_val:,.0f}" if market_val else "N/A",
+            "justified_value": f"{justified_val:,.0f}",
             "comparables": ", ".join([c.get('address', 'N/A') for c in equity_data.get('equity_5', [])]) if isinstance(equity_data, dict) and 'equity_5' in equity_data else "None cited",
             "issues": ", ".join([d.get('issue', 'Unknown') for d in visible_issues]) if visible_issues else "None cited",
             "total_deduction": sum(d.get('deduction', 0) for d in visible_issues) if visible_issues else 0,
             "subject_permits": property_data.get('permit_summary', {}).get('status', 'No major permits found'),
             "comp_renovations": "; ".join([f"{c['address']} has {len(c['renovations'])} major permits" for c in property_data.get('comp_renovations', [])]) or "No major renovations found in comps",
-            "flood_zone": property_data.get('flood_zone', 'Zone X (Minimal Risk)')
+            "flood_zone": property_data.get('flood_zone', 'Zone X (Minimal Risk)'),
+            "equity_situation": equity_situation,
+            "equity_argument": equity_argument,
         }
 
         # Try OpenAI First
