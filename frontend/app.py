@@ -212,7 +212,28 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         if manual_address: property_details['address'] = manual_address
         if manual_value: property_details['appraised_value'] = manual_value
         if manual_area: property_details['building_area'] = manual_area
-        yield {"status": "📊 Market Analyst: Querying RentCast for market values..."}
+
+        # ── Write to Supabase cache (so cloud runs can use locally-scraped data) ──
+        if is_real_address(property_details.get('address', '')):
+            try:
+                clean_prop = {
+                    "account_number": property_details.get("account_number"),
+                    "address":        property_details.get("address"),
+                    "appraised_value": property_details.get("appraised_value"),
+                    "market_value":   property_details.get("market_value"),
+                    "building_area":  property_details.get("building_area"),
+                    "year_built":     property_details.get("year_built"),
+                    "neighborhood_code": property_details.get("neighborhood_code"),
+                    "district":       property_details.get("district"),
+                }
+                # Remove None values — Supabase rejects explicit nulls for some columns
+                clean_prop = {k: v for k, v in clean_prop.items() if v is not None}
+                await supabase_service.upsert_property(clean_prop)
+                logger.info(f"Cached property {clean_prop.get('account_number')} to Supabase.")
+            except Exception as e:
+                logger.warning(f"Supabase cache write failed (non-fatal): {e}")
+
+
         market_value = property_details.get('appraised_value', 0)
         prop_address = property_details.get('address', '')
         if is_real_address(prop_address):
