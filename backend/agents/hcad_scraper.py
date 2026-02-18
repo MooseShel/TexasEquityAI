@@ -76,185 +76,207 @@ class HCADScraper(AppraisalDistrictConnector):
 
     async def _scrape_new_portal_human(self, account_number: str, address: Optional[str] = None) -> Optional[Dict]:
         async with async_playwright() as p:
+            browser = None
             try:
                 browser = await p.chromium.launch(headless=True)
+                # Production-grade context
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                    viewport={'width': 1280, 'height': 800}
+                    viewport={'width': 1280, 'height': 800},
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
                 )
                 page = await context.new_page()
                 
                 # Step 1: Land on Search Home
                 logger.info(f"Navigating to {self.portal_url}")
-                await page.goto(self.portal_url, wait_until="commit", timeout=30000)
+                await page.goto(self.portal_url, wait_until="load", timeout=60000)
                 await self._bypass_security(page)
-                await asyncio.sleep(2)
                 
-                # Step 2: Select 'Account Number' radio button if searching by account
+                # Step 2: Select 'Account Number'
                 try:
-                    # Look for radio label containing 'Account Number'
-                    logger.info("Attempting to select 'Account Number' search mode...")
-                    account_radio = await page.query_selector("text='Account Number'")
-                    if account_radio:
-                        await account_radio.click()
-                        await asyncio.sleep(1)
-                except Exception as e:
-                    logger.warning(f"Could not explicitly select Account Number radio: {e}")
-
-                # Step 3: Try Search by Account first, then by Full Address fallback
-                search_queries = [account_number]
-                if address:
-                    # Clean the address for HCAD search
-                    # Examples: "935 Lamonte Ln, Houston, TX" -> "935 Lamonte Ln"
-                    addr_clean = address.split(",")[0].strip()
-                    
-                    # 1. Try the full street segment (House # + Name + Suffix)
-                    search_queries.append(addr_clean) 
-                    
-                    # 2. Try just House # + Street Name (Fallback)
-                    parts = addr_clean.split()
-                    if len(parts) >= 2:
-                        simplified_addr = f"{parts[0]} {parts[1]}" # e.g. "935 Lamonte"
-                        if simplified_addr != addr_clean:
-                            search_queries.append(simplified_addr)
-
-                link = None
-                for query in search_queries:
-                    logger.info(f"Searching for: {query}")
-                    input_selector = "input[placeholder*='Search like']"
-                    
-                    # Switch search modes if necessary
-                    try:
-                        is_numeric_query = query.isdigit() or len(query) == 13
-                        mode_text = "Account Number" if is_numeric_query else "Property Address"
-                        mode_radio = await page.query_selector(f"text='{mode_text}'")
-                        if mode_radio: 
-                            await mode_radio.click()
-                            await asyncio.sleep(0.5)
-                    except: pass
-
-                    await page.click(input_selector) # Human-like click before typing
-                    await page.fill(input_selector, "")
-                    await page.type(input_selector, query, delay=100) # Human-like typing
-                    await page.keyboard.press("Enter")
-                    
-                    # Wait for results with a longer timeout
-                    try:
-                        # Success indicator is often the account number appearing in a table
-                        await page.wait_for_selector(f"text='{account_number}'", timeout=15000)
-                    except:
-                        pass
-                    
-                    # Look for ANY element containing account number parts
-                    link = await page.query_selector(f"text='{account_number}'")
-                    if not link:
-                        link = await page.query_selector(f"text='{account_number[-10:]}'")
-                    
-                    if link:
-                        logger.info(f"Match found for query: {query}")
-                        break
-                    else:
-                        logger.warning(f"No match for query: {query}")
-
-                if link:
-                    logger.info("Found account record, clicking human-like...")
-                    # Human-like click: scroll into view first
-                    await link.scroll_into_view_if_needed()
+                    logger.info("Selecting 'Account Number' search mode...")
+                    # Clicking the label is often more reliable in Blazor than the radio input itself
+                    await page.click("label[for='ACCOUNTNUMBER']", force=True)
                     await asyncio.sleep(1)
-                    
-                    # Some portals open details in a new tab
-                    try:
-                        async with context.expect_page(timeout=10000) as new_page_info:
-                            await link.click(delay=200)
-                        page = await new_page_info.value
-                        logger.info("Detected new tab for property details.")
-                    except:
-                        logger.info("No new tab detected, continuing on current page.")
-                    
-                    # CRITICAL: Wait for a detail-page specific element to appear
-                    # This helps bypass the Cloudflare verification period
-                    logger.info("Waiting for detail page content (Location header)...")
-                    await self._bypass_security(page)
-                    
-                    try:
-                        await page.wait_for_selector("text='Location'", timeout=15000)
-                        logger.info("Detail page loaded successfully.")
-                    except:
-                        logger.warning("Timeout waiting for 'Location' header. Might be blocked or slow.")
-                    
-                    await asyncio.sleep(2) # Final settle
-                    
-                    text = await page.evaluate("() => document.body.innerText")
-                    logger.info(f"Extraction text length: {len(text)}")
-                    
-                    details = {"account_number": account_number}
-                    
-                    # 1. Address: Look for the street address segment (case insensitive)
-                    # Pattern matches something like "843 LAMONTE LN" after some whitespace
-                    addr_match = re.search(r"(?:\n|^)\s*(\d+\s+[A-Z\d\s]{3,}(?:LN|ST|RD|BLVD|CIR|DR|WAY|AVE|CT|TRL|PKWY|HWY|PL|LOOP))\b", text, re.IGNORECASE)
-                    if addr_match:
-                        details['address'] = addr_match.group(1).strip()
-                    else:
-                        # Backup: Try to find address line following the map instruction
-                        addr_alt = re.search(r"view values and property information\.\s*\n+\s*(.*?)(?:\nHOUSTON|$)", text, re.IGNORECASE)
-                        if addr_alt:
-                            details['address'] = addr_alt.group(1).strip()
-                    
-                    # 2. Appraised Value
-                    # In early season, HCAD shows "Pending" in the main Valuation table. 
-                    # We look for any $ amount in the whole text as a fallback if the table is empty.
-                    val_match = re.search(r"\$\s*(\d{1,3}(?:,\d{3})+)", text)
-                    if val_match:
-                        details['appraised_value'] = float(val_match.group(1).replace(',', ''))
-                    else:
-                        details['appraised_value'] = 0 
-                    
-                    # 3. Building Area (Living Area)
-                    # Pattern matches: "Living Area\n 6,785 SF"
-                    area_match = re.search(r"Living Area\s*[\n\r]\s*([\d,]+)\s*SF", text, re.IGNORECASE)
-                    if area_match:
-                        details['building_area'] = float(area_match.group(1).replace(',', ''))
-                    else:
-                        # Fallback: check Building Summary section for 'Impr Sq Ft' or similar
-                        area_summary = re.search(r"(?:Living Area|Impr Sq Ft|Impr\s*Sq\s*Ft)[\s\S]{1,100}?([\d,]{3,})\b", text, re.IGNORECASE)
-                        if area_summary:
-                            details['building_area'] = float(area_summary.group(1).replace(',', ''))
-                    
-                    # 4. Year Built
-                    # Usually in the Building Summary table.
-                    year_match = re.search(r"Building\s+Year Build[\s\S]*?\n\s*\d+\s+(\d{4})\b", text, re.IGNORECASE)
-                    if year_match:
-                        details['year_built'] = year_match.group(1)
-                    else:
-                        # General search for a 4-digit year starting with 19 or 20 in the building summary area
-                        bs_start = text.find("Building Summary")
-                        if bs_start != -1:
-                            year_fallback = re.search(r"\b(19|20)\d{2}\b", text[bs_start:])
-                            if year_fallback:
-                                details['year_built'] = year_fallback.group(0)
-                    
-                    # 5. Neighborhood Code
-                    # Sits in the Location table, often after 'Single-Family'
-                    nb_match = re.search(r"Single-Family\s+([\d\.]+)\s+", text, re.IGNORECASE)
-                    if nb_match:
-                        details['neighborhood_code'] = nb_match.group(1)
-                    else:
-                        # Fallback for different class codes or layouts
-                        nb_fallback = re.search(r"Location[\s\S]*?(\d{4}(?:\.\d{2})?)", text, re.IGNORECASE)
-                        if nb_fallback:
-                            details['neighborhood_code'] = nb_fallback.group(1)
+                except Exception as e:
+                    logger.warning(f"Failed to select Account Number mode: {e}")
 
-                    return details
+                # Step 3: Search
+                input_selector = "input[placeholder*='Search like']"
+                await page.fill(input_selector, "")
+                await page.type(input_selector, account_number, delay=100)
+                await page.keyboard.press("Enter")
                 
-                logger.warning(f"Could not find account {account_number} link. Saving screenshot to debug/")
-                os.makedirs("debug", exist_ok=True)
-                await page.screenshot(path=f"debug/search_fail_{account_number}.png")
+                # Step 4: Wait for data to appear (Polling approach)
+                logger.info("Polling for property data...")
+                details = {"account_number": account_number, "district": "HCAD"}
                 
+                start_time = asyncio.get_event_loop().time()
+                while asyncio.get_event_loop().time() - start_time < 45:
+                    content = await page.content()
+                    if account_number in content and ("LAMONTE" in content or "Owner" in content or "Value" in content):
+                        if await page.locator("#OwnerInfoComponent").is_visible():
+                            logger.info("Data detected on detail page.")
+                            break
+                    
+                    # If we see a results table, try to click it
+                    if "table-hover" in content or "Account Number" in content:
+                        try:
+                            result_link = page.get_by_text(account_number, exact=True).first
+                            if await result_link.is_visible():
+                                await result_link.click()
+                                await asyncio.sleep(2)
+                        except: pass
+                    
+                    await asyncio.sleep(2)
+                else:
+                    logger.error("Timed out waiting for property data to appear.")
+                    await page.screenshot(path=f"debug/poll_fail_{account_number}.png")
+                    return None
+
+                # Step 5: Extraction (Polished)
+                await asyncio.sleep(2) # Final settle
+                
+                details = {"account_number": account_number, "district": "HCAD"}
+
+                # Address
+                try:
+                    addr_el = page.locator("#OwnerInfoComponent span.whitebox-large-font")
+                    if await addr_el.count() > 0:
+                        addr_parts = await addr_el.all_inner_texts()
+                        details['address'] = " ".join([a.strip() for a in addr_parts if a.strip()])
+                except: pass
+
+                # Living Area
+                try:
+                    area_text = await page.locator("#PropertyComponent .row:has-text('Living Area') .col-6:nth-child(2)").inner_text()
+                    details['building_area'] = self._parse_number(area_text.replace("SF", ""))
+                except:
+                    try:
+                        area_text = await page.locator("#PropertyComponent .row:has-text('Living Area') .col").inner_text()
+                        details['building_area'] = self._parse_number(area_text.replace("SF", ""))
+                    except: pass
+                
+                # Year Built
+                try:
+                    details['year_built'] = await page.locator("#BuildingSummaryComponent table tbody tr:nth-child(2) td:nth-child(2)").inner_text()
+                    details['year_built'] = details['year_built'].strip()
+                except: pass
+
+                # Neighborhood Code
+                try:
+                    details['neighborhood_code'] = await page.locator("#AdditionalInfoComponent table tbody tr td").nth(1).inner_text()
+                    details['neighborhood_code'] = details['neighborhood_code'].strip()
+                except: pass
+
+                # Valuation logic
+                async def extract_vals():
+                    
+                    return await page.evaluate("""() => {
+                        const valBox = document.getElementById('ValuationComponent');
+                        if (!valBox) return { appraised: null, market: null };
+                        
+                        let appraised = null;
+                        let market = null;
+
+                        // Helper to clean currency
+                        const clean = (s) => s ? s.replace(/[$,\\s]/g, '') : null;
+
+                        // 1. Try table rows (Most reliable for Certified values)
+                        const rows = Array.from(valBox.querySelectorAll('tr'));
+                        for (const row of rows) {
+                            const text = row.innerText;
+                            const cells = row.querySelectorAll('td');
+                            const val = cells.length > 0 ? cells[cells.length - 1].innerText : null;
+                            
+                            // Only set if not already set (taking the first match which is usually the main table)
+                            if (text.includes('Appraised') && !appraised) appraised = val;
+                            if (text.includes('Market') && !market) market = val;
+                        }
+
+                        // 2. Try modern layout (col-6)
+                        if (!appraised) {
+                            const apprRow = Array.from(valBox.querySelectorAll('.row')).find(r => r.innerText.includes('Appraised'));
+                            if (apprRow) {
+                                const cols = apprRow.querySelectorAll('.col-6, .col');
+                                if (cols.length >= 2) appraised = cols[cols.length - 1].innerText;
+                            }
+                        }
+                        if (!market) {
+                            const mktRow = Array.from(valBox.querySelectorAll('.row')).find(r => r.innerText.includes('Market'));
+                            if (mktRow) {
+                                const cols = mktRow.querySelectorAll('.col-6, .col');
+                                if (cols.length >= 2) market = cols[cols.length - 1].innerText;
+                            }
+                        }
+
+                        // 3. Last ditch fallback for Appraised (Large Font)
+                        if (!appraised) {
+                            const large = valBox.querySelector('.whitebox-large-font');
+                            if (large && large.innerText.includes('$')) appraised = large.innerText;
+                        }
+
+                        return { appraised, market };
+                    }""")
+                
+                # Check for address specifically
+                if not details.get('address'):
+                     try:
+                        details['address'] = await page.locator(".whitebox-header").first.inner_text()
+                     except: pass
+
+                vals = await extract_vals()
+                
+                # Check if we need to switch year
+                if not vals['appraised'] or "Pending" in vals['appraised']:
+                    logger.info("Values pending/missing. Attempting 2025 switch...")
+                    try:
+                        await page.click("#dropdownMenuButton1", timeout=5000)
+                        await asyncio.sleep(1)
+                        await page.click(".dropdown-item:has-text('2025')", timeout=5000)
+                        await asyncio.sleep(6)
+                        
+                        vals = await extract_vals()
+                        logger.info(f"Re-extracted vals after 2025 switch: {vals}")
+                    except Exception as e:
+                        logger.warning(f"Failed 2025 switch: {e}")
+
+                details['appraised_value'] = self._parse_currency(vals['appraised'])
+                # If Market is missing, default to Appraised (common for residential uniform)
+                # But if we found it effectively, use it.
+                if vals['market'] and "Pending" not in vals['market']:
+                    details['market_value'] = self._parse_currency(vals['market'])
+                else:
+                    details['market_value'] = details['appraised_value']
+
+                return details
+
             except Exception as e:
                 logger.error(f"New Portal human-flow failed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
             finally:
-                await browser.close()
+                if browser:
+                    await browser.close()
         return None
+
+    def _parse_currency(self, text: str) -> float:
+        if not text: return 0.0
+        # Remove $, commas, and whitespace
+        clean = re.sub(r'[$,\s]', '', text)
+        if "Pending" in text: return 0.0
+        try:
+            return float(clean)
+        except:
+            return 0.0
+
+    def _parse_number(self, text: str) -> float:
+        if not text: return 0.0
+        clean = re.sub(r'[,\s]', '', text)
+        try:
+            return float(clean)
+        except:
+            return 0.0
 
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
