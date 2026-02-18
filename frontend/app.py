@@ -157,6 +157,14 @@ st.sidebar.divider()
 st.sidebar.subheader("📈 Savings Calculator")
 tax_rate = st.sidebar.slider("Property Tax Rate (%)", 1.0, 4.0, 2.5, 0.1)
 
+st.sidebar.divider()
+st.sidebar.subheader("⚙️ Options")
+force_fresh_comps = st.sidebar.checkbox(
+    "🔄 Force fresh comps",
+    value=False,
+    help="Bypass cached comparable properties and re-scrape live data. Use when comps feel outdated (cache TTL: 30 days)."
+)
+
 # Main Content
 st.title("Property Tax Protest Dashboard")
 
@@ -170,7 +178,7 @@ account_number = st.text_input(f"Enter {district_code} Account Number or Street 
                               placeholder=account_placeholder,
                               key="account_input")
 
-async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None):
+async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None, force_fresh_comps=False):
     try:
         yield {"status": "🔍 Resolver Agent: Locating property and resolving address..."}
         current_account = account_number
@@ -254,76 +262,86 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 yield {"error": f"⚠️ Could not retrieve property details from the appraisal district portal. The address could not be resolved (got: '{prop_address}'). This may be due to Cloudflare blocking on the deployed server. Try running locally, or use the Manual Override fields to enter the address and value directly."}
                 return
 
-            # Extract just the street name — strip house number AND trailing city/state/zip
-            # e.g. "843 LAMONTE LN HOUSTON, TX 77018" → "LAMONTE LN"
-
-            # Step 1: Take only the part before the first comma
-            street_only = prop_address.split(",")[0].strip()
-            addr_parts = street_only.split()
-            # Step 2: Strip leading house number
-            if addr_parts and addr_parts[0][0].isdigit():
-                addr_parts = addr_parts[1:]
-            # Step 3: Strip trailing tokens that look like city/state/zip
-            # Known Texas city names that might appear without a comma separator
-            KNOWN_CITIES = {
-                "HOUSTON", "DALLAS", "AUSTIN", "FORT", "WORTH", "PLANO",
-                "ARLINGTON", "IRVING", "GARLAND", "FRISCO", "MCKINNEY",
-                "SUGAR", "LAND", "KATY", "SPRING", "HUMBLE", "PEARLAND",
-                "PASADENA", "BAYTOWN", "LEAGUE", "CITY", "GALVESTON"
-            }
-            while addr_parts:
-                last = addr_parts[-1].upper().rstrip(".,")
-                # Drop if it's a zip code, 2-letter state, or known city word
-                if last.isdigit() and len(last) == 5:
-                    addr_parts.pop()
-                elif last.isalpha() and len(last) == 2 and last.isupper():
-                    addr_parts.pop()
-                elif last in KNOWN_CITIES:
-                    addr_parts.pop()
-                else:
-                    break
-            street_name = " ".join(addr_parts)
-            logger.info(f"Street discovery: extracted '{street_name}' from '{prop_address}'")
-
-            
-            # Semi-parallel scraping helper with concurrency limit
-            async def scrape_pool(pool_list, limit=3):
-                usable = []
-                sem = asyncio.Semaphore(limit)
-                
-                async def safe_scrape(neighbor):
-                    async with sem:
-                        return await connector.get_property_details(neighbor['account_number'])
-                
-                tasks = [safe_scrape(n) for n in pool_list[:10]]
-                deep_results = await asyncio.gather(*tasks)
-                return [res for res in deep_results if res and res.get('building_area', 0) > 0]
-
-            # Layer 1: Street-level search
-            discovered_neighbors = await connector.get_neighbors_by_street(street_name)
+            # ── Check Supabase comp cache first ──────────────────────────────
             real_neighborhood = []
-            if discovered_neighbors:
-                # Filter out subject property
-                discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
-                real_neighborhood = await scrape_pool(discovered_neighbors)
-                
-            # Layer 2: Neighborhood code fallback (only for residential codes)
+            used_cache = False
+            if not force_fresh_comps:
+                cached = await supabase_service.get_cached_comps(current_account)
+                if cached:
+                    real_neighborhood = cached
+                    used_cache = True
+                    yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old). Check '🔄 Force fresh comps' to re-scrape."}
+
             if not real_neighborhood:
-                nbhd_code = property_details.get('neighborhood_code')
-                is_commercial = connector.is_commercial_neighborhood_code(nbhd_code) if nbhd_code else False
-                
-                if is_commercial:
-                    logger.info(f"Neighborhood code '{nbhd_code}' is commercial — skipping neighborhood-wide search.")
-                    yield {"error": f"⚠️ This appears to be a **commercial property** (Neighborhood Code: '{nbhd_code}'). Residential equity analysis requires comparable residential properties. Please verify the property type and try a manual address override if needed."}
-                    return
-                elif nbhd_code and nbhd_code != "Unknown":
-                    logger.info(f"Street search yielded 0 usable comps. Trying neighborhood code '{nbhd_code}'...")
-                    nbhd_neighbors = await connector.get_neighbors(nbhd_code)
-                    if nbhd_neighbors:
-                        # Filter out subject property
-                        nbhd_neighbors = [n for n in nbhd_neighbors if n['account_number'] != property_details.get('account_number')]
-                        real_neighborhood = await scrape_pool(nbhd_neighbors)
-                        
+                if force_fresh_comps:
+                    yield {"status": "⚖️ Equity Specialist: Force-refreshing comps from live portal..."}
+                else:
+                    yield {"status": "⚖️ Equity Specialist: No cached comps — scraping live neighbors..."}
+
+                # Extract just the street name — strip house number AND trailing city/state/zip
+                # e.g. "843 LAMONTE LN HOUSTON, TX 77018" → "LAMONTE LN"
+                street_only = prop_address.split(",")[0].strip()
+                addr_parts = street_only.split()
+                if addr_parts and addr_parts[0][0].isdigit():
+                    addr_parts = addr_parts[1:]
+                KNOWN_CITIES = {
+                    "HOUSTON", "DALLAS", "AUSTIN", "FORT", "WORTH", "PLANO",
+                    "ARLINGTON", "IRVING", "GARLAND", "FRISCO", "MCKINNEY",
+                    "SUGAR", "LAND", "KATY", "SPRING", "HUMBLE", "PEARLAND",
+                    "PASADENA", "BAYTOWN", "LEAGUE", "CITY", "GALVESTON"
+                }
+                while addr_parts:
+                    last = addr_parts[-1].upper().rstrip(".,")
+                    if last.isdigit() and len(last) == 5:
+                        addr_parts.pop()
+                    elif last.isalpha() and len(last) == 2 and last.isupper():
+                        addr_parts.pop()
+                    elif last in KNOWN_CITIES:
+                        addr_parts.pop()
+                    else:
+                        break
+                street_name = " ".join(addr_parts)
+                logger.info(f"Street discovery: extracted '{street_name}' from '{prop_address}'")
+
+                # Semi-parallel scraping helper with concurrency limit
+                async def scrape_pool(pool_list, limit=3):
+                    usable = []
+                    sem = asyncio.Semaphore(limit)
+                    async def safe_scrape(neighbor):
+                        async with sem:
+                            return await connector.get_property_details(neighbor['account_number'])
+                    tasks = [safe_scrape(n) for n in pool_list[:10]]
+                    deep_results = await asyncio.gather(*tasks)
+                    return [res for res in deep_results if res and res.get('building_area', 0) > 0]
+
+                # Layer 1: Street-level search
+                discovered_neighbors = await connector.get_neighbors_by_street(street_name)
+                if discovered_neighbors:
+                    discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
+                    real_neighborhood = await scrape_pool(discovered_neighbors)
+
+                # Layer 2: Neighborhood code fallback (only for residential codes)
+                if not real_neighborhood:
+                    nbhd_code = property_details.get('neighborhood_code')
+                    is_commercial = connector.is_commercial_neighborhood_code(nbhd_code) if nbhd_code else False
+                    if is_commercial:
+                        logger.info(f"Neighborhood code '{nbhd_code}' is commercial — skipping neighborhood-wide search.")
+                        yield {"error": f"⚠️ This appears to be a **commercial property** (Neighborhood Code: '{nbhd_code}'). Residential equity analysis requires comparable residential properties. Please verify the property type and try a manual address override if needed."}
+                        return
+                    elif nbhd_code and nbhd_code != "Unknown":
+                        logger.info(f"Street search yielded 0 usable comps. Trying neighborhood code '{nbhd_code}'...")
+                        nbhd_neighbors = await connector.get_neighbors(nbhd_code)
+                        if nbhd_neighbors:
+                            nbhd_neighbors = [n for n in nbhd_neighbors if n['account_number'] != property_details.get('account_number')]
+                            real_neighborhood = await scrape_pool(nbhd_neighbors)
+
+                # ── Save fresh comps to cache ─────────────────────────────────
+                if real_neighborhood:
+                    try:
+                        await supabase_service.save_cached_comps(current_account, real_neighborhood)
+                    except Exception as e:
+                        logger.warning(f"Failed to cache comps: {e}")
+
             if not real_neighborhood:
                 yield {"error": "Could not find sufficient comparable properties for equity analysis. The property may be unique, commercial, or in a low-density area. Try using a manual address override."}
                 return
@@ -332,6 +350,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
         except Exception as e:
             equity_results = {"error": str(e)}
+
         yield {"status": "📸 Vision Agent: Analyzing property condition..."}
         search_address = property_details.get('address', '')
         coords = agents["vision_agent"]._geocode_address(search_address)
@@ -415,7 +434,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                 async for chunk in protest_generator_local(
                     account_number, manual_address=m_address or None,
                     manual_value=m_value if m_value > 0 else None,
-                    manual_area=m_area if m_area > 0 else None, district=district_code
+                    manual_area=m_area if m_area > 0 else None, district=district_code,
+                    force_fresh_comps=force_fresh_comps
                 ):
                     if "status" in chunk: st.write(chunk["status"])
                     if "error" in chunk:
