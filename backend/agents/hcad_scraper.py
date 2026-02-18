@@ -408,70 +408,17 @@ class HCADScraper(AppraisalDistrictConnector):
 
     async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
         """
-        Searches HCAD for all properties in a neighborhood code.
-        Uses the portal's search box with the neighborhood code.
+        HCAD does NOT support neighborhood code searches via the public portal.
+        Codes like '8014.02' are internal HCAD market area codes not exposed in
+        the search UI. Street-level search is the correct discovery path for HCAD.
         """
-        if self.is_commercial_neighborhood_code(neighborhood_code):
-            logger.info(f"HCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
-            return []
-        
-        logger.info(f"HCAD: Searching for neighborhood code: {neighborhood_code}")
-        async with async_playwright() as p:
-            browser = None
-            try:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-                )
-                page = await context.new_page()
-                
-                await page.goto(self.portal_url, wait_until="load", timeout=60000)
-                await self._bypass_security(page)
-                
-                input_selector = "input[placeholder*='Search like']"
-                await page.wait_for_selector(input_selector, timeout=30000)
-                await page.fill(input_selector, neighborhood_code)
-                await page.keyboard.press("Enter")
-                
-                try:
-                    await page.wait_for_selector("tr", timeout=30000)
-                    await asyncio.sleep(2)
-                except Exception:
-                    logger.warning(f"HCAD: Timed out waiting for neighborhood results for '{neighborhood_code}'")
-                    return []
-                
-                rows = await page.evaluate("""() => {
-                    const results = [];
-                    const seen = new Set();
-                    const tableRows = document.querySelectorAll('tr');
-                    tableRows.forEach(row => {
-                        const cells = row.querySelectorAll('td');
-                        if (cells.length >= 3) {
-                            let acc = cells[0].innerText.trim();
-                            let addr = cells[1].innerText.trim();
-                            if (!/^\\d{13}$/.test(acc) && /^\\d{13}$/.test(cells[1].innerText.trim())) {
-                                acc = cells[1].innerText.trim();
-                                addr = cells[2] ? cells[2].innerText.trim() : "Unknown";
-                            }
-                            if (/^\\d{13}$/.test(acc) && !seen.has(acc)) {
-                                seen.add(acc);
-                                results.push({ account_number: acc, address: addr });
-                            }
-                        }
-                    });
-                    return results;
-                }""")
-                
-                logger.info(f"HCAD: Found {len(rows)} properties in neighborhood '{neighborhood_code}'")
-                for row in rows:
-                    row['district'] = 'HCAD'
-                return rows
-            except Exception as e:
-                logger.error(f"HCAD: Neighborhood discovery failed: {e}")
-                return []
-            finally:
-                if browser:
-                    await browser.close()
+        logger.info(
+            f"HCAD: Neighborhood code search not supported for '{neighborhood_code}' "
+            f"(HCAD portal does not expose market area codes). "
+            f"Relying on street-level discovery only."
+        )
+        return []
+
 
     async def _discover_address(self, account_number: str) -> Optional[str]:
         mappings = {
