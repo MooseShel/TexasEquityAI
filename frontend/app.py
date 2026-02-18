@@ -11,6 +11,7 @@ import pandas as pd
 import json
 import asyncio
 import logging
+import requests
 from PIL import Image
 from dotenv import load_dotenv
 
@@ -40,6 +41,25 @@ from backend.agents.permit_agent import PermitAgent
 from backend.utils.address_utils import normalize_address, is_real_address
 
 st.set_page_config(page_title="Texas Equity AI", layout="wide")
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def geocode_address(address: str):
+    """Geocode an address using the free Nominatim API (no key required)."""
+    if not address or len(address) < 5:
+        return None
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": address, "format": "json", "limit": 1},
+            headers={"User-Agent": "TexasEquityAI/1.0"},
+            timeout=5
+        )
+        data = resp.json()
+        if data:
+            return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])}
+    except Exception:
+        pass
+    return None
 
 # Initialize Agents (Cached for performance)
 @st.cache_resource
@@ -367,6 +387,92 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 use_container_width=True,
                                 hide_index=True
                             )
+
+                        # ── Map View ─────────────────────────────────────────
+                        st.subheader("📍 Comparable Properties Map")
+                        import pydeck as pdk
+
+                        # Geocode subject property
+                        subject_addr = data['property'].get('address', '')
+                        subject_coords = geocode_address(subject_addr)
+
+                        # Geocode each comp
+                        map_points = []
+                        if subject_coords:
+                            map_points.append({
+                                "lat": subject_coords["lat"],
+                                "lon": subject_coords["lon"],
+                                "label": "Subject",
+                                "address": subject_addr,
+                                "appraised_value": f"${data['property'].get('appraised_value', 0):,.0f}",
+                                "color": [220, 50, 50, 220],   # Red
+                                "radius": 40,
+                            })
+
+                        for comp in data['equity'].get('equity_5', []):
+                            comp_addr = comp.get('address', '')
+                            if not comp_addr or comp_addr == 'Unknown':
+                                continue
+                            # Append district city for better geocoding accuracy
+                            district_city_map = {
+                                "HCAD": "Houston, TX", "TAD": "Fort Worth, TX",
+                                "DCAD": "Dallas, TX", "TCAD": "Austin, TX", "CCAD": "Plano, TX"
+                            }
+                            district_key = data['property'].get('district', 'HCAD')
+                            city_suffix = district_city_map.get(district_key, "Texas")
+                            full_addr = comp_addr if any(c.isdigit() and len(comp_addr) > 10 for c in comp_addr) else f"{comp_addr}, {city_suffix}"
+                            coords = geocode_address(full_addr)
+                            if coords:
+                                map_points.append({
+                                    "lat": coords["lat"],
+                                    "lon": coords["lon"],
+                                    "label": "Comp",
+                                    "address": comp_addr,
+                                    "appraised_value": f"${comp.get('appraised_value', 0):,.0f}",
+                                    "color": [30, 120, 220, 200],  # Blue
+                                    "radius": 25,
+                                })
+
+                        if map_points:
+                            map_df = pd.DataFrame(map_points)
+                            center_lat = map_df["lat"].mean()
+                            center_lon = map_df["lon"].mean()
+
+                            layer = pdk.Layer(
+                                "ScatterplotLayer",
+                                data=map_df,
+                                get_position=["lon", "lat"],
+                                get_fill_color="color",
+                                get_radius="radius",
+                                radius_scale=6,
+                                radius_min_pixels=8,
+                                radius_max_pixels=30,
+                                pickable=True,
+                            )
+
+                            view_state = pdk.ViewState(
+                                latitude=center_lat,
+                                longitude=center_lon,
+                                zoom=14,
+                                pitch=0,
+                            )
+
+                            tooltip = {
+                                "html": "<b>{label}</b><br/>{address}<br/>{appraised_value}",
+                                "style": {"backgroundColor": "#1a1a2e", "color": "white", "fontSize": "13px", "padding": "8px"}
+                            }
+
+                            st.pydeck_chart(pdk.Deck(
+                                layers=[layer],
+                                initial_view_state=view_state,
+                                tooltip=tooltip,
+                                map_style="mapbox://styles/mapbox/light-v10",
+                            ))
+
+                            # Legend
+                            st.caption("🔴 Subject Property &nbsp;&nbsp; 🔵 Comparable Properties")
+                        else:
+                            st.info("Map unavailable — could not geocode property addresses.")
 
                 with tab3:
                     st.subheader("Condition")
