@@ -113,17 +113,23 @@ async def get_full_protest(
 
             yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping HCAD records and history..."}) + "\n"
             
-            # 1. Cache & Scrape
+            # 1. Cache & Scrape — DB-first for ALL districts
             cached_property = await supabase_service.get_property_by_account(current_account)
-            
+
             # Use Factory to get the correct connector
             connector = DistrictConnectorFactory.get_connector(current_district, current_account)
-            
-            # Pass both the resolved account and the original input (if it was an address)
-            # This allows the scraper to try searching by address if account search fails.
             original_address = account_number if any(c.isalpha() for c in account_number) else None
-            property_details = await connector.get_property_details(current_account, address=original_address)
-            
+
+            # Use cached data directly if it has real content — skip scraper entirely
+            if (cached_property
+                    and cached_property.get('address')
+                    and cached_property.get('appraised_value')
+                    and not manual_value and not manual_address):
+                logger.info(f"DB-first: Using Supabase cached record for {current_account} — skipping scraper.")
+                property_details = cached_property
+            else:
+                property_details = await connector.get_property_details(current_account, address=original_address)
+
             # CRITICAL: Update current_account if the scraper found the real numeric account
             if property_details and property_details.get('account_number'):
                 scraped_acc = property_details.get('account_number')
@@ -224,67 +230,73 @@ async def get_full_protest(
             permit_summary = permit_agent.analyze_permits(subject_permits)
             property_details['permit_summary'] = permit_summary
 
-            yield json.dumps({"status": "⚖️ Equity Specialist: Discovering live neighbors on your block..."}) + "\n"
-            
-            # 4. Live Equity Analysis
+            yield json.dumps({"status": "⚖️ Equity Specialist: Discovering comparable properties..."}) + "\n"
+
+            # 4. Equity Analysis — DB-first for ALL districts
             try:
-                # Resolve Street Name
                 prop_address = property_details.get('address', 'Houston, TX')
-                # Remove city/state for street-only discovery
-                street_only = prop_address.split(",")[0].strip()
-                addr_parts = street_only.split()
-                # Skip the house number if it exists
-                street_name = " ".join(addr_parts[1:]) if addr_parts and addr_parts[0][0].isdigit() else " ".join(addr_parts)
-                
-                # Discovery Layer 1: Street Search
-                discovered_neighbors = await connector.get_neighbors_by_street(street_name)
-                
+                nbhd_code = property_details.get('neighborhood_code')
+                bld_area  = int(property_details.get('building_area') or 0)
+                prop_district = property_details.get('district', current_district or 'HCAD')
+                real_neighborhood = []
+
+                # Layer 0: DB lookup by neighborhood_code + building_area (no browser needed)
+                if nbhd_code and bld_area > 0:
+                    db_comps = await supabase_service.get_neighbors_from_db(
+                        current_account, nbhd_code, bld_area, district=prop_district
+                    )
+                    if len(db_comps) >= 3:
+                        real_neighborhood = db_comps
+                        yield json.dumps({"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} comps from database instantly."}) + "\n"
+
+                # Layer 1: Cached comps (previously scraped)
+                if not real_neighborhood:
+                    cached_comps = await supabase_service.get_cached_comps(current_account)
+                    if cached_comps:
+                        real_neighborhood = cached_comps
+                        yield json.dumps({"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps."}) + "\n"
+
                 async def scrape_pool(pool_list, limit=3):
-                    usable = []
                     sem = asyncio.Semaphore(limit)
-                    
                     async def safe_scrape(neighbor):
                         async with sem:
                             return await connector.get_property_details(neighbor['account_number'])
-                    
-                    logger.info(f"Deep-scraping pool of {len(pool_list[:10])} neighbors (Concurrency: {limit})...")
+                    logger.info(f"Deep-scraping pool of {len(pool_list[:10])} neighbors...")
                     tasks = [safe_scrape(n) for n in pool_list[:10]]
                     deep_results = await asyncio.gather(*tasks)
+                    usable = []
                     for res in deep_results:
-                        if res:
-                            area = res.get('building_area', 0)
-                            if area > 0:
-                                usable.append(res)
-                                logger.info(f"Added neighbor {res.get('account_number')} to pool. Area: {area}")
-                                # Cache the neighbor
-                                try:
-                                    await supabase_service.upsert_property({
-                                        "account_number": res.get("account_number"),
-                                        "address": res.get("address"),
-                                        "appraised_value": res.get("appraised_value"),
-                                        "building_area": res.get("building_area"),
-                                        "year_built": res.get("year_built")
-                                    })
-                                except: pass
-                            else:
-                                logger.warning(f"Skipping neighbor {res.get('account_number')}: Building Area is 0.")
-                        else:
-                            logger.warning("Deep scrape returned None for a neighbor.")
+                        if res and res.get('building_area', 0) > 0:
+                            usable.append(res)
+                            try:
+                                await supabase_service.upsert_property({
+                                    "account_number": res.get("account_number"),
+                                    "address": res.get("address"),
+                                    "appraised_value": res.get("appraised_value"),
+                                    "building_area": res.get("building_area"),
+                                    "year_built": res.get("year_built")
+                                })
+                            except: pass
                     return usable
 
-                # Process Street Discovery
-                real_neighborhood = []
-                if discovered_neighbors:
-                    # Filter out subject
-                    discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
-                    real_neighborhood = await scrape_pool(discovered_neighbors)
-
-                # Discovery Layer 2: Fallback to Neighborhood Code if street search yields 0 usable comps
+                # Layers 2-3: Playwright fallback (cloud may be blocked)
                 if not real_neighborhood:
-                    nbhd_code = property_details.get('neighborhood_code')
+                    yield json.dumps({"status": "⚖️ Equity Specialist: DB insufficient — scraping live neighbors..."}) + "\n"
+                    street_only = prop_address.split(",")[0].strip()
+                    addr_parts = street_only.split()
+                    street_name = " ".join(addr_parts[1:]) if addr_parts and addr_parts[0][0].isdigit() else " ".join(addr_parts)
+
+                    # Street search
+                    discovered_neighbors = await connector.get_neighbors_by_street(street_name)
+                    if discovered_neighbors:
+                        discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
+                        real_neighborhood = await scrape_pool(discovered_neighbors)
+
+                # Neighborhood code scrape fallback
+                if not real_neighborhood:
                     if nbhd_code and nbhd_code != "Unknown":
-                        logger.info(f"No usable neighbors on street '{street_name}'. Trying Nbhd Code fallback: {nbhd_code}")
-                        yield json.dumps({"status": f"⚖️ Equity Specialist: No results on block. Expanding to neighborhood {nbhd_code}..."}) + "\n"
+                        logger.info(f"No usable neighbors on street. Trying Nbhd Code fallback: {nbhd_code}")
+                        yield json.dumps({"status": f"⚖️ Equity Specialist: Expanding to neighborhood {nbhd_code}..."}) + "\n"
                         nbhd_neighbors = await connector.get_neighbors(nbhd_code)
                         if nbhd_neighbors:
                             # Filter out subject
