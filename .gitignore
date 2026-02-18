@@ -14,3 +14,7 @@ outputs/
 *.json
 *.log
 debug/
+
+# Large Binary Files
+*.pt
+yolov8n.pt
