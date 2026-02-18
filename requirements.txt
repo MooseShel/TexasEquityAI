@@ -9,9 +9,10 @@ numpy
 google-generativeai
 langchain
 langchain-google-genai
+langchain-openai
 langchain-core
 langchain-community
-fpdf2
+fpdf
 streamlit
 python-dotenv
 ultralytics
