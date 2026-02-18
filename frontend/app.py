@@ -49,8 +49,8 @@ def setup_playwright():
         try:
             import subprocess
             logger.info("Installing Playwright Chromium...")
+            # Only install the browser binary, NOT the system deps (handled by packages.txt)
             subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"], check=True)
             logger.info("Playwright Chromium installed successfully.")
         except Exception as e:
             logger.error(f"Failed to install Playwright: {e}")

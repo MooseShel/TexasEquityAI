@@ -222,54 +222,97 @@ class TADConnector(AppraisalDistrictConnector):
             page = await context.new_page()
             
             neighbors = []
-            try:
-                logger.info(f"TAD Discovery: Searching for Neighborhood Code '{neighborhood_code}'...")
-                await page.goto(self.base_url, timeout=60000)
-                
-                # Select NeighborhoodCode search type
+            max_retries = 2
+            for attempt in range(max_retries + 1):
                 try:
-                    await page.wait_for_selector("#search-type", timeout=10000)
-                    await page.select_option("#search-type", "NeighborhoodCode")
+                    logger.info(f"TAD Discovery: Searching for Neighborhood Code '{neighborhood_code}' (Attempt {attempt+1})...")
+                    
+                    # Navigation Retry Loop for ERR_ABORTED
+                    for nav_attempt in range(2):
+                        try:
+                            await page.goto(self.base_url, timeout=60000, wait_until="load")
+                            break
+                        except Exception as e:
+                            if "ERR_ABORTED" in str(e) and nav_attempt < 1:
+                                logger.warning(f"TAD Discovery: Navigation aborted, retrying... ({e})")
+                                await asyncio.sleep(2)
+                                continue
+                            raise
+
+                    # Selection Hardening Loop for NeighborhoodCode
+                    slct_harden = 0
+                    while slct_harden < 3:
+                        try:
+                            await page.wait_for_selector("#search-type", timeout=20000)
+                            await page.select_option("#search-type", "NeighborhoodCode")
+                            await asyncio.sleep(2) # Buffer for hydration
+                            current_val = await page.eval_on_selector("#search-type", "el => el.value")
+                            if current_val == "NeighborhoodCode":
+                                break
+                        except Exception as e:
+                            logger.warning(f"TAD Discovery: NBHD selection try {slct_harden+1} failed: {e}")
+                        slct_harden += 1
+                        await asyncio.sleep(2)
+                    
+                    await page.fill("#query", neighborhood_code)
+                    await page.keyboard.press("Enter")
+                    
+                    try:
+                        await page.wait_for_load_state("load", timeout=45000)
+                        await page.wait_for_selector("table.search-results", timeout=15000)
+                    except:
+                        pass
+
+                    # Parse Results Table
+                    rows = page.locator("table.search-results tbody tr.property-header")
+                    count = await rows.count()
+                    
+                    if count == 0:
+                        body_text = await page.evaluate("() => document.body.innerText")
+                        if "No properties found" in body_text:
+                            logger.info(f"TAD Discovery: Confirmed 0 results for NBHD '{neighborhood_code}'")
+                            return []
+                        elif attempt < max_retries:
+                            logger.warning(f"TAD Discovery: Found 0 results unexpectedly. Retrying whole search...")
+                            continue
+                        else:
+                            logger.warning(f"TAD Discovery: Still 0 results after {max_retries} retries.")
+                            return []
+
+                    logger.info(f"TAD Discovery: Found {count} results for NBHD {neighborhood_code}")
+                    limit = min(count, 50)
+                    for i in range(limit):
+                        try:
+                            row = rows.nth(i)
+                            tds = row.locator("td")
+                            td_count = await tds.count()
+                            if td_count < 7: # TAD nbhd search results usually have ~7-8 columns
+                                continue
+                                
+                            account = await tds.nth(1).inner_text()
+                            address = await tds.nth(3).inner_text()
+                            owner = await tds.nth(5).inner_text()
+                            mkt_val_str = await tds.nth(6).inner_text()
+                            mkt_val = self._parse_currency(mkt_val_str)
+                            
+                            neighbors.append({
+                                "account_number": account.strip(),
+                                "address": address.strip(),
+                                "owner_name": owner.strip(),
+                                "market_value": mkt_val,
+                                "district": "TAD"
+                            })
+                        except: continue
+                    return neighbors
+
                 except Exception as e:
-                    logger.warning(f"TAD Discovery: Could not select NeighborhoodCode search type: {e}")
-                    # Fallback or continue? Let's try to proceed if possible
-                
-                await page.fill("#query", neighborhood_code)
-                
-                async with page.expect_navigation(timeout=60000):
-                    await page.click(".property-search-form button[type='submit']")
-
-                # Parse Results Table
-                rows = page.locator("table.search-results tbody tr.property-header")
-                count = await rows.count()
-                logger.info(f"TAD Discovery: Found {count} results for NBHD {neighborhood_code}")
-                
-                limit = min(count, 50)
-                for i in range(limit):
-                    row = rows.nth(i)
-                    tds = row.locator("td")
-                    account = await tds.nth(1).inner_text()
-                    address = await tds.nth(3).inner_text()
-                    owner = await tds.nth(5).inner_text()
-                    mkt_val_str = await tds.nth(6).inner_text()
-                    
-                    mkt_val = self._parse_currency(mkt_val_str)
-                    
-                    neighbors.append({
-                        "account_number": account.strip(),
-                        "address": address.strip(),
-                        "owner_name": owner.strip(),
-                        "market_value": mkt_val,
-                        "district": "TAD"
-                    })
-                    
-                return neighbors
-
-            except Exception as e:
-                logger.error(f"Error fetching TAD neighbors: {e}")
-                return []
-            finally:
-                await browser.close()
+                    logger.error(f"Error fetching TAD neighbors: {e}")
+                    if attempt < max_retries:
+                        continue
+                    return []
+            
+            await browser.close()
+            return neighbors
 
     async def check_service_status(self) -> bool:
         """
@@ -288,37 +331,60 @@ class TADConnector(AppraisalDistrictConnector):
 
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
-        Fetches neighbors by searching for the street name.
+        Custom Discovery: Search by street name directly on TAD.org
         """
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
-            
-            neighbors = []
-            try:
-                async def run_search(query_text):
-                    logger.info(f"TAD Discovery: Searching for street '{query_text}'...")
-                    await page.goto(self.base_url, timeout=60000)
-                    
-                    # Explicitly select 'Address' search type if available, 
-                    # as it's more reliable for street names than 'All'
-                    try:
-                        await page.select_option("#search-type", "Address")
-                    except: pass
-                    
-                    await page.fill("#query", query_text)
-                    
-                    async with page.expect_navigation(timeout=60000):
-                        await page.click(".property-search-form button[type='submit']")
 
-                    # Parse Results Table
-                    rows = page.locator("table.search-results tbody tr.property-header")
-                    count = await rows.count()
-                    limit = min(count, 50)
-                    
-                    found = []
-                    for i in range(limit):
+            async def run_single_search(query_text):
+                logger.info(f"TAD Discovery: Searching for street '{query_text}'...")
+                
+                # Navigation Retry Loop for ERR_ABORTED
+                for nav_attempt in range(2):
+                    try:
+                        await page.goto(self.base_url, timeout=60000, wait_until="load")
+                        break
+                    except Exception as e:
+                        if "ERR_ABORTED" in str(e) and nav_attempt < 1:
+                            logger.warning(f"TAD Discovery: Navigation aborted, retrying... ({e})")
+                            await asyncio.sleep(2)
+                            continue
+                        raise
+
+                # Selection Hardening Loop
+                slct_harden = 0
+                while slct_harden < 3:
+                    try:
+                        await page.wait_for_selector("#search-type", timeout=20000)
+                        await page.select_option("#search-type", "PropertyAddress")
+                        await asyncio.sleep(2) # Long buffer for hydration
+                        current_val = await page.eval_on_selector("#search-type", "el => el.value")
+                        if current_val == "PropertyAddress":
+                            break
+                    except Exception as e:
+                        logger.warning(f"TAD Discovery: Street selection try {slct_harden+1} failed: {e}")
+                    slct_harden += 1
+                    await asyncio.sleep(2)
+
+                await page.fill("#query", query_text)
+                await page.keyboard.press("Enter")
+                
+                try:
+                    await page.wait_for_load_state("load", timeout=45000)
+                    await page.wait_for_selector("table.search-results", timeout=15000)
+                except:
+                    logger.warning("TAD Discovery: Results table did not appear in time.")
+
+                # Parse Results Table
+                rows = page.locator("table.search-results tbody tr.property-header")
+                count = await rows.count()
+                limit = min(count, 50)
+                
+                found = []
+                for i in range(limit):
+                    try:
                         row = rows.nth(i)
                         tds = row.locator("td")
                         account = await tds.nth(1).inner_text()
@@ -334,10 +400,12 @@ class TADConnector(AppraisalDistrictConnector):
                             "market_value": mkt_val,
                             "district": "TAD"
                         })
-                    return found
+                    except: continue 
+                return found
 
+            try:
                 # 1. Try original street name
-                neighbors = await run_search(street_name)
+                neighbors = await run_single_search(street_name)
                 
                 # 2. Fallback: If no results and name has directional (e.g. "N WATSON"), try without directional
                 if not neighbors and " " in street_name:
@@ -345,7 +413,7 @@ class TADConnector(AppraisalDistrictConnector):
                     if parts[0].upper() in ["N", "S", "E", "W", "NE", "NW", "SE", "SW"]:
                         fallback_query = " ".join(parts[1:])
                         logger.info(f"TAD Discovery: No results for '{street_name}'. Trying fallback: '{fallback_query}'")
-                        neighbors = await run_search(fallback_query)
+                        neighbors = await run_single_search(fallback_query)
 
                 return neighbors
 

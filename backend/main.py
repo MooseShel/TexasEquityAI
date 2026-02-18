@@ -239,11 +239,16 @@ async def get_full_protest(
                 # Discovery Layer 1: Street Search
                 discovered_neighbors = await connector.get_neighbors_by_street(street_name)
                 
-                async def scrape_pool(pool_list):
+                async def scrape_pool(pool_list, limit=3):
                     usable = []
-                    pool_to_scrape = pool_list[:10] 
-                    logger.info(f"Deep-scraping pool of {len(pool_to_scrape)} neighbors...")
-                    tasks = [connector.get_property_details(n['account_number']) for n in pool_to_scrape]
+                    sem = asyncio.Semaphore(limit)
+                    
+                    async def safe_scrape(neighbor):
+                        async with sem:
+                            return await connector.get_property_details(neighbor['account_number'])
+                    
+                    logger.info(f"Deep-scraping pool of {len(pool_list[:10])} neighbors (Concurrency: {limit})...")
+                    tasks = [safe_scrape(n) for n in pool_list[:10]]
                     deep_results = await asyncio.gather(*tasks)
                     for res in deep_results:
                         if res:
