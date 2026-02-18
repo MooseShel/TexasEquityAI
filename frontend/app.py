@@ -422,6 +422,27 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         c1, c2 = st.columns(2)
                         with c1: st.metric("Justified Value", f"${justified_val:,.0f}", delta=f"-${savings:,.0f}" if savings > 0 else None)
                         with c2: st.metric("💰 Est. Savings", f"${savings * (tax_rate/100):,.0f}")
+
+                        if savings == 0 and justified_val > 0:
+                            over_by = justified_val - appraised
+                            st.info(
+                                f"**No equity over-assessment found.** "
+                                f"Your appraised value (${appraised:,.0f}) is **${over_by:,.0f} below** "
+                                f"the median justified value of comparable properties (${justified_val:,.0f}). "
+                                f"This means your neighbors are assessed *higher* per square foot than you are — "
+                                f"the equity argument does not support a reduction. "
+                                f"Any protest would need to rely on market value, condition, or location factors instead.",
+                                icon="ℹ️"
+                            )
+                        elif savings > 0:
+                            st.success(
+                                f"**Equity over-assessment detected!** "
+                                f"Your appraised value (${appraised:,.0f}) exceeds the justified value floor "
+                                f"(${justified_val:,.0f}) by **${savings:,.0f}**. "
+                                f"At a {tax_rate}% tax rate, this represents ~${savings * (tax_rate/100):,.0f} in potential annual savings.",
+                                icon="✅"
+                            )
+
                         equity_df = pd.DataFrame(data['equity'].get('equity_5', []))
                         if not equity_df.empty:
                             # Select and rename display columns
