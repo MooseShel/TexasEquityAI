@@ -49,6 +49,9 @@ def build_address(row: dict) -> str:
     street = row.get("site_addr_1", "").strip()
     city   = row.get("site_addr_2", "").strip()
     zipcode = row.get("site_addr_3", "").strip()
+    # Skip vacant/unaddressed parcels (street number 0)
+    if street.startswith("0 "):
+        return ""
     parts = [p for p in [street, city, "TX", zipcode] if p]
     return ", ".join(parts)
 

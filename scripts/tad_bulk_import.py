@@ -41,12 +41,11 @@ def parse_number(val: str, default=0):
 def build_address(row: dict) -> str:
     """Build address from TAD fields."""
     situs = row.get("Situs_Address", "").strip()
-    if not situs:
+    if not situs or situs.startswith("0 "):
         return ""
     # Owner_CityState is like "FT WORTH, TX" — extract city
     owner_cs = row.get("Owner_CityState", "").strip()
     zip_code = row.get("Owner_Zip", "").strip()[:5]
-    # Normalize Fort Worth city name
     city = owner_cs.split(",")[0].strip() if "," in owner_cs else ""
     parts = [p for p in [situs, city, "TX", zip_code] if p]
     return ", ".join(parts)
