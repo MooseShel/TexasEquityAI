@@ -48,10 +48,18 @@ class HCADScraper(AppraisalDistrictConnector):
 
         # 1. Primary: New Portal Human-Flow (works locally, blocked by Cloudflare on cloud)
         details = await self._scrape_new_portal_human(account_number, address)
-        if details: 
+        if details:
             details['district'] = 'HCAD'
+            # Write-back to Supabase so next lookup is instant (self-healing cache)
+            try:
+                from backend.db.supabase_client import supabase_service
+                cache_record = {k: v for k, v in details.items() if v is not None}
+                await supabase_service.upsert_property(cache_record)
+                logger.info(f"HCAD: Cached scraped data for {account_number} to Supabase.")
+            except Exception as e:
+                logger.warning(f"HCAD: Failed to cache scraped data: {e}")
             return details
-        
+
         # 2. Fallback: Discovery (Manual Mapping)
         logger.warning(f"New Portal flow failed. Trying Discovery fallback for {account_number}")
         address_fallback = await self._discover_address(account_number)
@@ -59,13 +67,12 @@ class HCADScraper(AppraisalDistrictConnector):
             return {
                 "account_number": account_number,
                 "address": address_fallback,
-                "appraised_value": 0, 
+                "appraised_value": 0,
                 "building_area": 0,
                 "neighborhood_code": "Unknown",
                 "district": "HCAD"
             }
 
-        
         return None
 
     def check_service_status(self) -> bool:
