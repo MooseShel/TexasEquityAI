@@ -1,9 +1,15 @@
 import streamlit as st
-import pandas as pd
 import os
+import sys
+
+# MUST be at the very top: Add project root to sys.path so 'backend' is discoverable
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+import pandas as pd
 import json
 import asyncio
-import sys
 import logging
 from PIL import Image
 from dotenv import load_dotenv
@@ -16,11 +22,6 @@ if sys.platform == 'win32':
         pass
 
 load_dotenv()
-
-# Add the project root to sys.path so 'backend' can be imported when running from frontend/
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -42,8 +43,24 @@ st.set_page_config(page_title="Texas Equity AI", layout="wide")
 
 # Initialize Agents (Cached for performance)
 @st.cache_resource
+def setup_playwright():
+    """Install Playwright browsers if missing (Required for Streamlit Cloud)"""
+    if sys.platform != "win32":
+        try:
+            import subprocess
+            logger.info("Installing Playwright Chromium...")
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"], check=True)
+            logger.info("Playwright Chromium installed successfully.")
+        except Exception as e:
+            logger.error(f"Failed to install Playwright: {e}")
+
+@st.cache_resource
 def get_agents():
+    # Ensure browsers are installed before agents start
+    setup_playwright()
     return {
+
         "factory": DistrictConnectorFactory(),
         "bridge": NonDisclosureBridge(),
         "equity_engine": EquityAgent(),
@@ -103,15 +120,10 @@ st.sidebar.title("Texas Equity AI 🤠")
 st.sidebar.markdown("Automating property tax protests in Texas.")
 
 district_options = ("HCAD", "TAD", "CCAD", "DCAD", "TCAD")
-try:
-    default_index = district_options.index(st.session_state.district_selector)
-except ValueError:
-    default_index = 0
 
 district_code = st.sidebar.selectbox(
     "Appraisal District",
     district_options,
-    index=default_index,
     key="district_selector",
     help="Select the county appraisal district."
 )
@@ -199,23 +211,35 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             # Skip house number for discovery
             street_name = " ".join(addr_parts[1:]) if addr_parts and addr_parts[0][0].isdigit() else " ".join(addr_parts)
             
+            # Semi-parallel scraping helper with concurrency limit
+            async def scrape_pool(pool_list, limit=3):
+                usable = []
+                sem = asyncio.Semaphore(limit)
+                
+                async def safe_scrape(neighbor):
+                    async with sem:
+                        return await connector.get_property_details(neighbor['account_number'])
+                
+                tasks = [safe_scrape(n) for n in pool_list[:10]]
+                deep_results = await asyncio.gather(*tasks)
+                return [res for res in deep_results if res and res.get('building_area', 0) > 0]
+
             discovered_neighbors = await connector.get_neighbors_by_street(street_name)
             real_neighborhood = []
             if discovered_neighbors:
+                # Filter out subject
                 discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
-                pool_to_scrape = discovered_neighbors[:10] 
-                tasks = [connector.get_property_details(n['account_number']) for n in pool_to_scrape]
-                deep_results = await asyncio.gather(*tasks)
-                real_neighborhood = [res for res in deep_results if res and res.get('building_area', 0) > 0]
+                real_neighborhood = await scrape_pool(discovered_neighbors)
+                
             if not real_neighborhood:
                 nbhd_code = property_details.get('neighborhood_code')
                 if nbhd_code and nbhd_code != "Unknown":
                     nbhd_neighbors = await connector.get_neighbors(nbhd_code)
                     if nbhd_neighbors:
-                        pool_to_scrape = nbhd_neighbors[:10]
-                        tasks = [connector.get_property_details(n['account_number']) for n in pool_to_scrape]
-                        deep_results = await asyncio.gather(*tasks)
-                        real_neighborhood = [res for res in deep_results if res and res.get('building_area', 0) > 0]
+                        # Filter out subject
+                        nbhd_neighbors = [n for n in nbhd_neighbors if n['account_number'] != property_details.get('account_number')]
+                        real_neighborhood = await scrape_pool(nbhd_neighbors)
+                        
             if not real_neighborhood:
                 yield {"error": "Could not find sufficient data for equity analysis."}
                 return
