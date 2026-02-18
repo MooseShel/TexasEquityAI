@@ -5,23 +5,26 @@ logger = logging.getLogger(__name__)
 
 def is_real_address(address: str) -> bool:
     """
-    Detects if an address is a placeholder/dummy.
-    Returns True if the address seems valid, False otherwise.
+    Detects if an address is a placeholder/dummy or an account number masquerading as an address.
+    Returns True if the address seems like a real street address, False otherwise.
     """
     if not address:
         return False
         
     placeholders = ["HCAD Account", "Example St", "Placeholder", "00000"]
-    # Check for placeholder strings
     if any(p in address for p in placeholders):
         return False
-        
-    # Check if it's just an account number (digits only or digits with spaces)
-    # We want street addresses, not account numbers here usually
-    # But sometimes account numbers are passed as address? 
-    # The original logic was:
-    # return address and not any(p in address for p in placeholders)
     
+    # Reject if the first token (before any comma or space) is all digits
+    # e.g. "0660460450034, Texas, Houston, TX" — account number used as address
+    first_token = address.split(",")[0].strip().split()[0] if address.strip() else ""
+    if first_token.isdigit() and len(first_token) >= 8:
+        return False
+    
+    # Must contain at least one alphabetic word (street name)
+    if not any(c.isalpha() for c in address):
+        return False
+        
     return True
 
 def normalize_address(address: str, district: str = "HCAD") -> str:

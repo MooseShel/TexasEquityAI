@@ -7,6 +7,12 @@ import re
 import os
 from .base_connector import AppraisalDistrictConnector
 
+try:
+    from playwright_stealth import stealth_async
+    HAS_STEALTH = True
+except ImportError:
+    HAS_STEALTH = False
+
 if sys.platform == 'win32':
     try:
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -85,10 +91,16 @@ class HCADScraper(AppraisalDistrictConnector):
                 )
                 page = await context.new_page()
                 
+                # Apply stealth patches to evade Cloudflare bot detection
+                if HAS_STEALTH:
+                    await stealth_async(page)
+                    logger.info("Playwright stealth mode applied.")
+                
                 # Step 1: Land on Search Home
                 logger.info(f"Navigating to {self.portal_url}")
                 await page.goto(self.portal_url, wait_until="load", timeout=60000)
                 await self._bypass_security(page)
+
                 
                 # Step 2: Select Search Mode (Account vs Location)
                 is_address = any(c.isalpha() for c in account_number)

@@ -228,8 +228,14 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         property_details['permit_summary'] = permit_summary
         yield {"status": "⚖️ Equity Specialist: Discovering live neighbors..."}
         try:
+            if not is_real_address(prop_address):
+                logger.warning(f"Address '{prop_address}' does not look like a real street address — skipping neighbor discovery. Portal scraping likely failed.")
+                yield {"error": f"⚠️ Could not retrieve property details from the appraisal district portal. The address could not be resolved (got: '{prop_address}'). This may be due to Cloudflare blocking on the deployed server. Try running locally, or use the Manual Override fields to enter the address and value directly."}
+                return
+
             # Extract just the street name — strip house number AND trailing city/state/zip
             # e.g. "843 LAMONTE LN HOUSTON, TX 77018" → "LAMONTE LN"
+
             # Step 1: Take only the part before the first comma
             street_only = prop_address.split(",")[0].strip()
             addr_parts = street_only.split()

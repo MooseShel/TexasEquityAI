@@ -3,6 +3,7 @@ uvicorn
 sqlalchemy
 psycopg2-binary
 playwright
+playwright-stealth
 scikit-learn
 pandas
 numpy
