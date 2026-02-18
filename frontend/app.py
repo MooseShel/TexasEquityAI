@@ -316,8 +316,51 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         image_path = image_paths[0] if image_paths else "mock_street_view.jpg"
         if vision_detections and image_path != "mock_street_view.jpg":
             image_path = agents["vision_agent"].draw_detections(image_path, vision_detections)
-        yield {"status": "✍️ Legal Narrator: Finalizing protest packet..."}
-        narrative = agents["narrative_agent"].generate_protest_narrative(property_details, equity_results, vision_detections, market_value)
+        yield {"status": "✍️ Legal Narrator: Evaluating protest viability..."}
+
+        # ── Protest Viability Gate ────────────────────────────────────────────
+        # Only call the LLM if there is at least one valid protest argument.
+        # This avoids wasting API credits and generating inaccurate narratives.
+        appraised_val = property_details.get('appraised_value', 0) or 0
+        justified_val = equity_results.get('justified_value_floor', 0) if isinstance(equity_results, dict) else 0
+        justified_val = justified_val or 0
+
+        has_equity_argument   = justified_val > 0 and appraised_val > justified_val
+        has_market_argument   = market_value and market_value > 0 and appraised_val > market_value
+        has_condition_issues  = bool(vision_detections and len(vision_detections) > 0)
+        flood_zone            = property_details.get('flood_zone', 'Zone X')
+        has_flood_risk        = flood_zone and 'Zone X' not in flood_zone
+
+        protest_viable = has_equity_argument or has_market_argument or has_condition_issues or has_flood_risk
+
+        if protest_viable:
+            reasons = []
+            if has_equity_argument:   reasons.append(f"equity over-assessment (${appraised_val - justified_val:,.0f} gap)")
+            if has_market_argument:   reasons.append(f"market value gap (${appraised_val - market_value:,.0f})")
+            if has_condition_issues:  reasons.append(f"{len(vision_detections)} condition issue(s) detected")
+            if has_flood_risk:        reasons.append(f"flood risk ({flood_zone})")
+            logger.info(f"Protest viable — generating narrative. Reasons: {'; '.join(reasons)}")
+            yield {"status": f"✍️ Legal Narrator: Generating protest narrative ({', '.join(reasons)})..."}
+            narrative = agents["narrative_agent"].generate_protest_narrative(
+                property_details, equity_results, vision_detections, market_value
+            )
+        else:
+            logger.info("Protest not viable — skipping narrative agent (no over-assessment, no condition issues, no flood risk).")
+            narrative = (
+                "⚠️ No Protest Recommended Based on Current Data\n\n"
+                "The analysis did not find grounds for a property tax protest at this time:\n\n"
+                f"• Equity Analysis: The justified value of comparable properties "
+                f"(${justified_val:,.0f}) is {'higher than' if justified_val > appraised_val else 'equal to'} "
+                f"your appraised value (${appraised_val:,.0f}), indicating your property is not over-assessed "
+                f"relative to its neighbors.\n"
+                f"• Market Value: No significant gap detected between appraised and market values.\n"
+                f"• Condition: No physical condition issues were identified from street-level imagery.\n"
+                f"• Flood Risk: Property is in {flood_zone} (minimal risk).\n\n"
+                "If you believe there are grounds for protest not captured here (e.g., interior condition, "
+                "recent damage, or incorrect property data), use the Manual Override fields to provide "
+                "corrected values and re-run the analysis."
+            )
+
         os.makedirs("outputs", exist_ok=True)
         form_path = f"outputs/Form_41_44_{current_account}.pdf"
         agents["form_service"].generate_form_41_44(property_details, {
