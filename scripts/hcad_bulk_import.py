@@ -4,10 +4,10 @@ HCAD Bulk Data Import Script
 Imports 2025 HCAD real property data into Supabase properties table.
 
 Usage:
-    python scripts/hcad_bulk_import.py                                   # Import 2025 residential
-    python scripts/hcad_bulk_import.py --sample 5000                     # Import first N rows (test)
-    python scripts/hcad_bulk_import.py --all                             # Import all property types
-    python scripts/hcad_bulk_import.py --data-dir hcad_data_2024 --all  # Import 2024 data
+    python scripts/hcad_bulk_import.py                                              # Import 2025 residential
+    python scripts/hcad_bulk_import.py --sample 5000                                # Import first N rows (test)
+    python scripts/hcad_bulk_import.py --all                                        # Import all property types
+    python scripts/hcad_bulk_import.py --data-dir hcad_data_2024 --all --no-overwrite  # Import 2024, skip existing
 
 Data source: hcad_2025_data/real_acct.txt
 """
@@ -60,7 +60,7 @@ def is_residential(state_class: str, include_all: bool = False) -> bool:
     return sc[:2] in RESIDENTIAL_CLASSES or sc.startswith("A") or sc.startswith("B")
 
 
-def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: str = None):
+def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: str = None, no_overwrite: bool = False):
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     if not url or not key:
@@ -81,7 +81,7 @@ def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: st
         sys.exit(1)
 
     logger.info(f"Reading {real_acct_file} ...")
-    logger.info(f"Mode: {'ALL property types' if include_all else 'Residential only (A/B class)'}")
+    logger.info(f"Mode: {'ALL property types' if include_all else 'Residential only (A/B class)'} | {'SKIP existing (no-overwrite)' if no_overwrite else 'OVERWRITE existing'}")
     if sample:
         logger.info(f"Sample mode: first {sample} matching rows")
 
@@ -136,7 +136,10 @@ def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: st
             # Flush batch
             if len(batch) >= BATCH_SIZE:
                 try:
-                    client.table("properties").upsert(batch, on_conflict="account_number").execute()
+                    if no_overwrite:
+                        client.table("properties").upsert(batch, on_conflict="account_number", ignore_duplicates=True).execute()
+                    else:
+                        client.table("properties").upsert(batch, on_conflict="account_number").execute()
                     logger.info(f"  Upserted batch | total imported: {total_imported:,} | read: {total_read:,}")
                 except Exception as e:
                     logger.error(f"  Batch upsert failed: {e}")
@@ -150,7 +153,10 @@ def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: st
     # Flush remaining
     if batch:
         try:
-            client.table("properties").upsert(batch, on_conflict="account_number").execute()
+            if no_overwrite:
+                client.table("properties").upsert(batch, on_conflict="account_number", ignore_duplicates=True).execute()
+            else:
+                client.table("properties").upsert(batch, on_conflict="account_number").execute()
             logger.info(f"  Upserted final batch of {len(batch)} rows.")
         except Exception as e:
             logger.error(f"  Final batch upsert failed: {e}")
@@ -166,10 +172,11 @@ def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: st
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Import HCAD 2025 bulk data into Supabase")
+    parser = argparse.ArgumentParser(description="Import HCAD bulk data into Supabase")
     parser.add_argument("--sample", type=int, default=None, help="Only import first N rows (for testing)")
     parser.add_argument("--all", dest="include_all", action="store_true", help="Include all property types (not just residential)")
     parser.add_argument("--data-dir", dest="data_dir", default=None, help="Data directory name relative to project root (default: hcad_2025_data)")
+    parser.add_argument("--no-overwrite", dest="no_overwrite", action="store_true", help="Skip rows that already exist in Supabase (preserves newer data)")
     args = parser.parse_args()
 
-    import_hcad_data(sample=args.sample, include_all=args.include_all, data_dir=args.data_dir)
+    import_hcad_data(sample=args.sample, include_all=args.include_all, data_dir=args.data_dir, no_overwrite=args.no_overwrite)
