@@ -212,8 +212,13 @@ class TADConnector(AppraisalDistrictConnector):
     async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
         """
         Fetches neighbors by searching for the same Neighborhood Code.
+        Skips commercial codes (e.g. 'Food Service General') which have no residential comps.
         """
         if not neighborhood_code or neighborhood_code == "Unknown":
+            return []
+        
+        if self.is_commercial_neighborhood_code(neighborhood_code):
+            logger.info(f"TAD: Skipping neighborhood search for commercial code '{neighborhood_code}' — no residential comps expected.")
             return []
 
         async with async_playwright() as p:
@@ -424,15 +429,11 @@ class TADConnector(AppraisalDistrictConnector):
                 await browser.close()
 
     def _parse_currency(self, val_str: str) -> float:
-        """Helper to clean currency strings like '$638,920 (2025)'"""
-        try:
-            # Remove year info if present "(2025)"
-            if "(" in val_str:
-                val_str = val_str.split("(")[0]
-            
-            clean = val_str.replace("$", "").replace(",", "").strip()
-            if clean == "Value Pending" or not clean:
-                return 0.0
-            return float(clean)
-        except:
+        """TAD-specific override: strips year info like '$638,920 (2025)' before parsing."""
+        if not val_str:
             return 0.0
+        # Remove year info if present e.g. "(2025)"
+        if "(" in val_str:
+            val_str = val_str.split("(")[0]
+        # Delegate to base class for standard cleaning
+        return super()._parse_currency(val_str)

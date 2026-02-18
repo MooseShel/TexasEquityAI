@@ -2,6 +2,9 @@ import numpy as np
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from typing import List, Dict
+import logging
+
+logger = logging.getLogger(__name__)
 
 class EquityAgent:
     def __init__(self):
@@ -32,14 +35,39 @@ class EquityAgent:
                 'subject_value_per_sqft': subj_val / subj_area
             }
         
+        # Build DataFrame from neighbor list
+        df = pd.DataFrame(neighborhood_properties)
+        
+        # Ensure required columns exist
+        for col in ['building_area', 'appraised_value']:
+            if col not in df.columns:
+                df[col] = 0
+        
+        # Convert to numeric, coerce errors to NaN
+        df['building_area'] = pd.to_numeric(df['building_area'], errors='coerce').fillna(0)
+        df['appraised_value'] = pd.to_numeric(df['appraised_value'], errors='coerce').fillna(0)
+        
+        # CRITICAL: Filter out neighbors with 0 area (prevents division-by-zero in value_per_sqft)
+        df = df[df['building_area'] > 0].copy()
+        
+        if len(df) < 3:
+            logger.warning(f"Only {len(df)} valid neighbors after filtering zero-area properties. Returning baseline.")
+            return {
+                'equity_5': [],
+                'justified_value_floor': subj_val,
+                'subject_value_per_sqft': subj_val / subj_area,
+                'error': f"Insufficient comparable properties ({len(df)} found after filtering). Using current appraisal as baseline."
+            }
+        
         # Features for KNN: Building Area, Year Built (if available)
         features = ['building_area']
         subject_vals = [subj_area]
         
         if 'year_built' in df.columns and subject_property.get('year_built'):
-            # Filter out neighbors with no year_built for this calc
-            # Or fill with median as a safeguard
-            df['year_built'] = pd.to_numeric(df['year_built'], errors='coerce').fillna(df['year_built'].median() if not df[df['year_built'].notnull()].empty else 1980)
+            # Convert year_built to numeric, fill missing with median
+            df['year_built'] = pd.to_numeric(df['year_built'], errors='coerce')
+            median_year = df['year_built'].median() if df['year_built'].notna().any() else 1980
+            df['year_built'] = df['year_built'].fillna(median_year)
             features.append('year_built')
             subject_vals.append(subject_property['year_built'])
         
@@ -55,24 +83,37 @@ class EquityAgent:
         subject_X_scaled = (subject_X - X_min) / X_range
         
         # Fit KNN on scaled features
-        self.knn = NearestNeighbors(n_neighbors=min(20, len(df)), metric='euclidean')
+        n_neighbors = min(20, len(df))
+        self.knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
         self.knn.fit(X_scaled)
         distances, indices = self.knn.kneighbors(subject_X_scaled)
         
-        # Get the 20 most similar neighbors
+        # Get the most similar neighbors
         top_20 = df.iloc[indices[0]].copy()
         
         # Add similarity score (Inverse distance with a steeper falloff for better UX)
-        # Max distance in [0,1] space for N features is sqrt(N)
         max_dist = np.sqrt(len(features))
         top_20['similarity_score'] = (1 - (distances[0] / max_dist)) * 100
-        # Clip to [0, 100]
         top_20['similarity_score'] = top_20['similarity_score'].clip(0, 100)
         
         # Calculate 'Assessed Value per SqFt'
-        top_20['value_per_sqft'] = pd.to_numeric(top_20['appraised_value'], errors='coerce') / pd.to_numeric(top_20['building_area'], errors='coerce')
+        top_20['value_per_sqft'] = (
+            pd.to_numeric(top_20['appraised_value'], errors='coerce') /
+            pd.to_numeric(top_20['building_area'], errors='coerce')
+        )
         
-        # Sort by value_per_sqft ascending
+        # Drop any rows where value_per_sqft is NaN or 0
+        top_20 = top_20[top_20['value_per_sqft'] > 0].dropna(subset=['value_per_sqft'])
+        
+        if top_20.empty:
+            return {
+                'equity_5': [],
+                'justified_value_floor': subj_val,
+                'subject_value_per_sqft': subj_val / subj_area,
+                'error': "Could not calculate value per sqft for any comparable properties."
+            }
+        
+        # Sort by value_per_sqft ascending — lowest-taxed comps first
         top_20_sorted = top_20.sort_values(by='value_per_sqft', ascending=True)
         
         # Select top 5

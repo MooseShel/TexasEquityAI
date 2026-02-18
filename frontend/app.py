@@ -224,25 +224,35 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 deep_results = await asyncio.gather(*tasks)
                 return [res for res in deep_results if res and res.get('building_area', 0) > 0]
 
+            # Layer 1: Street-level search
             discovered_neighbors = await connector.get_neighbors_by_street(street_name)
             real_neighborhood = []
             if discovered_neighbors:
-                # Filter out subject
+                # Filter out subject property
                 discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
                 real_neighborhood = await scrape_pool(discovered_neighbors)
                 
+            # Layer 2: Neighborhood code fallback (only for residential codes)
             if not real_neighborhood:
                 nbhd_code = property_details.get('neighborhood_code')
-                if nbhd_code and nbhd_code != "Unknown":
+                is_commercial = connector.is_commercial_neighborhood_code(nbhd_code) if nbhd_code else False
+                
+                if is_commercial:
+                    logger.info(f"Neighborhood code '{nbhd_code}' is commercial — skipping neighborhood-wide search.")
+                    yield {"error": f"⚠️ This appears to be a **commercial property** (Neighborhood Code: '{nbhd_code}'). Residential equity analysis requires comparable residential properties. Please verify the property type and try a manual address override if needed."}
+                    return
+                elif nbhd_code and nbhd_code != "Unknown":
+                    logger.info(f"Street search yielded 0 usable comps. Trying neighborhood code '{nbhd_code}'...")
                     nbhd_neighbors = await connector.get_neighbors(nbhd_code)
                     if nbhd_neighbors:
-                        # Filter out subject
+                        # Filter out subject property
                         nbhd_neighbors = [n for n in nbhd_neighbors if n['account_number'] != property_details.get('account_number')]
                         real_neighborhood = await scrape_pool(nbhd_neighbors)
                         
             if not real_neighborhood:
-                yield {"error": "Could not find sufficient data for equity analysis."}
+                yield {"error": "Could not find sufficient comparable properties for equity analysis. The property may be unique, commercial, or in a low-density area. Try using a manual address override."}
                 return
+
             equity_results = agents["equity_engine"].find_equity_5(property_details, real_neighborhood)
             property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
         except Exception as e:

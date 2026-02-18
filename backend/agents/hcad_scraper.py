@@ -17,10 +17,12 @@ logger = logging.getLogger(__name__)
 
 class HCADScraper(AppraisalDistrictConnector):
     """
-    ULTRA-ROBUST SCRAPER:
+    ULTRA-ROBUST SCRAPER for Harris County Appraisal District (HCAD).
     Uses the new HCAD search portal with a human-mimic flow to bypass security.
     Extracts comprehensive property details including Neighborhood Codes for precise equity analysis.
     """
+    DISTRICT_NAME = "HCAD"
+
     def __init__(self):
         self.portal_url = "https://search.hcad.org/"
 
@@ -49,19 +51,16 @@ class HCADScraper(AppraisalDistrictConnector):
         return None
 
     def check_service_status(self) -> bool:
-        # Return True for now (scraper is always 'up' but might fail)
         return True
 
     async def _bypass_security(self, page):
         """Dedicated logic to wait for Cloudflare challenges to clear."""
         logger.info("Detecting security challenge (Cloudflare)...")
         try:
-            # Wait up to 30 seconds for the title to change or certain elements to appear
             for i in range(30):
                 title = await page.title()
                 logger.info(f"Current Page title: '{title}' (Attempt {i+1}/30)")
                 if "Just a moment" not in title and "Security" not in title:
-                    # Check for indicators that we have landed on a real page
                     if await page.query_selector("input[placeholder*='Search like']") or \
                        await page.query_selector("text='Location'") or \
                        await page.query_selector("text='Account Number'"):
@@ -79,7 +78,6 @@ class HCADScraper(AppraisalDistrictConnector):
             browser = None
             try:
                 browser = await p.chromium.launch(headless=True)
-                # Production-grade context
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                     viewport={'width': 1280, 'height': 800},
@@ -126,8 +124,6 @@ class HCADScraper(AppraisalDistrictConnector):
                     # Detection level 2: Search results table found
                     if "table-hover" in content or "Account Number" in content:
                         try:
-                            # If it was an address search, we take the first result
-                            # If it was account search, we look for the exact match
                             if is_address:
                                 result_link = page.locator("tr.table-hover td a").first
                             else:
@@ -138,7 +134,7 @@ class HCADScraper(AppraisalDistrictConnector):
                                 await result_link.click()
                                 await asyncio.sleep(2)
                         except Exception as e: 
-                            pass # Still polling
+                            pass  # Still polling
                     
                     await asyncio.sleep(2)
                 else:
@@ -147,13 +143,12 @@ class HCADScraper(AppraisalDistrictConnector):
                     await page.screenshot(path=f"debug/poll_fail_{account_number.replace(' ', '_')}.png")
                     return None
 
-                # Step 5: Extraction (Polished)
-                await asyncio.sleep(2) # Final settle
+                # Step 5: Extraction
+                await asyncio.sleep(2)  # Final settle
                 
                 # Extract the REAL account number from the page if we searched by address
                 detected_account = account_number
                 try:
-                    # Look for the account number in the header or specific components
                     header_text = await page.locator(".whitebox-header").first.inner_text()
                     acc_match = re.search(r'(\d{13})', header_text)
                     if acc_match:
@@ -177,10 +172,8 @@ class HCADScraper(AppraisalDistrictConnector):
                 
                 for label in area_labels:
                     try:
-                        # Try finding the row specifically in PropertyComponent
                         row_locator = page.locator(f"#PropertyComponent .row:has-text('{label}')")
                         if await row_locator.count() > 0:
-                            # Try multiple column layouts
                             for selector in [".col-6:nth-child(2)", ".col", "span"]:
                                 val_locator = row_locator.locator(selector).last
                                 if await val_locator.count() > 0:
@@ -219,7 +212,6 @@ class HCADScraper(AppraisalDistrictConnector):
 
                 # Valuation logic
                 async def extract_vals():
-                    
                     return await page.evaluate("""() => {
                         const valBox = document.getElementById('ValuationComponent');
                         if (!valBox) return { appraised: null, market: null };
@@ -227,7 +219,6 @@ class HCADScraper(AppraisalDistrictConnector):
                         let appraised = null;
                         let market = null;
 
-                        // Helper to clean currency
                         const clean = (s) => s ? s.replace(/[$,\\s]/g, '') : null;
 
                         // 1. Try table rows (Most reliable for Certified values)
@@ -237,7 +228,6 @@ class HCADScraper(AppraisalDistrictConnector):
                             const cells = row.querySelectorAll('td');
                             const val = cells.length > 0 ? cells[cells.length - 1].innerText : null;
                             
-                            // Only set if not already set (taking the first match which is usually the main table)
                             if (text.includes('Appraised') && !appraised) appraised = val;
                             if (text.includes('Market') && !market) market = val;
                         }
@@ -275,28 +265,23 @@ class HCADScraper(AppraisalDistrictConnector):
 
                 vals = await extract_vals()
                 
-                # Check if we need to switch year
                 # If current year is "Pending" or 0, try previous years from dropdown
                 if not vals['appraised'] or "Pending" in vals['appraised'] or self._parse_currency(vals['appraised']) == 0:
                     logger.info("Values pending/missing for default year. Attempting year-switching loop...")
                     try:
-                        # Get available years from dropdown
                         await page.click("#dropdownMenuButton1", timeout=5000)
                         await asyncio.sleep(1)
                         dropdown_items = page.locator(".dropdown-item")
                         item_texts = await dropdown_items.all_inner_texts()
                         
-                        # Filter for years (4 digits) and sort descending
                         years = sorted([t.strip() for t in item_texts if t.strip().isdigit()], reverse=True)
                         logger.info(f"Available years in HCAD dropdown: {years}")
                         
                         found_valid_year = False
-                        # Try the next few years if the first one (latest) is pending
                         for year_to_try in years[1:3]: 
                             logger.info(f"Switching to HCAD year: {year_to_try}")
-                            # The click might cause a refresh, so we wait
                             await page.click(f".dropdown-item:has-text('{year_to_try}')", timeout=5000)
-                            await asyncio.sleep(6) # Wait for Blazor/Data load
+                            await asyncio.sleep(6)
                             
                             new_vals = await extract_vals()
                             logger.info(f"Extracted vals for {year_to_try}: {new_vals}")
@@ -306,7 +291,6 @@ class HCADScraper(AppraisalDistrictConnector):
                                 found_valid_year = True
                                 break
                             
-                            # If not found, re-open dropdown for next iteration
                             await page.click("#dropdownMenuButton1", timeout=5000)
                             await asyncio.sleep(1)
 
@@ -316,8 +300,6 @@ class HCADScraper(AppraisalDistrictConnector):
                         logger.warning(f"Failed HCAD year-switching: {e}")
 
                 details['appraised_value'] = self._parse_currency(vals['appraised'])
-                # If Market is missing, default to Appraised (common for residential uniform)
-                # But if we found it effectively, use it.
                 if vals['market'] and "Pending" not in vals['market']:
                     details['market_value'] = self._parse_currency(vals['market'])
                 else:
@@ -334,32 +316,15 @@ class HCADScraper(AppraisalDistrictConnector):
                     await browser.close()
         return None
 
-    def _parse_currency(self, text: str) -> float:
-        if not text: return 0.0
-        # Remove $, commas, and whitespace
-        clean = re.sub(r'[$,\s]', '', text)
-        if "Pending" in text: return 0.0
-        try:
-            return float(clean)
-        except:
-            return 0.0
-
-    def _parse_number(self, text: str) -> float:
-        if not text: return 0.0
-        clean = re.sub(r'[,\s]', '', text)
-        try:
-            return float(clean)
-        except:
-            return 0.0
-
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
         Searches for all properties on a street and extracts their info from the results table.
-        This provides a rich pool of local properties for equity analysis.
+        Uses smart polling instead of fixed sleeps for reliability.
         """
-        logger.info(f"Discovering neighbors on street: {street_name}")
+        logger.info(f"HCAD: Discovering neighbors on street: {street_name}")
         async with async_playwright() as p:
             neighbors = []
+            browser = None
             try:
                 browser = await p.chromium.launch(headless=True)
                 context = await browser.new_context(
@@ -367,15 +332,24 @@ class HCADScraper(AppraisalDistrictConnector):
                 )
                 page = await context.new_page()
                 
-                await page.goto(self.portal_url, wait_until="load")
+                await page.goto(self.portal_url, wait_until="load", timeout=60000)
+                await self._bypass_security(page)
+                
                 input_selector = "input[placeholder*='Search like']"
+                await page.wait_for_selector(input_selector, timeout=30000)
                 await page.fill(input_selector, street_name)
                 await page.keyboard.press("Enter")
                 
-                # Results table can be heavy
-                await asyncio.sleep(15) 
+                # Smart polling: wait for results table or timeout
+                logger.info(f"HCAD: Waiting for results table for '{street_name}'...")
+                try:
+                    await page.wait_for_selector("tr", timeout=30000)
+                    await asyncio.sleep(2)  # Brief settle for full render
+                except Exception:
+                    logger.warning(f"HCAD: Timed out waiting for results table for '{street_name}'")
+                    return []
                 
-                # Extract results from the table logic improved for uniqueness
+                # Extract results from the table
                 rows = await page.evaluate("""() => {
                     const results = [];
                     const seen = new Set();
@@ -385,11 +359,10 @@ class HCADScraper(AppraisalDistrictConnector):
                     tableRows.forEach(row => {
                         const cells = row.querySelectorAll('td');
                         if (cells.length >= 3) {
-                            // Often Account is col 0 or 1 depending on layout
                             let acc = cells[0].innerText.trim();
                             let addr = cells[1].innerText.trim();
                             
-                            // Sometimes Account is not the first column? verify 13 digits
+                            // Verify 13-digit account number
                             if (!/^\\d{13}$/.test(acc) && /^\\d{13}$/.test(cells[1].innerText.trim())) {
                                 acc = cells[1].innerText.trim();
                                 addr = cells[2] ? cells[2].innerText.trim() : "Unknown";
@@ -410,12 +383,11 @@ class HCADScraper(AppraisalDistrictConnector):
                         const links = document.querySelectorAll('a');
                         links.forEach(a => {
                             const text = a.innerText.trim();
-                            // Match strictly 13 digits
                             if (/^\\d{13}$/.test(text) && !seen.has(text)) {
                                 seen.add(text);
                                 results.push({
                                     account_number: text,
-                                    address: "Unknown"  // We will deep scrape to get this later
+                                    address: "Unknown"
                                 });
                             }
                         });
@@ -423,16 +395,83 @@ class HCADScraper(AppraisalDistrictConnector):
                     return results;
                 }""")
                 
-                logger.info(f"Found {len(rows)} unique potential neighbors on {street_name}")
-                # Add district field
+                logger.info(f"HCAD: Found {len(rows)} unique potential neighbors on {street_name}")
                 for row in rows:
                     row['district'] = 'HCAD'
                 return rows
             except Exception as e:
-                logger.error(f"Street neighbor discovery failed: {e}")
+                logger.error(f"HCAD: Street neighbor discovery failed: {e}")
+                return []
             finally:
-                await browser.close()
-        return []
+                if browser:
+                    await browser.close()
+
+    async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
+        """
+        Searches HCAD for all properties in a neighborhood code.
+        Uses the portal's search box with the neighborhood code.
+        """
+        if self.is_commercial_neighborhood_code(neighborhood_code):
+            logger.info(f"HCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
+            return []
+        
+        logger.info(f"HCAD: Searching for neighborhood code: {neighborhood_code}")
+        async with async_playwright() as p:
+            browser = None
+            try:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
+                
+                await page.goto(self.portal_url, wait_until="load", timeout=60000)
+                await self._bypass_security(page)
+                
+                input_selector = "input[placeholder*='Search like']"
+                await page.wait_for_selector(input_selector, timeout=30000)
+                await page.fill(input_selector, neighborhood_code)
+                await page.keyboard.press("Enter")
+                
+                try:
+                    await page.wait_for_selector("tr", timeout=30000)
+                    await asyncio.sleep(2)
+                except Exception:
+                    logger.warning(f"HCAD: Timed out waiting for neighborhood results for '{neighborhood_code}'")
+                    return []
+                
+                rows = await page.evaluate("""() => {
+                    const results = [];
+                    const seen = new Set();
+                    const tableRows = document.querySelectorAll('tr');
+                    tableRows.forEach(row => {
+                        const cells = row.querySelectorAll('td');
+                        if (cells.length >= 3) {
+                            let acc = cells[0].innerText.trim();
+                            let addr = cells[1].innerText.trim();
+                            if (!/^\\d{13}$/.test(acc) && /^\\d{13}$/.test(cells[1].innerText.trim())) {
+                                acc = cells[1].innerText.trim();
+                                addr = cells[2] ? cells[2].innerText.trim() : "Unknown";
+                            }
+                            if (/^\\d{13}$/.test(acc) && !seen.has(acc)) {
+                                seen.add(acc);
+                                results.push({ account_number: acc, address: addr });
+                            }
+                        }
+                    });
+                    return results;
+                }""")
+                
+                logger.info(f"HCAD: Found {len(rows)} properties in neighborhood '{neighborhood_code}'")
+                for row in rows:
+                    row['district'] = 'HCAD'
+                return rows
+            except Exception as e:
+                logger.error(f"HCAD: Neighborhood discovery failed: {e}")
+                return []
+            finally:
+                if browser:
+                    await browser.close()
 
     async def _discover_address(self, account_number: str) -> Optional[str]:
         mappings = {

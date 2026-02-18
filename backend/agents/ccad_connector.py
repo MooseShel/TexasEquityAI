@@ -8,8 +8,9 @@ logger = logging.getLogger(__name__)
 class CCADConnector(AppraisalDistrictConnector):
     """
     Connector for Collin Central Appraisal District (CCAD).
-    Uses Socrata API (Open Data).
+    Uses Socrata Open Data API — the gold standard approach (no scraping needed).
     """
+    DISTRICT_NAME = "CCAD"
     
     # 2025 Dataset ID: vffy-snc6
     DATASET_ID = "vffy-snc6" 
@@ -24,13 +25,8 @@ class CCADConnector(AppraisalDistrictConnector):
         where = ""
         if account_number:
             clean_acc = account_number.upper().strip()
-            # If it's a R number without dashes, Socrata might need dashes
-            # Example: R281500C01001 -> R-2815-00C-0100-1 ???
-            # Let's try to match it as is first, then with dashes if it looks like a CCAD pattern.
             # R numbers in CCAD are usually R-XXXX-XXX-XXXX-X
             if clean_acc.startswith("R") and "-" not in clean_acc:
-                # Basic guess: R-2815-00C-0100-1 (dashes at 2, 7, 11, 16)
-                # But let's use LIKE if it's tricky.
                 where = f"geoid like '%{clean_acc}%'"
             else:
                 where = f"geoid = '{clean_acc}'"
@@ -60,6 +56,7 @@ class CCADConnector(AppraisalDistrictConnector):
                     data = resp.json()
                 
                 if not data:
+                    logger.warning(f"CCAD: No data found for '{account_number}'")
                     return None
             
             return self._normalize_data(data[0])
@@ -69,12 +66,16 @@ class CCADConnector(AppraisalDistrictConnector):
             return None
 
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
-        logger.info(f"CCAD Neighbor Discovery: {street_name}")
+        """
+        Fetches neighbors by street name via Socrata API.
+        Limit increased to 50 for better equity pool coverage.
+        """
+        logger.info(f"CCAD: Neighbor Discovery by street: {street_name}")
         street_upper = street_name.upper().strip()
         
         params = {
             "$where": f"upper(situsconcat) like '%{street_upper}%'", 
-            "$limit": 20
+            "$limit": 50
         }
         
         try:
@@ -85,14 +86,51 @@ class CCADConnector(AppraisalDistrictConnector):
             results = []
             for item in data:
                 norm = self._normalize_data(item)
-                if norm:
+                if norm and norm.get('building_area', 0) > 0:
                     results.append(norm)
+            
+            logger.info(f"CCAD: Found {len(results)} valid neighbors on '{street_name}'")
             return results
         except Exception as e:
-            logger.error(f"CCAD Neighbor Error: {e}")
+            logger.error(f"CCAD: Neighbor Error: {e}")
+            return []
+
+    async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
+        """
+        Fetches all properties in a neighborhood code via Socrata API.
+        This is extremely fast since it's a direct API query.
+        """
+        if self.is_commercial_neighborhood_code(neighborhood_code):
+            logger.info(f"CCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
+            return []
+        
+        logger.info(f"CCAD: Searching for neighborhood code: {neighborhood_code}")
+        nbhd_upper = neighborhood_code.upper().strip()
+        
+        params = {
+            "$where": f"upper(nbhdcode) = '{nbhd_upper}'",
+            "$limit": 100
+        }
+        
+        try:
+            resp = await self.client.get(f"{self.BASE_URL}/{self.DATASET_ID}.json", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            results = []
+            for item in data:
+                norm = self._normalize_data(item)
+                if norm and norm.get('building_area', 0) > 0:
+                    results.append(norm)
+            
+            logger.info(f"CCAD: Found {len(results)} properties in neighborhood '{neighborhood_code}'")
+            return results
+        except Exception as e:
+            logger.error(f"CCAD: Neighborhood Error: {e}")
             return []
 
     def _normalize_data(self, item: Dict) -> Dict:
+        """Normalizes a raw Socrata API record into the standard schema."""
         return {
             "account_number": item.get("geoid", ""),
             "address": item.get("situsconcat", "Unknown"),

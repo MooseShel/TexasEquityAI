@@ -12,6 +12,7 @@ class DCADConnector(AppraisalDistrictConnector):
     Connector for Dallas Central Appraisal District (DCAD).
     DCAD uses a custom ASP.NET portal at dallascad.org.
     """
+    DISTRICT_NAME = "DCAD"
 
     def __init__(self):
         self.base_url = "https://www.dallascad.org"
@@ -30,23 +31,20 @@ class DCADConnector(AppraisalDistrictConnector):
 
             try:
                 # 1. Search Logic
-                logger.info(f"Navigating to DCAD search for {account_number or address}")
+                logger.info(f"DCAD: Navigating to search for {account_number or address}")
                 if account_number:
                     await page.goto(f"{self.base_url}/SearchAcct.aspx", timeout=60000)
                     try:
                         await page.wait_for_load_state("networkidle", timeout=15000)
                     except: pass
 
-                    # Check for Account Number Input
                     account_input = page.locator("#txtAccountNumber")
                     try:
                         if await account_input.count() > 0:
-                            # Ensure it's ready
                             await account_input.wait_for(state="visible", timeout=10000)
                             await account_input.fill(account_number)
                             await page.click("#cmdSubmit")
                         else:
-                            # Fallback for different page version
                             fallback_input = page.locator("#txtAcctNum")
                             if await fallback_input.count() > 0:
                                 await fallback_input.fill(account_number)
@@ -64,23 +62,30 @@ class DCADConnector(AppraisalDistrictConnector):
                 else:
                     return {}
 
-                await asyncio.sleep(5)
+                # Smart wait: wait for result link or detail page
+                try:
+                    await page.wait_for_selector("a[href*='AcctDetail'], #PropAddr1_lblPropAddr", timeout=20000)
+                except Exception:
+                    logger.warning("DCAD: Timed out waiting for results.")
+                    return {}
 
-                # Click result link
+                # Click result link if on list page
                 if "AcctDetail" not in page.url:
                     result_link = page.locator("a[href*='AcctDetail']").first
                     if await result_link.count() > 0:
                         await result_link.click()
-                        await asyncio.sleep(5)
+                        try:
+                            await page.wait_for_selector("#PropAddr1_lblPropAddr", timeout=15000)
+                        except: pass
                     else:
-                        logger.warning(f"No result found for DCAD: {account_number}")
+                        logger.warning(f"DCAD: No result found for {account_number}")
                         return {}
 
                 # 2. Extract Details
                 details = {}
                 details['account_number'] = account_number
                 
-                # Use Location Address label
+                # Address
                 addr_locator = page.locator("#PropAddr1_lblPropAddr")
                 if await addr_locator.count() > 0:
                     details['address'] = (await addr_locator.inner_text()).strip()
@@ -93,31 +98,26 @@ class DCADConnector(AppraisalDistrictConnector):
                 
                 # FALLBACK: If summary is 0, check for table rows containing 2025/2024
                 if mkt_val == 0.0:
-                    logger.info("DCAD Summary Value is 0. Searching for historical rows...")
-                    # Try specific year rows which are common in historical tables
+                    logger.info("DCAD: Summary Value is 0. Searching for historical rows...")
                     for target_year in ["2025", "2024", "2023"]:
                         year_row = page.locator(f"tr:has-text('{target_year}')").first
                         if await year_row.count() > 0:
                             tds = year_row.locator("td")
                             td_count = await tds.count()
                             if td_count >= 4:
-                                # In DCAD history tables, Market is often the last or 2nd to last col
-                                # Let's try to find a cell that looks like currency in that row
                                 for j in range(td_count - 1, 1, -1):
                                     cell_text = await tds.nth(j).inner_text()
                                     h_val = self._parse_currency(cell_text)
-                                    if h_val > 500: # Threshold to avoid picking up small dates/codes
-                                        logger.info(f"Found historical value for {target_year}: {h_val}")
+                                    if h_val > 500:
+                                        logger.info(f"DCAD: Found historical value for {target_year}: {h_val}")
                                         mkt_val = h_val
                                         break
                             if mkt_val > 0: break
                 
-                # FINAL FALLBACK: Regex on body text for "Total Value" or "Market Value"
+                # FINAL FALLBACK: Regex on body text
                 if mkt_val == 0.0:
-                    logger.info("DCAD DOM/Table search failed. Trying regex on body text...")
-                    # DCAD often shows "Total Value" or "Market Value" in summary boxes
+                    logger.info("DCAD: DOM/Table search failed. Trying regex on body text...")
                     body_text = await page.evaluate("() => document.body.innerText")
-                    # Match patterns like "Total Value: $123,456" or "Market Value  $123,456"
                     regex_patterns = [
                         r"(?:Total|Market)\s+Value[:\s]*\$([\d,]+)",
                         r"Total\s+Appraised\s+Value[:\s]*\$([\d,]+)"
@@ -127,7 +127,7 @@ class DCADConnector(AppraisalDistrictConnector):
                         if match:
                             mkt_val = self._parse_currency(match.group(1))
                             if mkt_val > 0:
-                                logger.info(f"Picked value via DCAD Regex: {mkt_val}")
+                                logger.info(f"DCAD: Picked value via Regex: {mkt_val}")
                                 break
 
                 details['market_value'] = mkt_val
@@ -136,18 +136,16 @@ class DCADConnector(AppraisalDistrictConnector):
                 # Year Built & Area - Robust Extraction
                 body_text = await page.evaluate("() => document.body.innerText")
                 
-                # 1. Year Built
+                # Year Built
                 yb_match = re.search(r"Year Built:\s*(\d{4})", body_text)
                 if yb_match:
                     details['year_built'] = int(yb_match.group(1))
                 
-                # 2. Building Area - Multi-label fallback
+                # Building Area - Multi-label fallback
                 area_found = 0
-                area_labels = ["Total Area", "Building Area", "Net Area", "Gross Area", "Living Area"]
+                area_labels = ["Total Area", "Building Area", "Net Area", "Gross Area", "Living Area", "Gross Building Area"]
                 
-                # Try specific labels in the text
                 for label in area_labels:
-                    # Match pattern: "Label: 1,234"
                     match = re.search(f"{label}[:\\s]+([\\d,]+)", body_text, re.IGNORECASE)
                     if match:
                         val = self._parse_number(match.group(1))
@@ -165,14 +163,15 @@ class DCADConnector(AppraisalDistrictConnector):
                 return details
 
             except Exception as e:
-                logger.error(f"Error scraping DCAD details: {e}")
+                logger.error(f"DCAD: Error scraping details: {e}")
                 return {}
             finally:
                 await browser.close()
 
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
-        DCAD street search returns a list.
+        DCAD street search returns a list of neighbors.
+        Uses smart polling instead of fixed sleeps.
         """
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -184,21 +183,24 @@ class DCADConnector(AppraisalDistrictConnector):
                     await page.wait_for_load_state("networkidle", timeout=15000)
                 except: pass
                 
-                # Check different inputs
+                street_input = page.locator("#txtStreetName")
                 inputs = page.locator("input[type='text']")
-                street_input = page.locator("#txtStreetName") # Try exact ID first
                 
                 if await street_input.count() > 0:
-                     await street_input.fill(street_name)
-                     await page.click("#cmdSubmit")
+                    await street_input.fill(street_name)
+                    await page.click("#cmdSubmit")
                 elif await inputs.count() > 0:
-                     # Generic fallback
-                     last_inp = inputs.last
-                     await last_inp.fill(street_name)
-                     await page.keyboard.press('Enter')
+                    await inputs.last.fill(street_name)
+                    await page.keyboard.press('Enter')
                 else:
                     return []
-                await asyncio.sleep(5)
+                
+                # Smart wait for results
+                try:
+                    await page.wait_for_selector("#SearchResults1_dgResults tr", timeout=20000)
+                except Exception:
+                    logger.warning(f"DCAD: Timed out waiting for street results for '{street_name}'")
+                    return []
                 
                 rows = page.locator("#SearchResults1_dgResults tr")
                 count = await rows.count()
@@ -221,7 +223,73 @@ class DCADConnector(AppraisalDistrictConnector):
                         })
                 return neighbors
             except Exception as e:
-                logger.error(f"Error fetching DCAD neighbors: {e}")
+                logger.error(f"DCAD: Error fetching neighbors: {e}")
+                return []
+            finally:
+                await browser.close()
+
+    async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
+        """
+        Searches DCAD for all properties in a neighborhood code.
+        DCAD has a neighborhood search at /SearchNbhd.aspx.
+        """
+        if self.is_commercial_neighborhood_code(neighborhood_code):
+            logger.info(f"DCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
+            return []
+        
+        logger.info(f"DCAD: Searching for neighborhood code: {neighborhood_code}")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            neighbors = []
+            try:
+                await page.goto(f"{self.base_url}/SearchNbhd.aspx", timeout=60000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except: pass
+                
+                # Try to find neighborhood code input
+                nbhd_input = page.locator("#txtNbhd, #txtNeighborhood, input[type='text']").first
+                if await nbhd_input.count() > 0:
+                    await nbhd_input.fill(neighborhood_code)
+                    submit = page.locator("#cmdSubmit, input[type='submit']").first
+                    if await submit.count() > 0:
+                        await submit.click()
+                    else:
+                        await page.keyboard.press("Enter")
+                else:
+                    logger.warning("DCAD: Could not find neighborhood search input")
+                    return []
+                
+                try:
+                    await page.wait_for_selector("#SearchResults1_dgResults tr", timeout=20000)
+                except Exception:
+                    logger.warning(f"DCAD: Timed out waiting for neighborhood results for '{neighborhood_code}'")
+                    return []
+                
+                rows = page.locator("#SearchResults1_dgResults tr")
+                count = await rows.count()
+                
+                for i in range(2, min(count, 52)):
+                    row = rows.nth(i)
+                    cols = row.locator("td")
+                    if await cols.count() >= 5:
+                        href = await cols.nth(1).locator("a").get_attribute("href")
+                        acc_id = href.split("ID=")[-1] if href else ""
+                        addr = await cols.nth(1).inner_text()
+                        val_str = await cols.nth(4).inner_text()
+                        
+                        neighbors.append({
+                            "account_number": acc_id.strip(),
+                            "address": addr.strip(),
+                            "market_value": self._parse_currency(val_str),
+                            "district": "DCAD"
+                        })
+                
+                logger.info(f"DCAD: Found {len(neighbors)} properties in neighborhood '{neighborhood_code}'")
+                return neighbors
+            except Exception as e:
+                logger.error(f"DCAD: Error fetching neighborhood properties: {e}")
                 return []
             finally:
                 await browser.close()
@@ -237,18 +305,3 @@ class DCADConnector(AppraisalDistrictConnector):
                 return status
             except:
                 return False
-
-    def _parse_currency(self, val_str: str) -> float:
-        try:
-            clean = val_str.replace("$", "").replace(",", "").strip()
-            if clean == "N/A" or not clean: return 0.0
-            return float(clean)
-        except:
-            return 0.0
-
-    def _parse_number(self, val_str: str) -> float:
-        try:
-            clean = val_str.replace(",", "").strip()
-            return float(clean)
-        except:
-            return 0.0
