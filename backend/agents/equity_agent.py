@@ -14,15 +14,23 @@ class EquityAgent:
         Calculation: Calculate the median of the Equity 5 to determine the 'Justified Value Floor.'
         """
         subj_val = subject_property.get('appraised_value', 0)
-        subj_area = subject_property.get('building_area', 1) or 1
+        subj_area = subject_property.get('building_area', 0)
+        
+        # If area is 0, we can't perform meaningful SQFT-based analysis
+        if not subj_area or subj_area == 0:
+            return {
+                'equity_5': [],
+                'justified_value_floor': subj_val,
+                'subject_value_per_sqft': 0,
+                'error': "Missing Property Area: Could not perform Square Foot analysis. Using current appraisal as baseline."
+            }
+
         if not neighborhood_properties:
             return {
                 'equity_5': [],
                 'justified_value_floor': subj_val,
                 'subject_value_per_sqft': subj_val / subj_area
             }
-
-        df = pd.DataFrame(neighborhood_properties)
         
         # Features for KNN: Building Area, Year Built (if available)
         features = ['building_area']
@@ -38,18 +46,31 @@ class EquityAgent:
         X = df[features].values
         subject_X = np.array([subject_vals])
         
-        # Fit KNN on similarity features
+        # NORMALIZATION: Scale features to [0,1] to ensure Area doesn't drown out Year Built
+        X_min = X.min(axis=0)
+        X_max = X.max(axis=0)
+        # Avoid division by zero
+        X_range = np.where((X_max - X_min) == 0, 1, X_max - X_min)
+        X_scaled = (X - X_min) / X_range
+        subject_X_scaled = (subject_X - X_min) / X_range
+        
+        # Fit KNN on scaled features
         self.knn = NearestNeighbors(n_neighbors=min(20, len(df)), metric='euclidean')
-        self.knn.fit(X)
-        distances, indices = self.knn.kneighbors(subject_X)
+        self.knn.fit(X_scaled)
+        distances, indices = self.knn.kneighbors(subject_X_scaled)
         
         # Get the 20 most similar neighbors
         top_20 = df.iloc[indices[0]].copy()
-        # Add similarity score (inverse of distance)
-        top_20['similarity_score'] = 1 / (1 + distances[0])
         
-        # Calculate 'Assessed Value per SqFt' (using appraised_value as proxy for assessed)
-        top_20['value_per_sqft'] = top_20['appraised_value'] / top_20['building_area']
+        # Add similarity score (Inverse distance with a steeper falloff for better UX)
+        # Max distance in [0,1] space for N features is sqrt(N)
+        max_dist = np.sqrt(len(features))
+        top_20['similarity_score'] = (1 - (distances[0] / max_dist)) * 100
+        # Clip to [0, 100]
+        top_20['similarity_score'] = top_20['similarity_score'].clip(0, 100)
+        
+        # Calculate 'Assessed Value per SqFt'
+        top_20['value_per_sqft'] = pd.to_numeric(top_20['appraised_value'], errors='coerce') / pd.to_numeric(top_20['building_area'], errors='coerce')
         
         # Sort by value_per_sqft ascending
         top_20_sorted = top_20.sort_values(by='value_per_sqft', ascending=True)

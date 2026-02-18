@@ -13,45 +13,65 @@ class DistrictConnectorFactory:
     """
     
     @staticmethod
+    def detect_district_from_account(account_number: str) -> Optional[str]:
+        """
+        Analyzes account number format to guess the district.
+        """
+        if not account_number: return None
+        
+        clean_acc = account_number.replace("-", "").strip()
+        
+        # DCAD: 17 characters (often has dashes, but we cleaned them)
+        # Actually DCAD is usually just long.
+        if len(clean_acc) == 17:
+             return "DCAD"
+
+        # HCAD: 13 digits
+        if len(clean_acc) == 13 and clean_acc.isdigit():
+             return "HCAD"
+            
+        # CCAD: Often starts with R
+        if account_number.upper().startswith("R"):
+             return "CCAD"
+        
+        # TCAD: Usually 6 digits (up to 7)
+        if len(clean_acc) <= 7 and clean_acc.isdigit():
+            return "TCAD"
+            
+        # TAD: 8 digits
+        if len(clean_acc) == 8 and clean_acc.isdigit():
+            return "TAD"
+             
+        return None
+
+    @staticmethod
     def get_connector(district_code: Optional[str] = None, account_number: Optional[str] = None) -> AppraisalDistrictConnector:
         """
         Returns a connector instance.
         """
-        # Explicit override
-        if district_code:
-            code = district_code.upper()
-            if code == "TAD":
-                return TADConnector()
-            elif code == "CCAD":
-                return CCADConnector()
-            elif code == "TCAD":
-                return TCADConnector()
-            elif code == "DCAD":
-                return DCADConnector()
-            elif code == "HCAD":
-                return HCADScraper()
+        # 1. Try to detect from account number first (Verification Step)
+        # If we have an account number, we might want to ensure the district matches
+        # But for now, we follow the logic: Use explicit code if valid, else detect.
         
-        # Auto-detection
-        if account_number:
-            clean_acc = account_number.replace("-", "").strip()
+        target_district = district_code
+        
+        if not target_district and account_number:
+            target_district = DistrictConnectorFactory.detect_district_from_account(account_number)
             
-            # DCAD: 17 characters
-            if len(clean_acc) == 17:
-                return DCADConnector()
-
-            # HCAD: 13 digits
-            if len(clean_acc) == 13 and clean_acc.isdigit():
-                return HCADScraper()
-                
-            # CCAD: Often starts with R
-            if account_number.upper().startswith("R"):
-                return CCADConnector()
+        # Default to HCAD if still unknown
+        if not target_district:
+            target_district = "HCAD"
             
-            # TAD/TCAD detection can be tricky as both use numeric IDs.
-            # TCAD IDs are usually 6-7 digits.
-            # This is why passing district_code is preferred.
-            
-            # Default fallback (Legacy)
+        code = target_district.upper()
+        if code == "TAD":
+            return TADConnector()
+        elif code == "CCAD":
+            return CCADConnector()
+        elif code == "TCAD":
+            return TCADConnector()
+        elif code == "DCAD":
+            return DCADConnector()
+        elif code == "HCAD":
             return HCADScraper()
             
         return HCADScraper()

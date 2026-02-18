@@ -82,28 +82,43 @@ class TCADConnector(AppraisalDistrictConnector):
                 # Values & More - Use Regex on full body text for robustness
                 body_text = await page.evaluate("() => document.body.innerText")
                 
-                # Market Value
-                mkt_match = re.search(r"Market\s*[\n\r]*\s*([\d,]+)", body_text)
-                if mkt_match:
-                    details['market_value'] = self._parse_currency(mkt_match.group(1))
+                # Market Value - Find all matches and pick the first non-zero one
+                # This prevents picking up 2026 $0 values if they appear first.
+                mkt_matches = re.finditer(r"Market\s*[\n\r]*\s*([\d,]+)", body_text)
+                found_mkt = 0.0
+                for match in mkt_matches:
+                    val = self._parse_currency(match.group(1))
+                    if val > 0:
+                        found_mkt = val
+                        break
+                details['market_value'] = found_mkt
                 
-                app_match = re.search(r"Appraised\s*[\n\r]*\s*([\d,]+)", body_text)
-                if app_match:
-                    details['appraised_value'] = self._parse_currency(app_match.group(1))
+                app_matches = re.finditer(r"Appraised\s*[\n\r]*\s*([\d,]+)", body_text)
+                found_app = 0.0
+                for match in app_matches:
+                    val = self._parse_currency(match.group(1))
+                    if val > 0:
+                        found_app = val
+                        break
+                details['appraised_value'] = found_app
 
                 # Year Built
                 yb_match = re.search(r"Year Built\s*[\n\r]*\s*(\d{4})", body_text)
                 if yb_match:
                     details['year_built'] = int(yb_match.group(1))
 
-                # Area
-                area_match = re.search(r"Main Area:?\s*[\n\r]*\s*([\d,]+)", body_text)
-                if area_match:
-                    details['building_area'] = self._parse_number(area_match.group(1))
-                else:
-                    alt_match = re.search(r"Total Living Area\s*[\n\r]*\s*([\d,]+)", body_text)
-                    if alt_match:
-                        details['building_area'] = self._parse_number(alt_match.group(1))
+                # Area - Multi-label robust extraction
+                area_found = 0
+                area_labels = ["Main Area", "Total Living Area", "Gross Area", "Building Area", "SQ FT"]
+                
+                for label in area_labels:
+                    # Match pattern: "Label: 1,234"
+                    match = re.search(f"{label}[:\\s]+([\\d,]+)", body_text, re.IGNORECASE)
+                    if match:
+                        val = self._parse_number(match.group(1))
+                        if val > area_found: area_found = val
+                
+                details['building_area'] = area_found
 
                 # Neighborhood
                 nbhd_match = re.search(r"Neighborhood CD:?\s*[\n\r]*\s*([A-Z\d\.]+)", body_text)

@@ -92,52 +92,76 @@ class HCADScraper(AppraisalDistrictConnector):
                 await page.goto(self.portal_url, wait_until="load", timeout=60000)
                 await self._bypass_security(page)
                 
-                # Step 2: Select 'Account Number'
+                # Step 2: Select Search Mode (Account vs Location)
+                is_address = any(c.isalpha() for c in account_number)
                 try:
-                    logger.info("Selecting 'Account Number' search mode...")
-                    # Clicking the label is often more reliable in Blazor than the radio input itself
-                    await page.click("label[for='ACCOUNTNUMBER']", force=True)
+                    if is_address:
+                        logger.info("Selecting 'Location' search mode (Address detected)...")
+                        await page.click("label[for='LOCATION']", force=True)
+                    else:
+                        logger.info("Selecting 'Account Number' search mode...")
+                        await page.click("label[for='ACCOUNTNUMBER']", force=True)
                     await asyncio.sleep(1)
                 except Exception as e:
-                    logger.warning(f"Failed to select Account Number mode: {e}")
+                    logger.warning(f"Failed to select search mode: {e}")
 
                 # Step 3: Search
                 input_selector = "input[placeholder*='Search like']"
                 await page.fill(input_selector, "")
-                await page.type(input_selector, account_number, delay=100)
+                await page.type(input_selector, account_number, delay=80)
                 await page.keyboard.press("Enter")
                 
                 # Step 4: Wait for data to appear (Polling approach)
                 logger.info("Polling for property data...")
-                details = {"account_number": account_number, "district": "HCAD"}
                 
                 start_time = asyncio.get_event_loop().time()
                 while asyncio.get_event_loop().time() - start_time < 45:
                     content = await page.content()
-                    if account_number in content and ("LAMONTE" in content or "Owner" in content or "Value" in content):
-                        if await page.locator("#OwnerInfoComponent").is_visible():
-                            logger.info("Data detected on detail page.")
-                            break
                     
-                    # If we see a results table, try to click it
+                    # Detection level 1: Detail page already loaded
+                    if await page.locator("#OwnerInfoComponent").is_visible():
+                        logger.info("Data detected on detail page.")
+                        break
+                    
+                    # Detection level 2: Search results table found
                     if "table-hover" in content or "Account Number" in content:
                         try:
-                            result_link = page.get_by_text(account_number, exact=True).first
+                            # If it was an address search, we take the first result
+                            # If it was account search, we look for the exact match
+                            if is_address:
+                                result_link = page.locator("tr.table-hover td a").first
+                            else:
+                                result_link = page.get_by_text(account_number, exact=True).first
+                                
                             if await result_link.is_visible():
+                                logger.info("Clicking result link from table...")
                                 await result_link.click()
                                 await asyncio.sleep(2)
-                        except: pass
+                        except Exception as e: 
+                            pass # Still polling
                     
                     await asyncio.sleep(2)
                 else:
                     logger.error("Timed out waiting for property data to appear.")
-                    await page.screenshot(path=f"debug/poll_fail_{account_number}.png")
+                    os.makedirs("debug", exist_ok=True)
+                    await page.screenshot(path=f"debug/poll_fail_{account_number.replace(' ', '_')}.png")
                     return None
 
                 # Step 5: Extraction (Polished)
                 await asyncio.sleep(2) # Final settle
                 
-                details = {"account_number": account_number, "district": "HCAD"}
+                # Extract the REAL account number from the page if we searched by address
+                detected_account = account_number
+                try:
+                    # Look for the account number in the header or specific components
+                    header_text = await page.locator(".whitebox-header").first.inner_text()
+                    acc_match = re.search(r'(\d{13})', header_text)
+                    if acc_match:
+                        detected_account = acc_match.group(1)
+                        logger.info(f"Detected 13-digit account: {detected_account}")
+                except: pass
+
+                details = {"account_number": detected_account, "district": "HCAD"}
 
                 # Address
                 try:
@@ -147,15 +171,39 @@ class HCADScraper(AppraisalDistrictConnector):
                         details['address'] = " ".join([a.strip() for a in addr_parts if a.strip()])
                 except: pass
 
-                # Living Area
-                try:
-                    area_text = await page.locator("#PropertyComponent .row:has-text('Living Area') .col-6:nth-child(2)").inner_text()
-                    details['building_area'] = self._parse_number(area_text.replace("SF", ""))
-                except:
+                # Area - Multi-label robust extraction
+                area_found = 0
+                area_labels = ["Living Area", "Gross Area", "Net Area", "Main Area", "SQ FT"]
+                
+                for label in area_labels:
                     try:
-                        area_text = await page.locator("#PropertyComponent .row:has-text('Living Area') .col").inner_text()
-                        details['building_area'] = self._parse_number(area_text.replace("SF", ""))
+                        # Try finding the row specifically in PropertyComponent
+                        row_locator = page.locator(f"#PropertyComponent .row:has-text('{label}')")
+                        if await row_locator.count() > 0:
+                            # Try multiple column layouts
+                            for selector in [".col-6:nth-child(2)", ".col", "span"]:
+                                val_locator = row_locator.locator(selector).last
+                                if await val_locator.count() > 0:
+                                    area_text = await val_locator.inner_text()
+                                    val = self._parse_number(area_text.replace("SF", ""))
+                                    if val > area_found:
+                                        area_found = val
+                                        break
+                        if area_found > 0: break
+                    except: continue
+
+                # Last ditch fallback: Regex on property component text
+                if area_found == 0:
+                    try:
+                        prop_text = await page.locator("#PropertyComponent").inner_text()
+                        for label in area_labels:
+                            match = re.search(f"{label}[:\\s]*([\\d,]+)", prop_text, re.IGNORECASE)
+                            if match:
+                                val = self._parse_number(match.group(1))
+                                if val > area_found: area_found = val
                     except: pass
+
+                details['building_area'] = area_found
                 
                 # Year Built
                 try:
@@ -228,18 +276,44 @@ class HCADScraper(AppraisalDistrictConnector):
                 vals = await extract_vals()
                 
                 # Check if we need to switch year
-                if not vals['appraised'] or "Pending" in vals['appraised']:
-                    logger.info("Values pending/missing. Attempting 2025 switch...")
+                # If current year is "Pending" or 0, try previous years from dropdown
+                if not vals['appraised'] or "Pending" in vals['appraised'] or self._parse_currency(vals['appraised']) == 0:
+                    logger.info("Values pending/missing for default year. Attempting year-switching loop...")
                     try:
+                        # Get available years from dropdown
                         await page.click("#dropdownMenuButton1", timeout=5000)
                         await asyncio.sleep(1)
-                        await page.click(".dropdown-item:has-text('2025')", timeout=5000)
-                        await asyncio.sleep(6)
+                        dropdown_items = page.locator(".dropdown-item")
+                        item_texts = await dropdown_items.all_inner_texts()
                         
-                        vals = await extract_vals()
-                        logger.info(f"Re-extracted vals after 2025 switch: {vals}")
+                        # Filter for years (4 digits) and sort descending
+                        years = sorted([t.strip() for t in item_texts if t.strip().isdigit()], reverse=True)
+                        logger.info(f"Available years in HCAD dropdown: {years}")
+                        
+                        found_valid_year = False
+                        # Try the next few years if the first one (latest) is pending
+                        for year_to_try in years[1:3]: 
+                            logger.info(f"Switching to HCAD year: {year_to_try}")
+                            # The click might cause a refresh, so we wait
+                            await page.click(f".dropdown-item:has-text('{year_to_try}')", timeout=5000)
+                            await asyncio.sleep(6) # Wait for Blazor/Data load
+                            
+                            new_vals = await extract_vals()
+                            logger.info(f"Extracted vals for {year_to_try}: {new_vals}")
+                            
+                            if new_vals['appraised'] and "Pending" not in new_vals['appraised'] and self._parse_currency(new_vals['appraised']) > 0:
+                                vals = new_vals
+                                found_valid_year = True
+                                break
+                            
+                            # If not found, re-open dropdown for next iteration
+                            await page.click("#dropdownMenuButton1", timeout=5000)
+                            await asyncio.sleep(1)
+
+                        if not found_valid_year:
+                             logger.warning("Could not find a year with valid appraisal values for HCAD.")
                     except Exception as e:
-                        logger.warning(f"Failed 2025 switch: {e}")
+                        logger.warning(f"Failed HCAD year-switching: {e}")
 
                 details['appraised_value'] = self._parse_currency(vals['appraised'])
                 # If Market is missing, default to Appraised (common for residential uniform)

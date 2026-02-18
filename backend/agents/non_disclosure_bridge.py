@@ -101,11 +101,7 @@ class NonDisclosureBridge:
         return sorted(ratios)[len(ratios)//2]
 
     async def get_estimated_market_value(self, appraised_value: float, address: str) -> float:
-        # Mock neighborhood for MVP fallback
-        mock_neighborhood_sales = [
-            {'appraised_value': 300000, 'sale_price': 315000},
-            {'appraised_value': 310000, 'sale_price': 325500},
-            {'appraised_value': 290000, 'sale_price': 304500},
-        ]
-        ratio = self.calculate_fallback_value(mock_neighborhood_sales)
-        return appraised_value * ratio
+        # Without real market data, we rely on the appraised value as the best estimate
+        # or potentially a conservative multiplier if we had regional trend data.
+        # For now, we avoid making up numbers.
+        return appraised_value

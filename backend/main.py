@@ -1,18 +1,21 @@
-import asyncio
-import sys
-import logging
-import traceback
-import random
-import os
-import json
-import re # Added regex
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
+import logging
+import sys
+import asyncio
+import traceback
+import random
+import os
+import json
+import re
+
+logger = logging.getLogger(__name__)
 
 # MUST be set before any subprocess/playwright calls on Windows
 if sys.platform == 'win32':
+    logging.info("Attempting to set ProactorEventLoopPolicy...")
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 load_dotenv()
@@ -53,37 +56,9 @@ permit_agent = PermitAgent()
 async def root():
     return {"message": "Texas Equity AI API is running"}
 
-def is_real_address(address: str) -> bool:
-    """Detects if an address is a placeholder/dummy."""
-    placeholders = ["HCAD Account", "Example St", "Placeholder"]
-    return address and not any(p in address for p in placeholders)
+from backend.utils.address_utils import normalize_address, is_real_address
 
-def clean_hcad_address(address: str) -> str:
-    """Removes 'HCAD Account' prefix and 'Houston, TX' redundancy."""
-    if not address: return ""
-    
-    original = address
-    # Remove prefix case-insensitively
-    clean = re.sub(r'(?i)HCAD\s*Account', '', address).strip()
-    
-    # Fallback strict removal just in case regex is weird
-    if "HCAD Account" in clean:
-        clean = clean.replace("HCAD Account", "").strip()
-    
-    # Remove leading non-alphanumeric chars (like space or comma or colon)
-    while clean and not clean[0].isalnum(): 
-        clean = clean[1:].strip()
-    
-    
-    # Fix double suffix "Houston, TX ... Houston, TX" or similar
-    # We'll just look for the first occurrence of ", Houston" and chop off duplicates if found
-    if clean.lower().count("houston, tx") > 1:
-        # Keep the first one, remove subsequent ones?
-        # A simple way: find the last occurrence and keep up to it? No.
-        # Let's just remove specific redundancy logic:
-        clean = clean.replace(", Houston, TX, Houston, TX", ", Houston, TX")
-        
-    return clean.strip()
+
 
 @app.get("/protest/{account_number}")
 async def get_full_protest(
@@ -93,25 +68,48 @@ async def get_full_protest(
     manual_area: Optional[float] = None,
     district: Optional[str] = None
 ):
-    # Definitive Windows Fix
-    if sys.platform == 'win32':
-        try:
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        except:
-            pass
+    loop = asyncio.get_running_loop()
+    logger.info(f"Current Running Loop Type: {type(loop)}")
+    
+    if sys.platform == 'win32' and not isinstance(loop, asyncio.WindowsProactorEventLoopPolicy):
+         # We can't actually change the running loop here, but we can log it.
+         pass
             
     async def protest_generator():
         try:
             yield json.dumps({"status": "🔍 Resolver Agent: Locating property and resolving address..."}) + "\n"
             
-            # 0. Address Resolution (RentCast Disabled for now)
+            # 0. Address Resolution (RentCast Enabled)
             current_account = account_number
+            current_district = district # Initialize local var from outer scope
             rentcast_fallback_data = None
-            # if any(c.isalpha() for c in account_number) and " " in account_number:
-            #     resolved = await bridge.resolve_address(account_number)
-            #     if resolved:
-            #         current_account = resolved['account_number']
-            #         rentcast_fallback_data = resolved
+            
+            # Heuristic: If input has spaces and letters, treat as address
+            if any(c.isalpha() for c in account_number) and " " in account_number:
+                logger.info(f"Input '{account_number}' detected as address. Attempting resolution...")
+                resolved = await bridge.resolve_address(account_number)
+                if resolved:
+                    current_account = resolved.get('account_number')
+                    rentcast_fallback_data = resolved
+                    logger.info(f"Resolved address to account: {current_account}")
+                    
+                    # Infer district from resolved address to ensure correct connector usage
+                    if not current_district:
+                        res_addr = resolved.get('address', '').lower()
+                        if "dallas" in res_addr: current_district = "DCAD"
+                        elif "austin" in res_addr: current_district = "TCAD"
+                        elif "fort worth" in res_addr: current_district = "TAD"
+                        elif "plano" in res_addr: current_district = "CCAD"
+                        elif "houston" in res_addr: current_district = "HCAD"
+                        if current_district:
+                            logger.info(f"Inferred district from address: {current_district}")
+
+            # 0b. Account Pattern Auto-Correction
+            # Even if the user selected a district, the account number format might prove them wrong.
+            detected_district = DistrictConnectorFactory.detect_district_from_account(current_account)
+            if detected_district and detected_district != current_district:
+                logger.info(f"Auto-correcting district from {current_district} to {detected_district} based on account format.")
+                current_district = detected_district
 
             yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping HCAD records and history..."}) + "\n"
             
@@ -119,27 +117,55 @@ async def get_full_protest(
             cached_property = await supabase_service.get_property_by_account(current_account)
             
             # Use Factory to get the correct connector
-            connector = DistrictConnectorFactory.get_connector(district, current_account)
+            connector = DistrictConnectorFactory.get_connector(current_district, current_account)
             
             # Pass both the resolved account and the original input (if it was an address)
             # This allows the scraper to try searching by address if account search fails.
             original_address = account_number if any(c.isalpha() for c in account_number) else None
             property_details = await connector.get_property_details(current_account, address=original_address)
             
+            # CRITICAL: Update current_account if the scraper found the real numeric account
+            if property_details and property_details.get('account_number'):
+                scraped_acc = property_details.get('account_number')
+                if scraped_acc != current_account:
+                    logger.info(f"Updating account alias: {current_account} -> {scraped_acc}")
+                    current_account = scraped_acc
+
             if not property_details:
                 if rentcast_fallback_data:
                      property_details = rentcast_fallback_data
                 else:
-                    property_details = cached_property or {
-                        "account_number": current_account,
-                        "address": f"{current_account}, Houston, TX", # Removed "HCAD Account" prefix
-                        "appraised_value": 450000,
-                        "building_area": 2500
+                    # District-aware City Mapping
+                    district_map = {
+                        "HCAD": "Houston, TX",
+                        "TCAD": "Austin, TX",
+                        "DCAD": "Dallas, TX",
+                        "CCAD": "Plano, TX",
+                        "TAD": "Fort Worth, TX"
                     }
+                    district_city = district_map.get(current_district, "Houston, TX")
+
+                    if cached_property:
+                        # FIX: Check if cache has the wrong city (legacy "Houston" for non-Harris)
+                        cached_addr = cached_property.get('address', '')
+                        if current_district and current_district != "HCAD" and "Houston" in cached_addr and district_city not in cached_addr:
+                             logger.info(f"Correcting cached address city for {current_district}: {cached_addr}")
+                             cached_property['address'] = cached_addr.replace("Houston, TX", district_city)
+                             # Also update the db immediately? proper upsert later handles it.
+                        property_details = cached_property
+                    else:
+                        property_details = {
+                            "account_number": current_account,
+                            "address": f"{current_account}, {district_city}",
+                            "appraised_value": 450000,
+                            "building_area": 2500,
+                            "district": current_district
+                        }
             
             # AGGRESSIVE CLEANING
             raw_addr = property_details.get('address', '')
-            cleaned_addr = clean_hcad_address(raw_addr)
+            district_context = property_details.get('district', 'HCAD')
+            cleaned_addr = normalize_address(raw_addr, district_context)
             if raw_addr != cleaned_addr:
                 property_details['address'] = cleaned_addr
 
@@ -204,69 +230,70 @@ async def get_full_protest(
             try:
                 # Resolve Street Name
                 prop_address = property_details.get('address', 'Houston, TX')
-                addr_parts = prop_address.split(",")[0].strip().split()
+                # Remove city/state for street-only discovery
+                street_only = prop_address.split(",")[0].strip()
+                addr_parts = street_only.split()
+                # Skip the house number if it exists
                 street_name = " ".join(addr_parts[1:]) if addr_parts and addr_parts[0][0].isdigit() else " ".join(addr_parts)
                 
-                # Discovery: find neighbors on the same street
+                # Discovery Layer 1: Street Search
                 discovered_neighbors = await connector.get_neighbors_by_street(street_name)
                 
-                # Filter out the subject property itself from neighbors
-                if discovered_neighbors:
-                    discovered_neighbors = [
-                        n for n in discovered_neighbors 
-                        if n['account_number'] != property_details.get('account_number')
-                    ]
-                
-                real_neighborhood = []
-                if discovered_neighbors:
-                    # Deep-scrape top 5 neighbors for a robust but fast live pool
-                    # (In production, this would use a database of pre-scraped neighborhood codes)
-                    pool_to_scrape = discovered_neighbors[:5] 
-                    
+                async def scrape_pool(pool_list):
+                    usable = []
+                    pool_to_scrape = pool_list[:10] 
+                    logger.info(f"Deep-scraping pool of {len(pool_to_scrape)} neighbors...")
                     tasks = [connector.get_property_details(n['account_number']) for n in pool_to_scrape]
                     deep_results = await asyncio.gather(*tasks)
-                    
                     for res in deep_results:
-                        if res and res.get('building_area', 0) > 0:
-                            real_neighborhood.append(res)
-                            # Build the cache: Save neighbors to DB
-                            try:
-                                await supabase_service.upsert_property({
-                                    "account_number": res.get("account_number"),
-                                    "address": res.get("address"),
-                                    "appraised_value": res.get("appraised_value"),
-                                    "building_area": res.get("building_area"),
-                                    "year_built": res.get("year_built")
-                                })
-                            except: pass
-                
-                # Fallback if discovery fails or returns empty pool
+                        if res:
+                            area = res.get('building_area', 0)
+                            if area > 0:
+                                usable.append(res)
+                                logger.info(f"Added neighbor {res.get('account_number')} to pool. Area: {area}")
+                                # Cache the neighbor
+                                try:
+                                    await supabase_service.upsert_property({
+                                        "account_number": res.get("account_number"),
+                                        "address": res.get("address"),
+                                        "appraised_value": res.get("appraised_value"),
+                                        "building_area": res.get("building_area"),
+                                        "year_built": res.get("year_built")
+                                    })
+                                except: pass
+                            else:
+                                logger.warning(f"Skipping neighbor {res.get('account_number')}: Building Area is 0.")
+                        else:
+                            logger.warning("Deep scrape returned None for a neighbor.")
+                    return usable
+
+                # Process Street Discovery
+                real_neighborhood = []
+                if discovered_neighbors:
+                    # Filter out subject
+                    discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
+                    real_neighborhood = await scrape_pool(discovered_neighbors)
+
+                # Discovery Layer 2: Fallback to Neighborhood Code if street search yields 0 usable comps
                 if not real_neighborhood:
-                    logger.warning("Live discovery found no usable neighbors. Using proxy pool.")
-                    subj_val = property_details.get('appraised_value', 450000) or 450000
-                    subj_area = property_details.get('building_area', 2000) or 2000
-                    
-                    used_nums = set()
-                    base_num_str = prop_address.split()[0] if prop_address[0].isdigit() else "100"
-                    base_num = int(base_num_str) if base_num_str.isdigit() else 100
-                    
-                    for i in range(10):
-                        # Generate unique neighbor numbers
-                        offset = 0
-                        while True:
-                            offset = random.choice([-2, -4, -6, -8, 2, 4, 6, 8, 10, 12]) * (i + 1)
-                            if (base_num + offset) not in used_nums:
-                                used_nums.add(base_num + offset)
-                                break
-                        
-                        neighbor_addr = f"{base_num + offset} {street_name}, Houston, TX"
-                        
-                        real_neighborhood.append({
-                            "address": neighbor_addr,
-                            "appraised_value": round(subj_val * random.uniform(0.85, 1.15)),
-                            "building_area": round(subj_area * random.uniform(0.9, 1.1)),
-                            "account_number": f"MOCK_{base_num + offset}"
-                        })
+                    nbhd_code = property_details.get('neighborhood_code')
+                    if nbhd_code and nbhd_code != "Unknown":
+                        logger.info(f"No usable neighbors on street '{street_name}'. Trying Nbhd Code fallback: {nbhd_code}")
+                        yield json.dumps({"status": f"⚖️ Equity Specialist: No results on block. Expanding to neighborhood {nbhd_code}..."}) + "\n"
+                        nbhd_neighbors = await connector.get_neighbors(nbhd_code)
+                        if nbhd_neighbors:
+                            # Filter out subject
+                            nbhd_neighbors = [n for n in nbhd_neighbors if n['account_number'] != property_details.get('account_number')]
+                            real_neighborhood = await scrape_pool(nbhd_neighbors)
+                
+                logger.info(f"Final discovery pool size: {len(real_neighborhood)}")
+                
+                # Fallback if discovery completely fails
+                if not real_neighborhood:
+                    friendly_error = "Could not find sufficient data for equity analysis. Please try again later or verify the address."
+                    logger.warning("Live discovery found no usable neighbors. Returning error to user.")
+                    yield json.dumps({"error": friendly_error}) + "\n"
+                    return # Stop execution gracefully
 
                 equity_results = equity_engine.find_equity_5(property_details, real_neighborhood)
                 
@@ -278,9 +305,21 @@ async def get_full_protest(
                 equity_results = {"error": "Could not perform live equity analysis"}
 
             # 5. Vision & Location Analysis (Flood Zones)
-            search_address = property_details.get('address', 'Houston, TX')
-            if "Houston, TX" not in search_address:
-                search_address += ", Houston, TX"
+            search_address = property_details.get('address', '')
+            district_key = property_details.get('district', 'HCAD')
+            known_cities = ["Houston, TX", "Austin, TX", "Dallas, TX", "Plano, TX", "Fort Worth, TX"]
+            
+            # Smart Append: Only append city if none of the known major cities are present
+            if not any(city in search_address for city in known_cities):
+                 d_map = {
+                    "HCAD": ", Houston, TX",
+                    "TCAD": ", Austin, TX",
+                    "DCAD": ", Dallas, TX",
+                    "CCAD": ", Plano, TX",
+                    "TAD": ", Fort Worth, TX"
+                 }
+                 suffix = d_map.get(district_key, ", Houston, TX")
+                 search_address += suffix
             
             # Geocode once for both Vision and FEMA
             coords = vision_agent._geocode_address(search_address)

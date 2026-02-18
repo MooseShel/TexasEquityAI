@@ -1,5 +1,5 @@
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from google import genai
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -32,19 +32,15 @@ class NarrativeAgent:
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.xai_key = os.getenv("XAI_API_KEY")
-        self.gemini_llm = None
+        self.gemini_client = None
         self.openai_llm = None
         self.xai_llm = None
 
         if self.gemini_key:
             try:
-                # Configure for Gemini 2.0 Flash (Verified available in this environment)
-                self.gemini_llm = ChatGoogleGenerativeAI(
-                    model="gemini-2.0-flash", 
-                    google_api_key=self.gemini_key,
-                    temperature=0.7
-                )
-                logger.info("Gemini LLM initialized.")
+                # Initialize direct Google GenAI Client
+                self.gemini_client = genai.Client(api_key=self.gemini_key)
+                logger.info("Gemini Client initialized (google-genai).")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini: {e}")
 
@@ -77,7 +73,7 @@ class NarrativeAgent:
         Synthesize Scraper, Equity, Market, and Vision data into a formal protest narrative.
         LCEL Syntax: prompt | llm | output_parser
         """
-        if not self.gemini_llm and not self.openai_llm and not self.xai_llm:
+        if not self.gemini_client and not self.openai_llm and not self.xai_llm:
             return "Narrative Generation Unavailable: No LLM keys (Gemini/OpenAI/xAI) found or initialization failed."
 
         prompt_template = """
@@ -159,12 +155,18 @@ class NarrativeAgent:
                 logger.warning(f"xAI Fallback failed: {e}. Falling back to Gemini...")
         
         # Fallback to Gemini
-        if self.gemini_llm:
+        if self.gemini_client:
             try:
                 logger.info("Attempting narrative generation with Gemini (Fallback)...")
-                chain = prompt | self.gemini_llm | StrOutputParser()
-                narrative = chain.invoke(inputs)
-                return clean_text(narrative)
+                # Direct SDK Usage - bypass LangChain
+                # Reconstruct prompt manually since we aren't using the chain
+                final_prompt = prompt.format(**inputs)
+                
+                response = self.gemini_client.models.generate_content(
+                    model='gemini-2.0-flash', 
+                    contents=final_prompt
+                )
+                return clean_text(response.text)
             except Exception as e:
                 logger.error(f"Gemini Fallback failed: {e}")
                 return f"Error: All LLM providers (OpenAI, xAI, Gemini) failed to generate narrative. Last error: {e}"

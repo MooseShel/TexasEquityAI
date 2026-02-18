@@ -5,7 +5,7 @@ import json
 import math
 import base64
 from typing import Optional, List, Dict
-import google.generativeai as genai
+from google import genai
 from openai import OpenAI
 from PIL import Image, ImageDraw
 
@@ -21,14 +21,13 @@ class VisionAgent:
         # Initialize Gemini
         if self.gemini_api_key:
             try:
-                genai.configure(api_key=self.gemini_api_key)
-                self.gemini_model = genai.GenerativeModel('gemini-2.0-flash')
-                logger.info("Gemini Vision model initialized.")
+                self.gemini_client = genai.Client(api_key=self.gemini_api_key)
+                logger.info("Gemini Vision client initialized (google-genai).")
             except Exception as e:
                 logger.error(f"Error initializing Gemini: {e}")
-                self.gemini_model = None
+                self.gemini_client = None
         else:
-            self.gemini_model = None
+            self.gemini_client = None
 
         # Initialize OpenAI
         if self.openai_api_key:
@@ -55,8 +54,8 @@ class VisionAgent:
         else:
             self.xai_client = None
 
-        if not any([self.gemini_model, self.openai_client, self.xai_client]):
-            logger.warning("No Vision API keys found. Vision analysis will be mocked.")
+        if not any([self.gemini_client, self.openai_client, self.xai_client]):
+            logger.warning("No Vision API keys found. Vision analysis will be skipped.")
 
     def _calculate_bearing(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         phi1 = math.radians(lat1)
@@ -97,8 +96,8 @@ class VisionAgent:
         Returns a list of local file paths.
         """
         if not self.google_api_key:
-            logger.info(f"Mocking Street View images for: {address}")
-            return ["mock_street_view.jpg"]
+            logger.info(f"No Google API key. Skipping Street View for: {address}")
+            return []
             
         try:
             # 1. Geocode the property
@@ -107,7 +106,7 @@ class VisionAgent:
                 logger.warning(f"Could not geocode address: {address}. Falling back to default view.")
                 # Fallback to simple address-based fetch
                 path = await self._fetch_single_image(address, address.replace(' ', '_'), "default")
-                return [path] if path else ["mock_street_view.jpg"]
+                return [path] if path else []
 
             # 2. Get Street View Metadata to find the camera location
             meta_url = "https://maps.googleapis.com/maps/api/streetview/metadata"
@@ -143,11 +142,11 @@ class VisionAgent:
                 if path:
                     image_paths.append(path)
             
-            return image_paths if image_paths else ["mock_street_view.jpg"]
+            return image_paths
             
         except Exception as e:
             logger.error(f"Error in multi-angle acquisition: {e}")
-            return ["mock_street_view.jpg"]
+            return []
 
     async def _fetch_single_image(self, location: str, slug: str, suffix: str, heading: Optional[float] = None) -> Optional[str]:
         params = {
@@ -184,10 +183,8 @@ class VisionAgent:
         Uses Gemini 1.5 Vision (with OpenAI/Grok fallbacks) to detect physical defects.
         """
         if not image_paths or image_paths[0] == "mock_street_view.jpg":
-            return [
-                {"issue": "Roof Wear", "description": "Visible granule loss and curling shingles across 30% of the roof surface.", "severity": "Medium", "deduction": 5000, "confidence": 0.85},
-                {"issue": "Foundation Issues", "description": "Horizontal cracks visible in the stem wall near the front entrance.", "severity": "Medium", "deduction": 8000, "confidence": 0.70}
-            ]
+             logger.info("No valid images for vision analysis.")
+             return []
 
         prompt = """
         You are a Licensed Property Inspector and Real Estate Appraisal Expert.
@@ -213,21 +210,10 @@ class VisionAgent:
         [{"issue": "...", "description": "...", "severity": "...", "deduction": 123, "confidence": 0.9, "bbox": [ymin, xmin, ymax, xmax]}]
         """
 
-        # 1. Try Gemini
-        if self.gemini_model:
-            try:
-                logger.info("Attempting Vision analysis with Gemini...")
-                imgs = [Image.open(p) for p in image_paths if os.path.exists(p)]
-                if imgs:
-                    response = self.gemini_model.generate_content([prompt] + imgs)
-                    return self._parse_json_response(response.text)
-            except Exception as e:
-                logger.warning(f"Gemini Vision failed: {e}. Falling back...")
-
-        # 2. Try OpenAI (GPT-4o)
+        # 1. Try OpenAI (GPT-4o) - PRIMARY
         if self.openai_client:
             try:
-                logger.info("Attempting Vision analysis with OpenAI (GPT-4o fallback)...")
+                logger.info("Attempting Vision analysis with OpenAI (Primary)...")
                 messages = [
                     {
                         "role": "user",
@@ -236,36 +222,52 @@ class VisionAgent:
                         ]
                     }
                 ]
+                
+                # Encode images
+                valid_images = False
                 for p in image_paths:
                     if os.path.exists(p):
-                        base64_image = self._encode_image(p)
-                        messages[0]["content"].append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                        })
-                
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages,
-                    max_tokens=1000,
-                    response_format={"type": "json_object"}
-                )
-                content = response.choices[0].message.content
-                # GPT-4o often returns a wrapper object if asked for json_object
-                data = json.loads(content)
-                if isinstance(data, dict) and "issues" in data:
-                    return data["issues"]
-                if isinstance(data, list):
-                    return data
-                # If it's a dict with the issues, return the list within
-                for key in data:
-                    if isinstance(data[key], list):
-                        return data[key]
-                return []
-            except Exception as e:
-                logger.warning(f"OpenAI Vision failed: {e}. Falling back...")
+                        try:
+                            base64_image = self._encode_image(p)
+                            messages[0]["content"].append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            })
+                            valid_images = True
+                        except Exception as img_err:
+                            logger.error(f"Failed to encode image {p}: {img_err}")
 
-        # 3. Try xAI (Grok-2)
+                if valid_images:
+                    response = self.openai_client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=messages,
+                        max_tokens=1000,
+                        response_format={"type": "json_object"}
+                    )
+                    content = response.choices[0].message.content
+                    
+                    # Parse OpenAI specific JSON format
+                    try:
+                        data = json.loads(content)
+                        if isinstance(data, dict):
+                            if "issues" in data:
+                                return data["issues"]
+                            # If typical wrapper detected, look for list values
+                            for key, value in data.items():
+                                if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict) and "issue" in value[0]:
+                                    return value
+                            # fallback if it returns just a list
+                            return [] 
+                        elif isinstance(data, list):
+                            return data
+                    except json.JSONDecodeError:
+                        # Fallback to standard parser if json_object wasn't perfect
+                        return self._parse_json_response(content)
+                        
+            except Exception as e:
+                logger.warning(f"OpenAI Vision failed: {e}. Falling back to Grok...")
+
+        # 2. Try xAI (Grok-2) - SECONDARY
         if self.xai_client:
             try:
                 logger.info("Attempting Vision analysis with xAI (Grok fallback)...")
@@ -277,22 +279,44 @@ class VisionAgent:
                         ]
                     }
                 ]
+                
+                valid_images = False
                 for p in image_paths:
                     if os.path.exists(p):
-                        base64_image = self._encode_image(p)
-                        messages[0]["content"].append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                        })
+                        try:
+                            # Grok uses same image format as OpenAI
+                            base64_image = self._encode_image(p)
+                            messages[0]["content"].append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            })
+                            valid_images = True
+                        except: pass
 
-                response = self.xai_client.chat.completions.create(
-                    model="grok-2-vision-latest",
-                    messages=messages,
-                    max_tokens=1000
-                )
-                return self._parse_json_response(response.choices[0].message.content)
+                if valid_images:
+                    response = self.xai_client.chat.completions.create(
+                        model="grok-2-vision-latest",
+                        messages=messages,
+                        max_tokens=1000
+                    )
+                    return self._parse_json_response(response.choices[0].message.content)
             except Exception as e:
-                logger.error(f"xAI Vision failed: {e}")
+                logger.warning(f"xAI Vision failed: {e}. Falling back to Gemini...")
+
+        # 3. Try Gemini - TERTIARY
+        if self.gemini_client:
+            try:
+                logger.info("Attempting Vision analysis with Gemini (Final fallback)...")
+                imgs = [Image.open(p) for p in image_paths if os.path.exists(p)]
+                
+                if imgs:
+                    response = self.gemini_client.models.generate_content(
+                        model='gemini-2.0-flash', 
+                        contents=[prompt] + imgs
+                    )
+                    return self._parse_json_response(response.text)
+            except Exception as e:
+                logger.error(f"Gemini Vision failed: {e}")
 
         logger.error("All Vision providers failed or no keys provided.")
         return []
@@ -358,7 +382,7 @@ class VisionAgent:
     # Compatibility methods for main.py
     async def get_street_view_image(self, address: str) -> str:
         paths = await self.get_street_view_images(address)
-        return paths[0] if paths else "mock_street_view.jpg"
+        return paths[0] if paths else ""
 
     def detect_condition_issues(self, image_path: str) -> List[Dict]:
         # This is now handled by the async analyze_property_condition

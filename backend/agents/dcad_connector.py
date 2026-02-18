@@ -33,15 +33,30 @@ class DCADConnector(AppraisalDistrictConnector):
                 logger.info(f"Navigating to DCAD search for {account_number or address}")
                 if account_number:
                     await page.goto(f"{self.base_url}/SearchAcct.aspx", timeout=60000)
-                    # Correct selector from explore: #txtAccountNumber
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=15000)
+                    except: pass
+
+                    # Check for Account Number Input
                     account_input = page.locator("#txtAccountNumber")
-                    if await account_input.count() > 0:
-                        await account_input.fill(account_number)
-                        await page.click("#cmdSubmit")
-                    else:
-                        # Fallback for different page version
-                        await page.fill("#txtAcctNum", account_number)
-                        await page.click("#Button1")
+                    try:
+                        if await account_input.count() > 0:
+                            # Ensure it's ready
+                            await account_input.wait_for(state="visible", timeout=10000)
+                            await account_input.fill(account_number)
+                            await page.click("#cmdSubmit")
+                        else:
+                            # Fallback for different page version
+                            fallback_input = page.locator("#txtAcctNum")
+                            if await fallback_input.count() > 0:
+                                await fallback_input.fill(account_number)
+                                await page.click("#Button1")
+                            else:
+                                logger.warning("DCAD Account Input not found.")
+                                return {}
+                    except Exception as e:
+                        logger.warning(f"DCAD Input Interaction Failed: {e}")
+                        return {}
                 elif address:
                     await page.goto(f"{self.base_url}/SearchAddr.aspx", timeout=60000)
                     await page.locator("#txtStreetName").fill(address.split()[-1])
@@ -70,22 +85,75 @@ class DCADConnector(AppraisalDistrictConnector):
                 if await addr_locator.count() > 0:
                     details['address'] = (await addr_locator.inner_text()).strip()
                 
-                # Market Value
+                # Market Value - Try summary label first
+                mkt_val = 0.0
                 mkt_val_locator = page.locator("#ValueSummary1_pnlValue_lblTotalVal")
                 if await mkt_val_locator.count() > 0:
-                    details['market_value'] = self._parse_currency(await mkt_val_locator.inner_text())
+                    mkt_val = self._parse_currency(await mkt_val_locator.inner_text())
                 
-                details['appraised_value'] = details.get('market_value', 0.0)
+                # FALLBACK: If summary is 0, check for table rows containing 2025/2024
+                if mkt_val == 0.0:
+                    logger.info("DCAD Summary Value is 0. Searching for historical rows...")
+                    # Try specific year rows which are common in historical tables
+                    for target_year in ["2025", "2024", "2023"]:
+                        year_row = page.locator(f"tr:has-text('{target_year}')").first
+                        if await year_row.count() > 0:
+                            tds = year_row.locator("td")
+                            td_count = await tds.count()
+                            if td_count >= 4:
+                                # In DCAD history tables, Market is often the last or 2nd to last col
+                                # Let's try to find a cell that looks like currency in that row
+                                for j in range(td_count - 1, 1, -1):
+                                    cell_text = await tds.nth(j).inner_text()
+                                    h_val = self._parse_currency(cell_text)
+                                    if h_val > 500: # Threshold to avoid picking up small dates/codes
+                                        logger.info(f"Found historical value for {target_year}: {h_val}")
+                                        mkt_val = h_val
+                                        break
+                            if mkt_val > 0: break
+                
+                # FINAL FALLBACK: Regex on body text for "Total Value" or "Market Value"
+                if mkt_val == 0.0:
+                    logger.info("DCAD DOM/Table search failed. Trying regex on body text...")
+                    # DCAD often shows "Total Value" or "Market Value" in summary boxes
+                    body_text = await page.evaluate("() => document.body.innerText")
+                    # Match patterns like "Total Value: $123,456" or "Market Value  $123,456"
+                    regex_patterns = [
+                        r"(?:Total|Market)\s+Value[:\s]*\$([\d,]+)",
+                        r"Total\s+Appraised\s+Value[:\s]*\$([\d,]+)"
+                    ]
+                    for pattern in regex_patterns:
+                        match = re.search(pattern, body_text)
+                        if match:
+                            mkt_val = self._parse_currency(match.group(1))
+                            if mkt_val > 0:
+                                logger.info(f"Picked value via DCAD Regex: {mkt_val}")
+                                break
 
-                # Year Built & Area
+                details['market_value'] = mkt_val
+                details['appraised_value'] = mkt_val 
+
+                # Year Built & Area - Robust Extraction
                 body_text = await page.evaluate("() => document.body.innerText")
+                
+                # 1. Year Built
                 yb_match = re.search(r"Year Built:\s*(\d{4})", body_text)
                 if yb_match:
                     details['year_built'] = int(yb_match.group(1))
                 
-                area_match = re.search(r"Total Area:\s*([\d,]+)", body_text)
-                if area_match:
-                    details['building_area'] = self._parse_number(area_match.group(1))
+                # 2. Building Area - Multi-label fallback
+                area_found = 0
+                area_labels = ["Total Area", "Building Area", "Net Area", "Gross Area", "Living Area"]
+                
+                # Try specific labels in the text
+                for label in area_labels:
+                    # Match pattern: "Label: 1,234"
+                    match = re.search(f"{label}[:\\s]+([\\d,]+)", body_text, re.IGNORECASE)
+                    if match:
+                        val = self._parse_number(match.group(1))
+                        if val > area_found: area_found = val
+                
+                details['building_area'] = area_found
 
                 # Neighborhood
                 nbhd_locator = page.locator("#lblNbhd")
@@ -111,14 +179,32 @@ class DCADConnector(AppraisalDistrictConnector):
             page = await browser.new_page()
             neighbors = []
             try:
-                await page.goto(f"{self.base_url}/SearchAddr.aspx")
-                await page.locator("#txtStreetName").fill(street_name)
-                await page.click("#cmdSubmit")
+                await page.goto(f"{self.base_url}/SearchAddr.aspx", timeout=60000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except: pass
+                
+                # Check different inputs
+                inputs = page.locator("input[type='text']")
+                street_input = page.locator("#txtStreetName") # Try exact ID first
+                
+                if await street_input.count() > 0:
+                     await street_input.fill(street_name)
+                     await page.click("#cmdSubmit")
+                elif await inputs.count() > 0:
+                     # Generic fallback
+                     last_inp = inputs.last
+                     await last_inp.fill(street_name)
+                     await page.keyboard.press('Enter')
+                else:
+                    return []
                 await asyncio.sleep(5)
                 
-                rows = page.locator("#SearchResults1_dgResults tr").skip(2)
+                rows = page.locator("#SearchResults1_dgResults tr")
                 count = await rows.count()
-                for i in range(min(count - 1, 50)):
+                
+                # Skip first 2 rows (headers)
+                for i in range(2, min(count, 52)):
                     row = rows.nth(i)
                     cols = row.locator("td")
                     if await cols.count() >= 5:

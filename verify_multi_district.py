@@ -17,6 +17,7 @@ async def verify_connectors():
         {"district": "DCAD", "account": "00000776533000000"}, # Dallas (17 digits)
         {"district": "CCAD", "account": "R-4753-00M-0010-1"}, # Collin
         {"district": "TAD", "account": "04657837"}, # Tarrant
+        {"district": "TAD", "account": "05762499"}, # Tarrant (Empire Rd)
     ]
     
     for case in test_cases:

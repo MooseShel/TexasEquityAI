@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Dict, List, Optional
 from playwright.async_api import async_playwright
 from .base_connector import AppraisalDistrictConnector
@@ -103,12 +104,21 @@ class TADConnector(AppraisalDistrictConnector):
                     txt = await legal_locator.inner_text()
                     details['legal_description'] = txt.replace("Legal Description:", "").strip()
 
-                # Neighborhood Code
-                nbhd_locator = page.locator("p:has-text('Neighborhood Code:') a")
-                if await nbhd_locator.count() > 0:
-                    details['neighborhood_code'] = (await nbhd_locator.inner_text()).strip()
-                else:
-                    details['neighborhood_code'] = "Unknown"
+                # Neighborhood Code - Robust extraction
+                nbhd_found = "Unknown"
+                nbhd_labels = ["Neighborhood Code", "Neighborhood", "NBHD"]
+                for label in nbhd_labels:
+                    loc = page.locator(f"p:has-text('{label}')")
+                    if await loc.count() > 0:
+                        txt = await loc.first.inner_text()
+                        if ":" in txt:
+                            val = txt.split(":")[-1].strip()
+                            # Clean up characters like +++ or spaces
+                            val = re.sub(r'[^a-zA-Z0-9\s\.\-]', '', val).strip()
+                            if val and val != "0": 
+                                nbhd_found = val
+                                break
+                details['neighborhood_code'] = nbhd_found
 
                 # Values Table
                 # Iterate through rows to find first non-pending value
@@ -124,10 +134,12 @@ class TADConnector(AppraisalDistrictConnector):
                     app_val_str = await tds.nth(4).inner_text()
                     
                     if "Pending" not in mkt_val_str:
-                        details['market_value'] = self._parse_currency(mkt_val_str)
-                        details['appraised_value'] = self._parse_currency(app_val_str)
-                        found_val = True
-                        break
+                        mkt_val = self._parse_currency(mkt_val_str)
+                        if mkt_val > 0:
+                            details['market_value'] = mkt_val
+                            details['appraised_value'] = self._parse_currency(app_val_str)
+                            found_val = True
+                            break
                 
                 if not found_val:
                     details['market_value'] = 0.0
@@ -140,13 +152,52 @@ class TADConnector(AppraisalDistrictConnector):
                      clean_txt = txt.lower().replace("year built:", "").strip()
                      details['year_built'] = int(clean_txt) if clean_txt.isdigit() else 0
 
-                # Building Sqft
-                sqft_locator = page.locator("p:has-text('Gross Building Area')")
-                if await sqft_locator.count() > 0:
-                    txt = await sqft_locator.inner_text()
-                    # format: Gross Building Area+++: 0
-                    clean = txt.split(":")[-1].strip().replace(",", "")
-                    details['building_area'] = int(clean) if clean.isdigit() else 0
+                 # Building Area - Multi-label robust extraction
+                area_found = 0
+                area_labels = [
+                    "Gross Building Area", "Living Area", "Main Area", 
+                    "Net Area", "Total Building Area", "Improvements SQ FT",
+                    "Total Area", "Building Area"
+                ]
+                
+                body_text = await page.evaluate("() => document.body.innerText")
+                
+                # 1. Try specific locators
+                for label in area_labels:
+                    loc = page.locator(f"p:has-text('{label}')")
+                    if await loc.count() > 0:
+                        txt = await loc.first.inner_text()
+                        logger.info(f"TAD Area Trace: Found label '{label}' with text '{txt}'")
+                        if ":" in txt:
+                            clean = txt.split(":")[-1].strip().replace(",", "")
+                            match = re.search(r"(\d+)", clean)
+                            if match:
+                                val = int(match.group(1))
+                                if val > area_found: area_found = val
+
+                # 2. Regex fallback on full text if still 0
+                if area_found == 0:
+                    logger.info("TAD Area Trace: No specific label locators found. Trying regex fallback on body text...")
+                    for label in area_labels:
+                        match = re.search(f"{label}[:\\s]+([\\d,]+)", body_text, re.IGNORECASE)
+                        if match:
+                            val = int(match.group(1).replace(",", ""))
+                            logger.info(f"TAD Area Trace: Regex found '{label}' value: {val}")
+                            if val > area_found: area_found = val
+                
+                logger.info(f"TAD Extraction Result for {account_number}: Area={area_found}, YearBuilt={details.get('year_built')}")
+                details['building_area'] = area_found
+                
+                # 3. Land Area Fallback
+                land_area = 0
+                # format often: Land Area: 10,000 SQ FT or Acres
+                land_match = re.search(r"Land Area[:\s]+([\d,]+)\s*(?:SQ FT|Sqft)", body_text, re.IGNORECASE)
+                if land_match:
+                    land_area = int(land_match.group(1).replace(",", ""))
+                
+                details['land_area'] = land_area
+                # If building area is 0, we can use land area if appropriate, but let's keep them separate for now 
+                # and let the equity agent decide.
                 
                 details['district'] = "TAD"
                 
@@ -172,10 +223,16 @@ class TADConnector(AppraisalDistrictConnector):
             
             neighbors = []
             try:
+                logger.info(f"TAD Discovery: Searching for Neighborhood Code '{neighborhood_code}'...")
                 await page.goto(self.base_url, timeout=60000)
                 
                 # Select NeighborhoodCode search type
-                await page.select_option("#search-type", "NeighborhoodCode")
+                try:
+                    await page.wait_for_selector("#search-type", timeout=10000)
+                    await page.select_option("#search-type", "NeighborhoodCode")
+                except Exception as e:
+                    logger.warning(f"TAD Discovery: Could not select NeighborhoodCode search type: {e}")
+                    # Fallback or continue? Let's try to proceed if possible
                 
                 await page.fill("#query", neighborhood_code)
                 
@@ -183,23 +240,13 @@ class TADConnector(AppraisalDistrictConnector):
                     await page.click(".property-search-form button[type='submit']")
 
                 # Parse Results Table
-                # table.search-results tbody tr.property-header
                 rows = page.locator("table.search-results tbody tr.property-header")
                 count = await rows.count()
+                logger.info(f"TAD Discovery: Found {count} results for NBHD {neighborhood_code}")
                 
-                # Limit to e.g., 50 to match other logic
                 limit = min(count, 50)
-                
                 for i in range(limit):
                     row = rows.nth(i)
-                    
-                    # Account # is 2nd col (index 1)
-                    # Neighborhood Code is 3rd col (index 2)
-                    # Address is 4th col (index 3)
-                    # City is 5th col (index 4)
-                    # Owner is 6th col (index 5)
-                    # Market Val is 7th col (index 6)
-                    
                     tds = row.locator("td")
                     account = await tds.nth(1).inner_text()
                     address = await tds.nth(3).inner_text()
@@ -239,12 +286,10 @@ class TADConnector(AppraisalDistrictConnector):
             except Exception:
                 return False
 
-    async def get_neighbors_by_street(self, street_name: str, zip_code: str) -> List[Dict]:
+    async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
         Fetches neighbors by searching for the street name.
         """
-        # TAD Search handles addresses.
-        # We'll search by street name.
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
@@ -252,37 +297,56 @@ class TADConnector(AppraisalDistrictConnector):
             
             neighbors = []
             try:
-                await page.goto(self.base_url, timeout=60000)
-                
-                # Default search type is All or Address, which works for street name
-                await page.fill("#query", street_name)
-                
-                async with page.expect_navigation(timeout=60000):
-                    await page.click(".property-search-form button[type='submit']")
+                async def run_search(query_text):
+                    logger.info(f"TAD Discovery: Searching for street '{query_text}'...")
+                    await page.goto(self.base_url, timeout=60000)
+                    
+                    # Explicitly select 'Address' search type if available, 
+                    # as it's more reliable for street names than 'All'
+                    try:
+                        await page.select_option("#search-type", "Address")
+                    except: pass
+                    
+                    await page.fill("#query", query_text)
+                    
+                    async with page.expect_navigation(timeout=60000):
+                        await page.click(".property-search-form button[type='submit']")
 
-                # Parse Results Table
-                rows = page.locator("table.search-results tbody tr.property-header")
-                count = await rows.count()
-                limit = min(count, 50)
+                    # Parse Results Table
+                    rows = page.locator("table.search-results tbody tr.property-header")
+                    count = await rows.count()
+                    limit = min(count, 50)
+                    
+                    found = []
+                    for i in range(limit):
+                        row = rows.nth(i)
+                        tds = row.locator("td")
+                        account = await tds.nth(1).inner_text()
+                        address = await tds.nth(2).inner_text()
+                        owner = await tds.nth(4).inner_text()
+                        mkt_val_str = await tds.nth(5).inner_text()
+                        mkt_val = self._parse_currency(mkt_val_str)
+                        
+                        found.append({
+                            "account_number": account.strip(),
+                            "address": address.strip(),
+                            "owner_name": owner.strip(),
+                            "market_value": mkt_val,
+                            "district": "TAD"
+                        })
+                    return found
+
+                # 1. Try original street name
+                neighbors = await run_search(street_name)
                 
-                for i in range(limit):
-                    row = rows.nth(i)
-                    tds = row.locator("td")
-                    account = await tds.nth(1).inner_text()
-                    address = await tds.nth(2).inner_text()
-                    owner = await tds.nth(4).inner_text()
-                    mkt_val_str = await tds.nth(5).inner_text() # Market Value
-                    
-                    mkt_val = self._parse_currency(mkt_val_str)
-                    
-                    neighbors.append({
-                        "account_number": account.strip(),
-                        "address": address.strip(),
-                        "owner_name": owner.strip(),
-                        "market_value": mkt_val,
-                        "district": "TAD"
-                    })
-                    
+                # 2. Fallback: If no results and name has directional (e.g. "N WATSON"), try without directional
+                if not neighbors and " " in street_name:
+                    parts = street_name.split()
+                    if parts[0].upper() in ["N", "S", "E", "W", "NE", "NW", "SE", "SW"]:
+                        fallback_query = " ".join(parts[1:])
+                        logger.info(f"TAD Discovery: No results for '{street_name}'. Trying fallback: '{fallback_query}'")
+                        neighbors = await run_search(fallback_query)
+
                 return neighbors
 
             except Exception as e:

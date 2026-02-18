@@ -6,9 +6,10 @@ playwright
 scikit-learn
 pandas
 numpy
-google-generativeai
+pandas
+numpy
+google-genai
 langchain
-langchain-google-genai
 langchain-openai
 langchain-core
 langchain-community

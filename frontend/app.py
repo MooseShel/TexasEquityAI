@@ -1,14 +1,63 @@
-
 import streamlit as st
-import requests
 import pandas as pd
 import os
+import json
+import asyncio
+import sys
+import logging
 from PIL import Image
+from dotenv import load_dotenv
+
+# MUST be set before any subprocess/playwright calls on Windows
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except:
+        pass
+
+load_dotenv()
+
+# Add the project root to sys.path so 'backend' can be imported when running from frontend/
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Import Agents directly
+from backend.agents.district_factory import DistrictConnectorFactory
+from backend.agents.non_disclosure_bridge import NonDisclosureBridge
+from backend.agents.equity_agent import EquityAgent
+from backend.agents.vision_agent import VisionAgent
+from backend.services.narrative_pdf_service import NarrativeAgent, PDFService
+from backend.db.supabase_client import supabase_service
+from backend.services.hcad_form_service import HCADFormService
+from backend.agents.fema_agent import FEMAAgent
+from backend.agents.permit_agent import PermitAgent
+from backend.utils.address_utils import normalize_address, is_real_address
 
 st.set_page_config(page_title="Texas Equity AI", layout="wide")
 
+# Initialize Agents (Cached for performance)
+@st.cache_resource
+def get_agents():
+    return {
+        "factory": DistrictConnectorFactory(),
+        "bridge": NonDisclosureBridge(),
+        "equity_engine": EquityAgent(),
+        "vision_agent": VisionAgent(),
+        "narrative_agent": NarrativeAgent(),
+        "pdf_service": PDFService(),
+        "form_service": HCADFormService(),
+        "fema_agent": FEMAAgent(),
+        "permit_agent": PermitAgent()
+    }
+
+agents = get_agents()
+
 # Custom CSS for polished look
-# Removed .stMetric background to fix contrast issues in Dark Mode
 st.markdown("""
 <style>
     .stButton>button {
@@ -19,15 +68,51 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Auto-Detection Logic
+if "district_selector" not in st.session_state:
+    st.session_state.district_selector = "HCAD"
+
+def auto_detect_district():
+    if "account_input" not in st.session_state:
+        return
+    raw_acc = st.session_state.account_input
+    if not raw_acc:
+        return
+    clean_acc = raw_acc.replace("-", "").replace(" ", "").strip()
+    target_district = None
+    if len(clean_acc) == 17: target_district = "DCAD"
+    elif len(clean_acc) == 13 and clean_acc.isdigit(): target_district = "HCAD"
+    elif raw_acc.upper().strip().startswith("R"): target_district = "CCAD"
+    elif len(clean_acc) <= 7 and clean_acc.isdigit(): target_district = "TCAD"
+    elif len(clean_acc) == 8 and clean_acc.isdigit(): target_district = "TAD"
+    elif any(c.isalpha() for c in raw_acc):
+        lower_acc = raw_acc.lower()
+        if "dallas" in lower_acc: target_district = "DCAD"
+        elif "austin" in lower_acc: target_district = "TCAD"
+        elif "fort worth" in lower_acc: target_district = "TAD"
+        elif "plano" in lower_acc: target_district = "CCAD"
+        elif "houston" in lower_acc: target_district = "HCAD"
+    if target_district and target_district != st.session_state.district_selector:
+        st.session_state.district_selector = target_district
+        st.toast(f"📍 Auto-switched District to **{target_district}**", icon="🔄")
+
+auto_detect_district()
+
 # Sidebar
 st.sidebar.title("Texas Equity AI 🤠")
 st.sidebar.markdown("Automating property tax protests in Texas.")
 
-# District Selector
+district_options = ("HCAD", "TAD", "CCAD", "DCAD", "TCAD")
+try:
+    default_index = district_options.index(st.session_state.district_selector)
+except ValueError:
+    default_index = 0
+
 district_code = st.sidebar.selectbox(
     "Appraisal District",
-    ("HCAD", "TAD", "CCAD"),
-    index=0,
+    district_options,
+    index=default_index,
+    key="district_selector",
     help="Select the county appraisal district."
 )
 
@@ -39,195 +124,187 @@ with st.sidebar.expander("Manual Data (Optional Override)"):
 st.sidebar.divider()
 st.sidebar.subheader("📈 Savings Calculator")
 tax_rate = st.sidebar.slider("Property Tax Rate (%)", 1.0, 4.0, 2.5, 0.1)
-st.sidebar.info(f"Standard Harris County rate is ~2.5%")
 
 # Main Content
 st.title("Property Tax Protest Dashboard")
 
-# Input Section - Supports Account Number OR Address
 account_placeholder = "e.g. 0660460360030"
-if district_code == "TAD":
-    account_placeholder = "e.g. 00002345678"
-elif district_code == "CCAD":
-    account_placeholder = "e.g. R-1234-567-890"
+if district_code == "TAD": account_placeholder = "e.g. 00002345678"
+elif district_code == "CCAD": account_placeholder = "e.g. R-1234-567-890"
 
 account_number = st.text_input(f"Enter {district_code} Account Number or Street Address", 
-                              placeholder=account_placeholder)
+                              placeholder=account_placeholder,
+                              key="account_input")
 
-import json
-
-def get_protest_stream(account_input):
-    params = {
-        "manual_address": m_address if m_address else None,
-        "manual_value": m_value if m_value > 0 else None,
-        "manual_area": m_area if m_area > 0 else None,
-        "district": district_code
-    }
+async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None):
     try:
-        # Use stream=True to read status updates as they come
-        return requests.get(f"http://localhost:8000/protest/{account_input}", params=params, stream=True)
-    except Exception as e:
-        return None
+        yield {"status": "🔍 Resolver Agent: Locating property and resolving address..."}
+        current_account = account_number
+        current_district = district
+        rentcast_fallback_data = None
+        if any(c.isalpha() for c in account_number) and " " in account_number:
+            resolved = await agents["bridge"].resolve_address(account_number)
+            if resolved:
+                current_account = resolved.get('account_number')
+                rentcast_fallback_data = resolved
+                if not current_district:
+                    res_addr = resolved.get('address', '').lower()
+                    if "dallas" in res_addr: current_district = "DCAD"
+                    elif "austin" in res_addr: current_district = "TCAD"
+                    elif "fort worth" in res_addr: current_district = "TAD"
+                    elif "plano" in res_addr: current_district = "CCAD"
+                    elif "houston" in res_addr: current_district = "HCAD"
+        detected_district = DistrictConnectorFactory.detect_district_from_account(current_account)
+        if detected_district and detected_district != current_district:
+            current_district = detected_district
+        yield {"status": f"⛏️ Data Mining Agent: Scraping {current_district or 'District'} records..."}
+        cached_property = await supabase_service.get_property_by_account(current_account)
+        connector = DistrictConnectorFactory.get_connector(current_district, current_account)
+        original_address = account_number if any(c.isalpha() for c in account_number) else None
+        property_details = await connector.get_property_details(current_account, address=original_address)
+        if property_details and property_details.get('account_number'):
+            current_account = property_details.get('account_number')
+        if not property_details:
+             property_details = cached_property or {
+                "account_number": current_account,
+                "address": f"{current_account}, Texas",
+                "appraised_value": manual_value or 450000,
+                "building_area": manual_area or 2500,
+                "district": current_district
+            }
+        raw_addr = property_details.get('address', '')
+        district_context = property_details.get('district', 'HCAD')
+        property_details['address'] = normalize_address(raw_addr, district_context)
+        if manual_address: property_details['address'] = manual_address
+        if manual_value: property_details['appraised_value'] = manual_value
+        if manual_area: property_details['building_area'] = manual_area
+        yield {"status": "📊 Market Analyst: Querying RentCast for market values..."}
+        market_value = property_details.get('appraised_value', 0)
+        prop_address = property_details.get('address', '')
+        if is_real_address(prop_address):
+            try:
+                market_data = await agents["bridge"].get_last_sale_price(prop_address)
+                if market_data and market_data.get('sale_price'):
+                    market_value = market_data['sale_price']
+                if not market_value:
+                    market_value = await agents["bridge"].get_estimated_market_value(property_details.get('appraised_value', 450000), prop_address)
+            except: pass
+        subject_permits = await agents["permit_agent"].get_property_permits(prop_address)
+        permit_summary = agents["permit_agent"].analyze_permits(subject_permits)
+        property_details['permit_summary'] = permit_summary
+        yield {"status": "⚖️ Equity Specialist: Discovering live neighbors..."}
+        try:
+            street_only = prop_address.split(",")[0].strip()
+            addr_parts = street_only.split()
+            # Skip house number for discovery
+            street_name = " ".join(addr_parts[1:]) if addr_parts and addr_parts[0][0].isdigit() else " ".join(addr_parts)
+            
+            discovered_neighbors = await connector.get_neighbors_by_street(street_name)
+            real_neighborhood = []
+            if discovered_neighbors:
+                discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
+                pool_to_scrape = discovered_neighbors[:10] 
+                tasks = [connector.get_property_details(n['account_number']) for n in pool_to_scrape]
+                deep_results = await asyncio.gather(*tasks)
+                real_neighborhood = [res for res in deep_results if res and res.get('building_area', 0) > 0]
+            if not real_neighborhood:
+                nbhd_code = property_details.get('neighborhood_code')
+                if nbhd_code and nbhd_code != "Unknown":
+                    nbhd_neighbors = await connector.get_neighbors(nbhd_code)
+                    if nbhd_neighbors:
+                        pool_to_scrape = nbhd_neighbors[:10]
+                        tasks = [connector.get_property_details(n['account_number']) for n in pool_to_scrape]
+                        deep_results = await asyncio.gather(*tasks)
+                        real_neighborhood = [res for res in deep_results if res and res.get('building_area', 0) > 0]
+            if not real_neighborhood:
+                yield {"error": "Could not find sufficient data for equity analysis."}
+                return
+            equity_results = agents["equity_engine"].find_equity_5(property_details, real_neighborhood)
+            property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
+        except Exception as e:
+            equity_results = {"error": str(e)}
+        yield {"status": "📸 Vision Agent: Analyzing property condition..."}
+        search_address = property_details.get('address', '')
+        coords = agents["vision_agent"]._geocode_address(search_address)
+        if coords:
+            flood_data = await agents["fema_agent"].get_flood_zone(coords['lat'], coords['lng'])
+            if flood_data: property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
+        image_paths = await agents["vision_agent"].get_street_view_images(search_address)
+        vision_detections = await agents["vision_agent"].analyze_property_condition(image_paths)
+        image_path = image_paths[0] if image_paths else "mock_street_view.jpg"
+        if vision_detections and image_path != "mock_street_view.jpg":
+            image_path = agents["vision_agent"].draw_detections(image_path, vision_detections)
+        yield {"status": "✍️ Legal Narrator: Finalizing protest packet..."}
+        narrative = agents["narrative_agent"].generate_protest_narrative(property_details, equity_results, vision_detections, market_value)
+        os.makedirs("outputs", exist_ok=True)
+        form_path = f"outputs/Form_41_44_{current_account}.pdf"
+        agents["form_service"].generate_form_41_44(property_details, {
+            "narrative": narrative, 
+            "vision_data": vision_detections, 
+            "evidence_image_path": image_path,
+            "equity_results": equity_results
+        }, form_path)
+        yield {"data": {
+            "property": property_details, "market_value": market_value, "equity": equity_results,
+            "vision": vision_detections, "narrative": narrative, "form_path": form_path, "evidence_image_path": image_path
+        }}
+    except Exception as e: yield {"error": str(e)}
 
 if st.button("🚀 Generate Protest Packet", type="primary"):
     if not account_number:
         st.error("Please enter an account number or address.")
     else:
-        # User-friendly multi-step progress tracking
         with st.status("🏗️ Building your Protest Packet...", expanded=True) as status:
-            response = get_protest_stream(account_number)
-            
-            if not response:
-                status.update(label="❌ Connection Failed", state="error", expanded=True)
-                st.error("Could not connect to the analysis engine. Please ensure the backend is running.")
-            else:
-                final_data = None
-                for line in response.iter_lines():
-                    if line:
-                        chunk = json.loads(line.decode('utf-8'))
-                        
-                        if "status" in chunk:
-                            st.write(chunk["status"])
-                        
-                        if "error" in chunk:
-                            status.update(label="❌ Generation Failed", state="error", expanded=True)
-                            st.error(f"### 🌩️ Something went wrong\n{chunk['error']}")
-                            st.info("💡 **Pro-tip**: Try entering the numeric HCAD Account Number directly if Address lookup fails.")
-                            break
-                            
-                        if "data" in chunk:
-                            final_data = chunk["data"]
-                
-                if final_data:
-                    status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
-                    
-                    # Layout: Tabs for organized view
-                    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Property & Market", "⚖️ Equity Analysis", "📸 Vision Analysis", "📄 Official Protest", "⚙️ Advanced Data"])
-                    
-                    # Store data for use in tabs
-                    data = final_data
-                
-                    # TAB 1: Property & Market
-                    with tab1:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.subheader("Property Details")
-                            st.json(data['property'])
-                            
-                        with col2:
-                            st.subheader("Market Analysis")
-                            appraised = data['property'].get('appraised_value', 0)
-                            market = data['market_value']
-                            
-                            st.metric("Appraised Value", f"${appraised:,.0f}")
-                            
-                            delta_val = market - appraised
-                            st.metric("Market Value (RentCast)", f"${market:,.0f}", 
-                                     delta=f"${delta_val:,.0f}",
-                                     delta_color="inverse")
-                    
-                    # TAB 2: Equity Analysis
-                    with tab2:
-                        st.subheader("Equity Fairness Analysis")
-                        
-                        if "error" in data['equity'] or not data['equity']:
-                            st.error(data['equity'].get("error", "Equity analysis could not be completed for this property."))
-                            st.info("💡 This usually happens when no similar properties could be found in the current neighborhood code.")
-                        else:
-                            justified_val = data['equity'].get('justified_value_floor', 0)
-                            savings_value = appraised - justified_val
-                            est_tax_savings = (savings_value * (tax_rate / 100))
-                            
-                            ec1, ec2 = st.columns(2)
-                            with ec1:
-                                st.metric("Justified Value (Equity)", f"${justified_val:,.0f}", 
-                                          delta=f"-${savings_value:,.0f} Reduction" if savings_value > 0 else None,
-                                          delta_color="normal")
-                            with ec2:
-                                st.metric("💰 Estimated Tax Savings", f"${est_tax_savings:,.0f}", 
-                                          help=f"Based on a {tax_rate}% tax rate. Savings = Reductions x Rate.")
+            final_data = None
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            async def main_loop():
+                data = None
+                async for chunk in protest_generator_local(
+                    account_number, manual_address=m_address or None,
+                    manual_value=m_value if m_value > 0 else None,
+                    manual_area=m_area if m_area > 0 else None, district=district_code
+                ):
+                    if "status" in chunk: st.write(chunk["status"])
+                    if "error" in chunk:
+                        st.error(chunk["error"])
+                        status.update(label="❌ Generation Failed", state="error", expanded=True)
+                        return None
+                    if "data" in chunk:
+                        data = chunk["data"]
+                return data
 
-                            st.markdown("### The 'Equity 5' Comparables")
-                            df = pd.DataFrame(data['equity'].get('equity_5', []))
-                            
-                            if not df.empty:
-                                # Currency Formatting for Table
-                                st.dataframe(
-                                    df,
-                                    column_config={
-                                        "address": "Address",
-                                        "appraised_value": st.column_config.NumberColumn("Appraised Value", format="$%,.0f"),
-                                        "building_area": st.column_config.NumberColumn("Sq Ft", format="%,.0f sqft"),
-                                        "value_per_sqft": st.column_config.NumberColumn("Value/SqFt", format="$%,.2f"),
-                                        "similarity_score": st.column_config.NumberColumn("Similarity", format="%.2f")
-                                    },
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
-                            else:
-                                st.info("No comparable properties were found for this analysis.")
-                    
-                    with tab3:
-                        st.subheader("Condition Issues Detected")
-                        
-                        # Display Vision Image
-                        evidence_img = data.get('evidence_image_path')
-                        if evidence_img and os.path.exists(evidence_img):
-                            st.image(evidence_img, caption="Vision Agent Analysis Source", width=600)
-                        elif evidence_img:
-                            st.warning(f"Image processed but file unavailable: {evidence_img}")
-                        
-                        st.divider()
-                        vision_data = data.get('vision', [])
-                        # Safety Guard: Ensure list of dicts
-                        if isinstance(vision_data, list) and len(vision_data) > 0:
-                            valid_vision = [v for v in vision_data if isinstance(v, dict)]
-                            if valid_vision:
-                                cols = st.columns(len(valid_vision))
-                                for idx, issue in enumerate(valid_vision):
-                                    if idx < len(cols):
-                                        with cols[idx]:
-                                            st.warning(f"**{issue.get('issue', 'Potential Issue')}**")
-                                            st.write(f"Deduction: -${issue.get('deduction', 0):,}")
-                            else:
-                                st.success("No major exterior issues detected.")
-                        else:
-                            st.success("No major exterior issues detected.")
-
-                    # TAB 4: Narrative & PDF
-                    with tab4:
-                        st.subheader("Evidence Narrative")
-                        st.info(data['narrative'])
-                        
-                        st.divider()
-                        
-                        form_path = data.get('form_path')
-                        if form_path and os.path.exists(form_path):
-                            with open(form_path, "rb") as f:
-                                st.download_button(
-                                    label="⬇️ Download Official Form 41.44 (PDF)",
-                                    data=f.read(),
-                                    file_name=f"HCAD_Protest_{data['property'].get('account_number')}.pdf",
-                                    mime="application/pdf",
-                                    type="primary"
-                                )
-                        else:
-                            st.warning("PDF generation pending or failed.")
-
-                    # TAB 5: Advanced / Debug
-                    with tab5:
-                        st.subheader("Raw Scraper & API Data")
-                        st.write("This tab displays the underlying data used for calculations.")
-                        
-                        with st.expander("HCAD Raw Details", expanded=False):
-                            st.json(data['property'])
-                        
-                        with st.expander("Equity Engine Comps", expanded=False):
-                            st.json(data['equity'])
-                        
-                        with st.expander("RentCast Market Data", expanded=False):
-                            st.write(f"Final Market Value: ${data['market_value']:,.0f}")
-                            if 'rentcast_data' in data['property']:
-                                st.json(data['property']['rentcast_data'])
-                            else:
-                                st.info("No direct RentCast payload available (using fallback/cached value).")
+            final_data = loop.run_until_complete(main_loop())
+            if final_data:
+                status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
+                data = final_data
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Property", "⚖️ Equity", "📸 Vision", "📄 Protest", "⚙️ Data"])
+                with tab1:
+                    col1, col2 = st.columns(2)
+                    with col1: st.subheader("Details"); st.json(data['property'])
+                    with col2:
+                        st.subheader("Market Analysis")
+                        appraised = data['property'].get('appraised_value', 0)
+                        market = data['market_value']
+                        st.metric("Appraised Value", f"${appraised:,.0f}")
+                        st.metric("Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f}", delta_color="inverse")
+                with tab2:
+                    st.subheader("Equity Analysis")
+                    if "error" in data['equity'] or not data['equity']: st.error("Equity analysis failed.")
+                    else:
+                        justified_val = data['equity'].get('justified_value_floor', 0)
+                        savings = max(0, appraised - justified_val)
+                        c1, c2 = st.columns(2)
+                        with c1: st.metric("Justified Value", f"${justified_val:,.0f}", delta=f"-${savings:,.0f}" if savings > 0 else None)
+                        with c2: st.metric("💰 Est. Savings", f"${savings * (tax_rate/100):,.0f}")
+                        st.dataframe(pd.DataFrame(data['equity'].get('equity_5', [])))
+                with tab3:
+                    st.subheader("Condition")
+                    if os.path.exists(data.get('evidence_image_path', '')): st.image(data['evidence_image_path'], width=600)
+                    st.write(data.get('vision', []))
+                with tab4:
+                    st.subheader("Narrative"); st.info(data['narrative'])
+                    if os.path.exists(data.get('form_path', '')):
+                        with open(data['form_path'], "rb") as f:
+                            st.download_button("⬇️ Download PDF", f, file_name="protest.pdf", mime="application/pdf")
+                with tab5: st.json(data)
