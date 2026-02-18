@@ -6,3 +6,11 @@ venv/
 data/
 outputs/
 .DS_Store
+
+# Debug Artifacts
+*.html
+*.png
+*.txt
+*.json
+*.log
+debug/
