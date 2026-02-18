@@ -333,7 +333,41 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         c1, c2 = st.columns(2)
                         with c1: st.metric("Justified Value", f"${justified_val:,.0f}", delta=f"-${savings:,.0f}" if savings > 0 else None)
                         with c2: st.metric("💰 Est. Savings", f"${savings * (tax_rate/100):,.0f}")
-                        st.dataframe(pd.DataFrame(data['equity'].get('equity_5', [])))
+                        equity_df = pd.DataFrame(data['equity'].get('equity_5', []))
+                        if not equity_df.empty:
+                            # Select and rename display columns
+                            display_cols = {
+                                'address': 'Address',
+                                'appraised_value': 'Appraised Value',
+                                'market_value': 'Market Value',
+                                'building_area': 'Sq Ft',
+                                'year_built': 'Year Built',
+                                'value_per_sqft': '$/Sq Ft',
+                                'similarity_score': 'Similarity',
+                            }
+                            # Only keep columns that exist in the DataFrame
+                            cols_to_show = {k: v for k, v in display_cols.items() if k in equity_df.columns}
+                            equity_display = equity_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
+
+                            # Apply formatting
+                            fmt = {}
+                            if 'Appraised Value' in equity_display.columns:
+                                fmt['Appraised Value'] = '${:,.0f}'
+                            if 'Market Value' in equity_display.columns:
+                                fmt['Market Value'] = '${:,.0f}'
+                            if '$/Sq Ft' in equity_display.columns:
+                                fmt['$/Sq Ft'] = '${:.2f}'
+                            if 'Sq Ft' in equity_display.columns:
+                                fmt['Sq Ft'] = '{:,.0f}'
+                            if 'Similarity' in equity_display.columns:
+                                fmt['Similarity'] = '{:.1f}%'
+
+                            st.dataframe(
+                                equity_display.style.format(fmt, na_rep='—'),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+
                 with tab3:
                     st.subheader("Condition")
                     if os.path.exists(data.get('evidence_image_path', '')): st.image(data['evidence_image_path'], width=600)
