@@ -90,5 +90,38 @@ class SupabaseService:
         except Exception as e:
             logger.warning(f"save_cached_comps failed: {e}")
 
+    async def get_neighbors_from_db(self, account_number: str, neighborhood_code: str,
+                                     building_area: int, district: str = "HCAD",
+                                     tolerance: float = 0.35, limit: int = 20) -> list:
+        """
+        Query Supabase for comparable properties by neighborhood_code and building_area.
+        Returns up to `limit` records excluding the subject property.
+        Tolerance controls the ±% range for building_area (default ±35%).
+        """
+        if not self.client or not neighborhood_code or not building_area:
+            return []
+        try:
+            min_area = int(building_area * (1 - tolerance))
+            max_area = int(building_area * (1 + tolerance))
+            response = (
+                self.client.table("properties")
+                .select("account_number,address,appraised_value,market_value,building_area,year_built,neighborhood_code,district")
+                .eq("neighborhood_code", neighborhood_code)
+                .eq("district", district)
+                .neq("account_number", account_number)
+                .gte("building_area", min_area)
+                .lte("building_area", max_area)
+                .gt("appraised_value", 0)
+                .gt("building_area", 0)
+                .limit(limit)
+                .execute()
+            )
+            results = response.data or []
+            logger.info(f"DB neighbor lookup: {len(results)} comps for nbhd={neighborhood_code}, area={building_area}±{int(tolerance*100)}%")
+            return results
+        except Exception as e:
+            logger.warning(f"get_neighbors_from_db failed: {e}")
+            return []
+
 # Singleton instance
 supabase_service = SupabaseService()

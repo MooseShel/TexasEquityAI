@@ -265,31 +265,42 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         subject_permits = await agents["permit_agent"].get_property_permits(prop_address)
         permit_summary = agents["permit_agent"].analyze_permits(subject_permits)
         property_details['permit_summary'] = permit_summary
-        yield {"status": "⚖️ Equity Specialist: Discovering live neighbors..."}
+        yield {"status": "⚖️ Equity Specialist: Discovering comparable properties..."}
         try:
             if not is_real_address(prop_address):
                 logger.warning(f"Address '{prop_address}' does not look like a real street address — skipping neighbor discovery. Portal scraping likely failed.")
                 yield {"error": f"⚠️ Could not retrieve property details from the appraisal district portal. The address could not be resolved (got: '{prop_address}'). This may be due to Cloudflare blocking on the deployed server. Try running locally, or use the Manual Override fields to enter the address and value directly."}
                 return
 
-            # ── Check Supabase comp cache first ──────────────────────────────
             real_neighborhood = []
-            used_cache = False
-            if not force_fresh_comps:
+            nbhd_code = property_details.get('neighborhood_code')
+            bld_area  = int(property_details.get('building_area') or 0)
+            prop_district = property_details.get('district', 'HCAD')
+
+            # ── Layer 0: DB-first lookup (fastest — no browser, works on cloud) ──
+            if not force_fresh_comps and nbhd_code and bld_area > 0:
+                db_comps = await supabase_service.get_neighbors_from_db(
+                    current_account, nbhd_code, bld_area, district=prop_district
+                )
+                if len(db_comps) >= 3:
+                    real_neighborhood = db_comps
+                    yield {"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} comps from database instantly."}
+
+            # ── Layer 1: Cached comps (previously scraped, TTL 30 days) ──────────
+            if not real_neighborhood and not force_fresh_comps:
                 cached = await supabase_service.get_cached_comps(current_account)
                 if cached:
                     real_neighborhood = cached
-                    used_cache = True
-                    yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old). Check '🔄 Force fresh comps' to re-scrape."}
+                    yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old)."}
 
+            # ── Layers 2-3: Playwright scraping (fallback for cloud gaps) ────────
             if not real_neighborhood:
                 if force_fresh_comps:
                     yield {"status": "⚖️ Equity Specialist: Force-refreshing comps from live portal..."}
                 else:
-                    yield {"status": "⚖️ Equity Specialist: No cached comps — scraping live neighbors..."}
+                    yield {"status": "⚖️ Equity Specialist: DB insufficient — scraping live neighbors..."}
 
-                # Extract just the street name — strip house number AND trailing city/state/zip
-                # e.g. "843 LAMONTE LN HOUSTON, TX 77018" → "LAMONTE LN"
+                # Extract street name
                 street_only = prop_address.split(",")[0].strip()
                 addr_parts = street_only.split()
                 if addr_parts and addr_parts[0][0].isdigit():
@@ -313,7 +324,6 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 street_name = " ".join(addr_parts)
                 logger.info(f"Street discovery: extracted '{street_name}' from '{prop_address}'")
 
-                # Semi-parallel scraping helper with concurrency limit
                 async def scrape_pool(pool_list, limit=3):
                     usable = []
                     sem = asyncio.Semaphore(limit)
@@ -324,15 +334,14 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                     deep_results = await asyncio.gather(*tasks)
                     return [res for res in deep_results if res and res.get('building_area', 0) > 0]
 
-                # Layer 1: Street-level search
+                # Street-level scrape
                 discovered_neighbors = await connector.get_neighbors_by_street(street_name)
                 if discovered_neighbors:
                     discovered_neighbors = [n for n in discovered_neighbors if n['account_number'] != property_details.get('account_number')]
                     real_neighborhood = await scrape_pool(discovered_neighbors)
 
-                # Layer 2: Neighborhood code fallback (only for residential codes)
+                # Neighborhood code scrape fallback
                 if not real_neighborhood:
-                    nbhd_code = property_details.get('neighborhood_code')
                     is_commercial = connector.is_commercial_neighborhood_code(nbhd_code) if nbhd_code else False
                     if is_commercial:
                         logger.info(f"Neighborhood code '{nbhd_code}' is commercial — skipping neighborhood-wide search.")
@@ -345,7 +354,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                             nbhd_neighbors = [n for n in nbhd_neighbors if n['account_number'] != property_details.get('account_number')]
                             real_neighborhood = await scrape_pool(nbhd_neighbors)
 
-                # ── Save fresh comps to cache ─────────────────────────────────
+                # Save freshly scraped comps to cache
                 if real_neighborhood:
                     try:
                         await supabase_service.save_cached_comps(current_account, real_neighborhood)
