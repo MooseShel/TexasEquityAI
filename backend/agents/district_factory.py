@@ -16,32 +16,38 @@ class DistrictConnectorFactory:
     def detect_district_from_account(account_number: str) -> Optional[str]:
         """
         Analyzes account number format to guess the district.
+        
+        Known formats:
+          HCAD:  exactly 13 digits           e.g. 0660460360030
+          DCAD:  exactly 17 chars (no dashes) e.g. 00000776533000000
+          CCAD:  starts with 'R'             e.g. R-2815-00C-0100-1
+          TAD:   exactly 8 digits            e.g. 04657837
+          TCAD:  6-7 digits (AMBIGUOUS with CCAD numeric IDs — do NOT auto-detect)
         """
         if not account_number: return None
         
         clean_acc = account_number.replace("-", "").strip()
         
-        # DCAD: 17 characters (often has dashes, but we cleaned them)
-        # Actually DCAD is usually just long.
+        # DCAD: exactly 17 characters (long numeric string)
         if len(clean_acc) == 17:
-             return "DCAD"
+            return "DCAD"
 
-        # HCAD: 13 digits
+        # HCAD: exactly 13 digits
         if len(clean_acc) == 13 and clean_acc.isdigit():
-             return "HCAD"
+            return "HCAD"
             
-        # CCAD: Often starts with R
-        if account_number.upper().startswith("R"):
-             return "CCAD"
+        # CCAD: starts with R (R-number format)
+        if account_number.upper().strip().startswith("R"):
+            return "CCAD"
         
-        # TCAD: Usually 6 digits (up to 7)
-        if len(clean_acc) <= 7 and clean_acc.isdigit():
-            return "TCAD"
-            
-        # TAD: 8 digits
+        # TAD: exactly 8 digits
         if len(clean_acc) == 8 and clean_acc.isdigit():
             return "TAD"
-             
+        
+        # NOTE: TCAD (6-7 digits) is intentionally NOT auto-detected here because
+        # CCAD also uses plain numeric IDs of similar length (e.g. 2787425).
+        # The user must select TCAD manually from the dropdown.
+            
         return None
 
     @staticmethod

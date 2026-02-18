@@ -100,8 +100,8 @@ def auto_detect_district():
     if len(clean_acc) == 17: target_district = "DCAD"
     elif len(clean_acc) == 13 and clean_acc.isdigit(): target_district = "HCAD"
     elif raw_acc.upper().strip().startswith("R"): target_district = "CCAD"
-    elif len(clean_acc) <= 7 and clean_acc.isdigit(): target_district = "TCAD"
     elif len(clean_acc) == 8 and clean_acc.isdigit(): target_district = "TAD"
+    # NOTE: TCAD (6-7 digits) is NOT auto-detected — ambiguous with CCAD numeric IDs (e.g. 2787425)
     elif any(c.isalpha() for c in raw_acc):
         lower_acc = raw_acc.lower()
         if "dallas" in lower_acc: target_district = "DCAD"
@@ -140,9 +140,11 @@ tax_rate = st.sidebar.slider("Property Tax Rate (%)", 1.0, 4.0, 2.5, 0.1)
 # Main Content
 st.title("Property Tax Protest Dashboard")
 
-account_placeholder = "e.g. 0660460360030"
-if district_code == "TAD": account_placeholder = "e.g. 00002345678"
-elif district_code == "CCAD": account_placeholder = "e.g. R-1234-567-890"
+account_placeholder = "e.g. 0660460360030 (13 digits)"
+if district_code == "TAD": account_placeholder = "e.g. 04657837 (8 digits)"
+elif district_code == "CCAD": account_placeholder = "e.g. R-2815-00C-0100-1 or 2787425"
+elif district_code == "TCAD": account_placeholder = "e.g. 123456 (select TCAD manually — not auto-detected)"
+elif district_code == "DCAD": account_placeholder = "e.g. 00000776533000000 (17 digits)"
 
 account_number = st.text_input(f"Enter {district_code} Account Number or Street Address", 
                               placeholder=account_placeholder,
