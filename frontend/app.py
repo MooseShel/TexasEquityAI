@@ -228,10 +228,36 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         property_details['permit_summary'] = permit_summary
         yield {"status": "⚖️ Equity Specialist: Discovering live neighbors..."}
         try:
+            # Extract just the street name — strip house number AND trailing city/state/zip
+            # e.g. "843 LAMONTE LN HOUSTON, TX 77018" → "LAMONTE LN"
+            # Step 1: Take only the part before the first comma
             street_only = prop_address.split(",")[0].strip()
             addr_parts = street_only.split()
-            # Skip house number for discovery
-            street_name = " ".join(addr_parts[1:]) if addr_parts and addr_parts[0][0].isdigit() else " ".join(addr_parts)
+            # Step 2: Strip leading house number
+            if addr_parts and addr_parts[0][0].isdigit():
+                addr_parts = addr_parts[1:]
+            # Step 3: Strip trailing tokens that look like city/state/zip
+            # Known Texas city names that might appear without a comma separator
+            KNOWN_CITIES = {
+                "HOUSTON", "DALLAS", "AUSTIN", "FORT", "WORTH", "PLANO",
+                "ARLINGTON", "IRVING", "GARLAND", "FRISCO", "MCKINNEY",
+                "SUGAR", "LAND", "KATY", "SPRING", "HUMBLE", "PEARLAND",
+                "PASADENA", "BAYTOWN", "LEAGUE", "CITY", "GALVESTON"
+            }
+            while addr_parts:
+                last = addr_parts[-1].upper().rstrip(".,")
+                # Drop if it's a zip code, 2-letter state, or known city word
+                if last.isdigit() and len(last) == 5:
+                    addr_parts.pop()
+                elif last.isalpha() and len(last) == 2 and last.isupper():
+                    addr_parts.pop()
+                elif last in KNOWN_CITIES:
+                    addr_parts.pop()
+                else:
+                    break
+            street_name = " ".join(addr_parts)
+            logger.info(f"Street discovery: extracted '{street_name}' from '{prop_address}'")
+
             
             # Semi-parallel scraping helper with concurrency limit
             async def scrape_pool(pool_list, limit=3):
