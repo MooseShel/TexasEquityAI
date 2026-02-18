@@ -29,19 +29,23 @@ class DCADConnector(AppraisalDistrictConnector):
             )
             page = await context.new_page()
 
-            try:
+            for attempt in range(2):  # Retry once on transient failures
+              try:
                 # 1. Search Logic
-                logger.info(f"DCAD: Navigating to search for {account_number or address}")
+                logger.info(f"DCAD: Navigating to search for {account_number or address} (attempt {attempt+1})")
                 if account_number:
-                    await page.goto(f"{self.base_url}/SearchAcct.aspx", timeout=60000)
+                    await page.goto(f"{self.base_url}/SearchAcct.aspx", timeout=60000, wait_until="domcontentloaded")
+                    # Wait for the form input to be visible before interacting
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=15000)
-                    except: pass
+                        await page.wait_for_selector("#txtAccountNumber, #txtAcctNum", timeout=15000)
+                    except:
+                        logger.warning("DCAD: Account input not found after page load.")
+                        if attempt < 1: continue
+                        return {}
 
                     account_input = page.locator("#txtAccountNumber")
                     try:
                         if await account_input.count() > 0:
-                            await account_input.wait_for(state="visible", timeout=10000)
                             await account_input.fill(account_number)
                             await page.click("#cmdSubmit")
                         else:
@@ -54,9 +58,11 @@ class DCADConnector(AppraisalDistrictConnector):
                                 return {}
                     except Exception as e:
                         logger.warning(f"DCAD Input Interaction Failed: {e}")
+                        if attempt < 1: continue
                         return {}
                 elif address:
-                    await page.goto(f"{self.base_url}/SearchAddr.aspx", timeout=60000)
+                    await page.goto(f"{self.base_url}/SearchAddr.aspx", timeout=60000, wait_until="domcontentloaded")
+                    await page.wait_for_selector("#txtStreetName", timeout=10000)
                     await page.locator("#txtStreetName").fill(address.split()[-1])
                     await page.click("#cmdSubmit")
                 else:
@@ -64,9 +70,10 @@ class DCADConnector(AppraisalDistrictConnector):
 
                 # Smart wait: wait for result link or detail page
                 try:
-                    await page.wait_for_selector("a[href*='AcctDetail'], #PropAddr1_lblPropAddr", timeout=20000)
+                    await page.wait_for_selector("a[href*='AcctDetail'], #PropAddr1_lblPropAddr", timeout=25000)
                 except Exception:
                     logger.warning("DCAD: Timed out waiting for results.")
+                    if attempt < 1: continue
                     return {}
 
                 # Click result link if on list page
@@ -75,7 +82,7 @@ class DCADConnector(AppraisalDistrictConnector):
                     if await result_link.count() > 0:
                         await result_link.click()
                         try:
-                            await page.wait_for_selector("#PropAddr1_lblPropAddr", timeout=15000)
+                            await page.wait_for_selector("#PropAddr1_lblPropAddr", timeout=20000)
                         except: pass
                     else:
                         logger.warning(f"DCAD: No result found for {account_number}")
@@ -162,11 +169,16 @@ class DCADConnector(AppraisalDistrictConnector):
                 
                 return details
 
-            except Exception as e:
-                logger.error(f"DCAD: Error scraping details: {e}")
+              except Exception as e:
+                logger.error(f"DCAD: Error scraping details (attempt {attempt+1}): {e}")
+                if attempt < 1:
+                    logger.info("DCAD: Retrying...")
+                    await asyncio.sleep(2)
+                    continue
                 return {}
-            finally:
-                await browser.close()
+            
+            await browser.close()
+            return {}
 
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
@@ -178,9 +190,9 @@ class DCADConnector(AppraisalDistrictConnector):
             page = await browser.new_page()
             neighbors = []
             try:
-                await page.goto(f"{self.base_url}/SearchAddr.aspx", timeout=60000)
+                await page.goto(f"{self.base_url}/SearchAddr.aspx", timeout=60000, wait_until="domcontentloaded")
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=15000)
+                    await page.wait_for_selector("#txtStreetName, input[type='text']", timeout=15000)
                 except: pass
                 
                 street_input = page.locator("#txtStreetName")
