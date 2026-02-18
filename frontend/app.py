@@ -492,8 +492,9 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 layers=[layer],
                                 initial_view_state=view_state,
                                 tooltip=tooltip,
-                                map_style="mapbox://styles/mapbox/light-v10",
+                                map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
                             ))
+
 
                             # Legend
                             st.caption("🔴 Subject Property &nbsp;&nbsp; 🔵 Comparable Properties")
