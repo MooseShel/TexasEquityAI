@@ -4,9 +4,10 @@ HCAD Bulk Data Import Script
 Imports 2025 HCAD real property data into Supabase properties table.
 
 Usage:
-    python scripts/hcad_bulk_import.py                    # Import all residential
-    python scripts/hcad_bulk_import.py --sample 5000      # Import first N rows (test)
-    python scripts/hcad_bulk_import.py --all              # Import all property types
+    python scripts/hcad_bulk_import.py                                   # Import 2025 residential
+    python scripts/hcad_bulk_import.py --sample 5000                     # Import first N rows (test)
+    python scripts/hcad_bulk_import.py --all                             # Import all property types
+    python scripts/hcad_bulk_import.py --data-dir hcad_data_2024 --all  # Import 2024 data
 
 Data source: hcad_2025_data/real_acct.txt
 """
@@ -59,7 +60,7 @@ def is_residential(state_class: str, include_all: bool = False) -> bool:
     return sc[:2] in RESIDENTIAL_CLASSES or sc.startswith("A") or sc.startswith("B")
 
 
-def import_hcad_data(sample: int = None, include_all: bool = False):
+def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: str = None):
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     if not url or not key:
@@ -69,12 +70,17 @@ def import_hcad_data(sample: int = None, include_all: bool = False):
     client = create_client(url, key)
     logger.info(f"Connected to Supabase: {url}")
 
-    if not os.path.exists(REAL_ACCT_FILE):
-        logger.error(f"Data file not found: {REAL_ACCT_FILE}")
-        logger.error(f"Expected directory: {DATA_DIR}")
+    # Resolve data directory
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    resolved_dir = os.path.join(project_root, data_dir) if data_dir else os.path.join(project_root, "hcad_2025_data")
+    real_acct_file = os.path.join(resolved_dir, "real_acct.txt")
+
+    if not os.path.exists(real_acct_file):
+        logger.error(f"Data file not found: {real_acct_file}")
+        logger.error(f"Expected directory: {resolved_dir}")
         sys.exit(1)
 
-    logger.info(f"Reading {REAL_ACCT_FILE} ...")
+    logger.info(f"Reading {real_acct_file} ...")
     logger.info(f"Mode: {'ALL property types' if include_all else 'Residential only (A/B class)'}")
     if sample:
         logger.info(f"Sample mode: first {sample} matching rows")
@@ -85,7 +91,7 @@ def import_hcad_data(sample: int = None, include_all: bool = False):
     total_skipped = 0
     errors = 0
 
-    with open(REAL_ACCT_FILE, "r", encoding="latin-1") as f:
+    with open(real_acct_file, "r", encoding="latin-1") as f:
         header = f.readline().strip().split("\t")
         logger.info(f"Columns ({len(header)}): {header[:10]}...")
 
@@ -161,8 +167,9 @@ def import_hcad_data(sample: int = None, include_all: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Import HCAD 2025 bulk data into Supabase")
-    parser.add_argument("--sample", type=int, default=None, help="Only import first N residential rows (for testing)")
+    parser.add_argument("--sample", type=int, default=None, help="Only import first N rows (for testing)")
     parser.add_argument("--all", dest="include_all", action="store_true", help="Include all property types (not just residential)")
+    parser.add_argument("--data-dir", dest="data_dir", default=None, help="Data directory name relative to project root (default: hcad_2025_data)")
     args = parser.parse_args()
 
-    import_hcad_data(sample=args.sample, include_all=args.include_all)
+    import_hcad_data(sample=args.sample, include_all=args.include_all, data_dir=args.data_dir)
