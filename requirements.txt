@@ -17,4 +17,6 @@ altair<5
 python-dotenv
 ultralytics
 requests
+httpx
+pillow
 supabase

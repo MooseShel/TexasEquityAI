@@ -100,33 +100,32 @@ class VisionAgent:
             return []
             
         try:
-            # 1. Geocode the property
+            # 1. Geocode the property (used for heading calculation only)
             prop_coords = self._geocode_address(address)
-            if not prop_coords:
-                logger.warning(f"Could not geocode address: {address}. Falling back to default view.")
-                # Fallback to simple address-based fetch
-                path = await self._fetch_single_image(address, address.replace(' ', '_'), "default")
-                return [path] if path else []
-
-            # 2. Get Street View Metadata to find the camera location
-            meta_url = "https://maps.googleapis.com/maps/api/streetview/metadata"
-            meta_params = {"location": f"{prop_coords['lat']},{prop_coords['lng']}", "key": self.google_api_key}
-            meta_resp = requests.get(meta_url, params=meta_params)
             
+            # 2. Get Street View Metadata to find the camera location for heading
             base_heading = 0
-            location_param = f"{prop_coords['lat']},{prop_coords['lng']}"
+            # Use address string directly for Street View — avoids snapping to wrong nearby panorama
+            location_param = address  # e.g. "843 LAMONTE LN HOUSTON TX 77018"
             
-            if meta_resp.status_code == 200:
-                meta_data = meta_resp.json()
-                if meta_data.get("status") == "OK":
-                    cam_loc = meta_data["location"]
-                    # Calculate bearing from camera to property
-                    base_heading = self._calculate_bearing(cam_loc['lat'], cam_loc['lng'], prop_coords['lat'], prop_coords['lng'])
-                    logger.info(f"Calculated base heading: {base_heading}")
-                else:
-                    logger.warning(f"Metadata Status not OK: {meta_data.get('status')}")
+            if prop_coords:
+                meta_url = "https://maps.googleapis.com/maps/api/streetview/metadata"
+                meta_params = {"location": f"{prop_coords['lat']},{prop_coords['lng']}", "key": self.google_api_key}
+                meta_resp = requests.get(meta_url, params=meta_params)
+                
+                if meta_resp.status_code == 200:
+                    meta_data = meta_resp.json()
+                    if meta_data.get("status") == "OK":
+                        cam_loc = meta_data["location"]
+                        # Calculate bearing from camera to property
+                        base_heading = self._calculate_bearing(cam_loc['lat'], cam_loc['lng'], prop_coords['lat'], prop_coords['lng'])
+                        logger.info(f"Calculated base heading: {base_heading}")
+                    else:
+                        logger.warning(f"Metadata Status not OK: {meta_data.get('status')}")
+            else:
+                logger.warning(f"Could not geocode {address} for heading — using default heading 0.")
 
-            # 3. Fetch images from 3 angles
+            # 3. Fetch images from 3 angles, using address string as location
             angles = [
                 ("front", base_heading),
                 ("left", (base_heading - 35) % 360),
