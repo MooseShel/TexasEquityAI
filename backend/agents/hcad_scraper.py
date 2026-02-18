@@ -34,8 +34,19 @@ class HCADScraper(AppraisalDistrictConnector):
 
     async def get_property_details(self, account_number: str, address: Optional[str] = None) -> Optional[Dict]:
         logger.info(f"Looking up live data for HCAD account: {account_number}")
-        
-        # 1. Primary: New Portal Human-Flow
+
+        # 0. Supabase bulk-data lookup (fastest — no browser needed, works on cloud)
+        #    Populated by scripts/hcad_bulk_import.py from HCAD's annual data files.
+        try:
+            from backend.db.supabase_client import supabase_service
+            cached = await supabase_service.get_property_by_account(account_number)
+            if cached and cached.get('address') and cached.get('district') == 'HCAD':
+                logger.info(f"HCAD: Returning bulk-data record for {account_number} (no scraping needed).")
+                return cached
+        except Exception as e:
+            logger.warning(f"HCAD: Supabase bulk lookup failed: {e}")
+
+        # 1. Primary: New Portal Human-Flow (works locally, blocked by Cloudflare on cloud)
         details = await self._scrape_new_portal_human(account_number, address)
         if details: 
             details['district'] = 'HCAD'
@@ -53,6 +64,7 @@ class HCADScraper(AppraisalDistrictConnector):
                 "neighborhood_code": "Unknown",
                 "district": "HCAD"
             }
+
         
         return None
 
