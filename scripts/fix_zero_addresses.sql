@@ -1,31 +1,37 @@
 -- ============================================================
--- Clean up "0 " prefix addresses in properties table
--- These come from vacant lots / unaddressed parcels where
--- the street number is 0 (e.g. "0 BOUDREAUX RD, TOMBALL, TX")
+-- Clean up "0 " prefix addresses (vacant/unaddressed parcels)
+-- Run ONE district at a time to avoid timeout on 2M+ row table
 -- ============================================================
 
--- Option A (recommended): Strip the leading "0 " so address becomes usable
--- e.g. "0 BOUDREAUX RD, TOMBALL, TX, 77375" → "BOUDREAUX RD, TOMBALL, TX, 77375"
-UPDATE properties
-SET address = SUBSTRING(address FROM 3)   -- remove first two chars "0 "
-WHERE address ~ '^0 [A-Za-z]';            -- starts with "0 " followed by a letter
+-- Step 1: Preview count per district (run first)
+-- SELECT district, COUNT(*) FROM properties
+-- WHERE address LIKE '0 %' AND district IN ('HCAD','DCAD','TAD','CCAD')
+-- GROUP BY district;
 
--- Check how many rows were affected (run separately to preview before applying):
+-- Step 2: Fix HCAD
+UPDATE properties
+SET address = SUBSTRING(address FROM 3)
+WHERE district = 'HCAD'
+  AND address ~ '^0 [A-Za-z]';
+
+-- Step 3: Fix DCAD (run after HCAD completes)
+UPDATE properties
+SET address = SUBSTRING(address FROM 3)
+WHERE district = 'DCAD'
+  AND address ~ '^0 [A-Za-z]';
+
+-- Step 4: Fix TAD (run after DCAD completes)
+UPDATE properties
+SET address = SUBSTRING(address FROM 3)
+WHERE district = 'TAD'
+  AND address ~ '^0 [A-Za-z]';
+
+-- Step 5: Fix CCAD (run after TAD completes)
+UPDATE properties
+SET address = SUBSTRING(address FROM 3)
+WHERE district = 'CCAD'
+  AND address ~ '^0 [A-Za-z]';
+
+-- Verify: should return 0 rows when done
 -- SELECT COUNT(*) FROM properties WHERE address ~ '^0 [A-Za-z]';
 
--- ============================================================
--- Option B: Null out the address entirely for these parcels
--- (uncomment below if you prefer to remove rather than fix)
--- ============================================================
--- UPDATE properties
--- SET address = NULL
--- WHERE address ~ '^0 [A-Za-z]';
-
--- ============================================================
--- Verify result after running Option A:
--- ============================================================
--- SELECT account_number, address, district
--- FROM properties
--- WHERE address ~ '^0 [A-Za-z]'
--- LIMIT 10;
--- (should return 0 rows after cleanup)
