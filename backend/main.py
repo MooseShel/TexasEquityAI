@@ -111,6 +111,20 @@ async def get_full_protest(
                 logger.info(f"Auto-correcting district from {current_district} to {detected_district} based on account format.")
                 current_district = detected_district
 
+            # 0c. Global DB Lookup (Layer 2) — PROOF OF LIFE
+            # If the user selected a district but the account exists in another known district in our DB, trust the DB.
+            try:
+                # We use get_property_by_account which is district-agnostic (by account_number PK)
+                db_record = await supabase_service.get_property_by_account(current_account)
+                if db_record and db_record.get('district'):
+                    db_dist = db_record.get('district')
+                    if db_dist != current_district:
+                        logger.info(f"DB-Correcting district from {current_district} to {db_dist} (found in confirmed records).")
+                        current_district = db_dist
+            except Exception as e:
+                logger.warning(f"Global DB lookup failed during district check: {e}")
+
+
             yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping HCAD records and history..."}) + "\n"
             
             # 1. Cache & Scrape — DB-first for ALL districts
@@ -128,7 +142,17 @@ async def get_full_protest(
                 logger.info(f"DB-first: Using Supabase cached record for {current_account} — skipping scraper.")
                 property_details = cached_property
             else:
-                property_details = await connector.get_property_details(current_account, address=original_address)
+                # Scrape if cache was insufficient
+                try:
+                    property_details = await connector.get_property_details(current_account, address=original_address)
+                except Exception as e:
+                    logger.error(f"Scraper failed for {current_account}: {e}")
+                    property_details = None
+
+            # Fallback: If scraper failed but we had a partial DB record, use it better than nothing
+            if not property_details and cached_property:
+                logger.warning(f"Scraper failed/returned empty, falling back to cached DB record for {current_account}.")
+                property_details = cached_property
 
             # CRITICAL: Update current_account if the scraper found the real numeric account
             if property_details and property_details.get('account_number'):

@@ -117,18 +117,42 @@ def auto_detect_district():
         return
     clean_acc = raw_acc.replace("-", "").replace(" ", "").strip()
     target_district = None
+
+    # 1. Account Number Format (Highest Priority)
     if len(clean_acc) == 17: target_district = "DCAD"
     elif len(clean_acc) == 13 and clean_acc.isdigit(): target_district = "HCAD"
-    elif raw_acc.upper().strip().startswith("R"): target_district = "CCAD"
+    elif raw_acc.upper().strip().startswith("R") and len(clean_acc) <= 10: target_district = "CCAD"
     elif len(clean_acc) == 8 and clean_acc.isdigit(): target_district = "TAD"
-    # NOTE: TCAD (6-7 digits) is NOT auto-detected — ambiguous with CCAD numeric IDs (e.g. 2787425)
-    elif any(c.isalpha() for c in raw_acc):
+    # TCAD 6-7 digits is ambiguous with others, handled by city search below
+
+    # 2. City Name Fallback (Medium Priority)
+    if not target_district and any(c.isalpha() for c in raw_acc):
         lower_acc = raw_acc.lower()
         if "dallas" in lower_acc: target_district = "DCAD"
         elif "austin" in lower_acc: target_district = "TCAD"
         elif "fort worth" in lower_acc: target_district = "TAD"
         elif "plano" in lower_acc: target_district = "CCAD"
         elif "houston" in lower_acc: target_district = "HCAD"
+        elif "travis" in lower_acc: target_district = "TCAD"
+        elif "tarrant" in lower_acc: target_district = "TAD"
+        elif "harris" in lower_acc: target_district = "HCAD"
+
+    # 3. ZIP Code Detection (Lowest Priority - Fallback)
+    if not target_district:
+        zip_map = {
+            "750": "CCAD", # Specific override for Plano/Collin area
+            "77": "HCAD", "75": "DCAD", "76": "TAD", 
+            "787": "TCAD", "786": "TCAD"
+        }
+        import re
+        zip_match = re.search(r'\b(7\d{4})\b', raw_acc)
+        if zip_match:
+            zip5 = zip_match.group(1)
+            for prefix, dist in zip_map.items():
+                if zip5.startswith(prefix):
+                     target_district = dist
+                     break
+
     if target_district and target_district != st.session_state.district_selector:
         st.session_state.district_selector = target_district
         st.toast(f"📍 Auto-switched District to **{target_district}**", icon="🔄")
