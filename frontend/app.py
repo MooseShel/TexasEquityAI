@@ -61,6 +61,20 @@ def geocode_address(address: str):
         pass
     return None
 
+def calc_zoom_level(map_df):
+    """Calculate pydeck zoom level to fit all points with padding."""
+    import math
+    if len(map_df) <= 1:
+        return 15
+    lat_min, lat_max = map_df["lat"].min(), map_df["lat"].max()
+    lon_min, lon_max = map_df["lon"].min(), map_df["lon"].max()
+    lat_diff = max(lat_max - lat_min, 0.002)
+    lon_diff = max(lon_max - lon_min, 0.002)
+    max_diff = max(lat_diff, lon_diff)
+    # Approximate: zoom ~= log2(360 / max_diff) - 1, clamped
+    zoom = math.log2(360 / max_diff) - 1
+    return max(11, min(zoom - 0.5, 16))  # pad slightly, clamp 11-16
+
 # Initialize Agents (Cached for performance)
 @st.cache_resource
 def setup_playwright():
@@ -421,6 +435,17 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 return
 
             equity_results = agents["equity_engine"].find_equity_5(property_details, real_neighborhood)
+            
+            # Sales Comparison Analysis (independent data source)
+            try:
+                sales_results = agents["equity_engine"].get_sales_analysis(property_details)
+                if sales_results:
+                    equity_results['sales_comps'] = sales_results.get('sales_comps', [])
+                    equity_results['sales_count'] = sales_results.get('sales_count', 0)
+                    logger.info(f"Sales Analysis: Found {equity_results['sales_count']} comps.")
+            except Exception as sales_err:
+                logger.error(f"Sales Analysis Error: {sales_err}")
+            
             property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
         except Exception as e:
             equity_results = {"error": str(e)}
@@ -432,10 +457,19 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             flood_data = await agents["fema_agent"].get_flood_zone(coords['lat'], coords['lng'])
             if flood_data: property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
         image_paths = await agents["vision_agent"].get_street_view_images(search_address)
-        vision_detections = await agents["vision_agent"].analyze_property_condition(image_paths)
+        vision_detections = await agents["vision_agent"].analyze_property_condition(image_paths, property_details)
         image_path = image_paths[0] if image_paths else "mock_street_view.jpg"
-        if vision_detections and image_path != "mock_street_view.jpg":
-            image_path = agents["vision_agent"].draw_detections(image_path, vision_detections)
+        # Annotate all images with bounding boxes
+        annotated_paths = []
+        if vision_detections:
+            for ip in image_paths:
+                if ip and ip != "mock_street_view.jpg":
+                    annotated = agents["vision_agent"].draw_detections(ip, vision_detections)
+                    annotated_paths.append(annotated)
+        if not annotated_paths:
+            annotated_paths = image_paths if image_paths else []
+        if annotated_paths:
+            image_path = annotated_paths[0]
         yield {"status": "✍️ Legal Narrator: Evaluating protest viability..."}
 
         # ── Protest Viability Gate ────────────────────────────────────────────
@@ -450,13 +484,28 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         has_condition_issues  = bool(vision_detections and len(vision_detections) > 0)
         flood_zone            = property_details.get('flood_zone', 'Zone X')
         has_flood_risk        = flood_zone and 'Zone X' not in flood_zone
+        
+        # Sales comps viability check
+        has_sales_argument = False
+        sales_comps_for_viability = equity_results.get('sales_comps', []) if isinstance(equity_results, dict) else []
+        if sales_comps_for_viability:
+            try:
+                sale_prices = [float(str(c.get('Sale Price','0')).replace('$','').replace(',','')) for c in sales_comps_for_viability]
+                sale_prices = [p for p in sale_prices if p > 0]
+                if sale_prices:
+                    sale_prices.sort()
+                    mid = len(sale_prices) // 2
+                    median_sp = sale_prices[mid] if len(sale_prices) % 2 else (sale_prices[mid-1] + sale_prices[mid]) / 2
+                    has_sales_argument = appraised_val > median_sp
+            except: pass
 
-        protest_viable = has_equity_argument or has_market_argument or has_condition_issues or has_flood_risk
+        protest_viable = has_equity_argument or has_market_argument or has_condition_issues or has_flood_risk or has_sales_argument
 
         if protest_viable:
             reasons = []
             if has_equity_argument:   reasons.append(f"equity over-assessment (${appraised_val - justified_val:,.0f} gap)")
             if has_market_argument:   reasons.append(f"market value gap (${appraised_val - market_value:,.0f})")
+            if has_sales_argument:    reasons.append(f"{len(sales_comps_for_viability)} sales comps support reduction")
             if has_condition_issues:  reasons.append(f"{len(vision_detections)} condition issue(s) detected")
             if has_flood_risk:        reasons.append(f"flood risk ({flood_zone})")
             logger.info(f"Protest viable — generating narrative. Reasons: {'; '.join(reasons)}")
@@ -489,9 +538,40 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             "evidence_image_path": image_path,
             "equity_results": equity_results
         }, form_path)
+        
+        # Generate Evidence Packet PDF (with maps + sales comps)
+        evidence_path = f"outputs/EvidencePacket_{current_account}.pdf"
+        try:
+            sales_comps_raw = equity_results.get('sales_comps', [])
+            agents["pdf_service"].generate_evidence_packet(
+                narrative, property_details, equity_results, vision_detections, evidence_path,
+                sales_data=sales_comps_raw, image_paths=annotated_paths
+            )
+            logger.info(f"Evidence packet generated: {evidence_path}")
+        except Exception as e:
+            logger.error(f"Evidence packet generation failed: {e}")
+            evidence_path = None
+        
+        # Merge Form + Evidence Packet into one PDF
+        combined_path = f"outputs/ProtestPacket_{current_account}.pdf"
+        try:
+            from pypdf import PdfWriter
+            writer = PdfWriter()
+            writer.append(form_path)
+            if evidence_path and os.path.exists(evidence_path):
+                writer.append(evidence_path)
+            writer.write(combined_path)
+            writer.close()
+            logger.info(f"Combined protest packet: {combined_path}")
+        except Exception as e:
+            logger.error(f"PDF merge failed: {e}")
+            combined_path = form_path  # fallback to form only
+        
         yield {"data": {
             "property": property_details, "market_value": market_value, "equity": equity_results,
-            "vision": vision_detections, "narrative": narrative, "form_path": form_path, "evidence_image_path": image_path
+            "vision": vision_detections, "narrative": narrative, "combined_pdf_path": combined_path,
+            "evidence_image_path": image_path,
+            "all_image_paths": annotated_paths
         }}
     except Exception as e: yield {"error": str(e)}
 
@@ -669,7 +749,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             view_state = pdk.ViewState(
                                 latitude=center_lat,
                                 longitude=center_lon,
-                                zoom=14,
+                                zoom=calc_zoom_level(map_df),
                                 pitch=0,
                             )
 
@@ -695,8 +775,89 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     st.subheader("💰 Sales Comparable Analysis")
                     sales_comps = data['equity'].get('sales_comps', [])
                     if sales_comps:
+                        # ── Parse key metrics ────────────────────────────────
+                        sale_prices = []
+                        sale_pps = []
+                        for sc in sales_comps:
+                            try:
+                                p = float(str(sc.get('Sale Price', '0')).replace('$', '').replace(',', ''))
+                                if p > 0: sale_prices.append(p)
+                            except: pass
+                            try:
+                                pp = float(str(sc.get('Price/SqFt', '0')).replace('$', '').replace(',', ''))
+                                if pp > 0: sale_pps.append(pp)
+                            except: pass
+                        
+                        median_sale = 0
+                        if sale_prices:
+                            sale_prices.sort()
+                            mid = len(sale_prices) // 2
+                            median_sale = sale_prices[mid] if len(sale_prices) % 2 else (sale_prices[mid-1] + sale_prices[mid]) / 2
+                        avg_pps = sum(sale_pps) / len(sale_pps) if sale_pps else 0
+                        min_sale = min(sale_prices) if sale_prices else 0
+                        max_sale = max(sale_prices) if sale_prices else 0
+                        
+                        # ── Key Metrics Row ──────────────────────────────────
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            sales_delta = median_sale - appraised if median_sale > 0 else None
+                            st.metric("Median Sale Price", f"${median_sale:,.0f}", 
+                                     delta=f"${sales_delta:,.0f}" if sales_delta else None,
+                                     delta_color="inverse")
+                        with c2:
+                            st.metric("Avg $/SqFt", f"${avg_pps:.2f}")
+                        with c3:
+                            st.metric("Comps Found", f"{len(sales_comps)}")
+                        with c4:
+                            sales_savings = max(0, appraised - median_sale) if median_sale > 0 else 0
+                            est_tax_savings = sales_savings * (tax_rate / 100)
+                            st.metric("💰 Est. Tax Savings", f"${est_tax_savings:,.0f}")
+                        
+                        # ── Contextual Analysis ─────────────────────────────
+                        if median_sale > 0 and appraised > median_sale:
+                            gap = appraised - median_sale
+                            st.success(
+                                f"**Market over-appraisal detected!** "
+                                f"Your appraised value (\${appraised:,.0f}) exceeds the median sale price "
+                                f"of {len(sales_comps)} comparable sales (\${median_sale:,.0f}) by **\${gap:,.0f}**. "
+                                f"Sales range: \${min_sale:,.0f} — \${max_sale:,.0f}. "
+                                f"At a {tax_rate}% tax rate, this represents ~\${est_tax_savings:,.0f} in potential annual savings. "
+                                f"This supports a protest under **Texas Tax Code §41.43(b)(3)** and **§23.01**.",
+                                icon="✅"
+                            )
+                        elif median_sale > 0:
+                            over_by = median_sale - appraised
+                            st.info(
+                                f"**No market over-appraisal found.** "
+                                f"Your appraised value (\${appraised:,.0f}) is **\${over_by:,.0f} below** "
+                                f"the median sale price of comparable properties (\${median_sale:,.0f}). "
+                                f"Sales range: \${min_sale:,.0f} — \${max_sale:,.0f}. "
+                                f"The sales comparison approach does not independently support a reduction, "
+                                f"but this data can corroborate condition or equity-based arguments.",
+                                icon="ℹ️"
+                            )
+                        
+                        st.divider()
+                        
+                        # ── Data Table ────────────────────────────────────────
+                        st.caption(f"**{len(sales_comps)} Most Recent Sales** — sorted by proximity")
                         sales_df = pd.DataFrame(sales_comps)
                         if not sales_df.empty:
+                            # Format Sale Date column
+                            if 'Sale Date' in sales_df.columns:
+                                def format_sale_date(d):
+                                    if not d or d == 'None' or str(d).strip() == '':
+                                        return '—'
+                                    try:
+                                        from datetime import datetime as dt
+                                        # Handle ISO format (2024-03-15T00:00:00) and plain dates
+                                        date_str = str(d).split('T')[0]
+                                        parsed = dt.strptime(date_str, '%Y-%m-%d')
+                                        return parsed.strftime('%b %d, %Y')
+                                    except:
+                                        return str(d)
+                                sales_df['Sale Date'] = sales_df['Sale Date'].apply(format_sale_date)
+                            
                             sales_display_cols = {
                                 'Address': 'Address',
                                 'Sale Price': 'Sale Price',
@@ -710,26 +871,243 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             s_cols_to_show = {k: v for k, v in sales_display_cols.items() if k in sales_df.columns}
                             sales_display = sales_df[list(s_cols_to_show.keys())].rename(columns=s_cols_to_show)
                             
-                            # Format
-                            s_fmt = {}
-                            if 'Sale Price' in sales_display.columns: s_fmt['Sale Price'] = '{}' # Already string formatted in backend?
-                            # Backend formats as string: "${...}"
-                            
                             st.dataframe(
                                 sales_display,
                                 use_container_width=True,
                                 hide_index=True
                             )
+                        
+                        # ── Sales Comps Map ───────────────────────────────────
+                        st.subheader("📍 Sales Comparable Map")
+                        import pydeck as pdk
+
+                        subject_addr = data['property'].get('address', '')
+                        subject_coords = geocode_address(subject_addr)
+
+                        sales_map_points = []
+                        if subject_coords:
+                            sales_map_points.append({
+                                "lat": subject_coords["lat"],
+                                "lon": subject_coords["lon"],
+                                "label": "Subject",
+                                "address": subject_addr,
+                                "sale_price": f"Appraised: \${data['property'].get('appraised_value', 0):,.0f}",
+                                "color": [220, 50, 50, 220],
+                                "radius": 40,
+                            })
+
+                        for sc in sales_comps:
+                            sc_addr = sc.get('Address', '')
+                            if not sc_addr:
+                                continue
+                            sc_coords = geocode_address(sc_addr)
+                            if sc_coords:
+                                sales_map_points.append({
+                                    "lat": sc_coords["lat"],
+                                    "lon": sc_coords["lon"],
+                                    "label": "Sale Comp",
+                                    "address": sc_addr,
+                                    "sale_price": sc.get('Sale Price', 'N/A'),
+                                    "color": [50, 180, 80, 220],
+                                    "radius": 25,
+                                })
+
+                        if sales_map_points:
+                            sales_map_df = pd.DataFrame(sales_map_points)
+                            center_lat = sales_map_df["lat"].mean()
+                            center_lon = sales_map_df["lon"].mean()
+
+                            layer = pdk.Layer(
+                                "ScatterplotLayer",
+                                data=sales_map_df,
+                                get_position=["lon", "lat"],
+                                get_fill_color="color",
+                                get_radius="radius",
+                                radius_scale=6,
+                                radius_min_pixels=8,
+                                radius_max_pixels=30,
+                                pickable=True,
+                            )
+
+                            view_state = pdk.ViewState(
+                                latitude=center_lat,
+                                longitude=center_lon,
+                                zoom=calc_zoom_level(sales_map_df),
+                                pitch=0,
+                            )
+
+                            tooltip = {
+                                "html": "<b>{label}</b><br/>{address}<br/>{sale_price}",
+                                "style": {"backgroundColor": "#1a1a2e", "color": "white", "fontSize": "13px", "padding": "8px"}
+                            }
+
+                            st.pydeck_chart(pdk.Deck(
+                                layers=[layer],
+                                initial_view_state=view_state,
+                                tooltip=tooltip,
+                                map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+                            ))
+
+                            st.caption("🔴 Subject Property &nbsp;&nbsp; 🟢 Sales Comparables")
+                        else:
+                            st.info("Map unavailable — could not geocode property addresses.")
+
+                        # ── CSV Export ────────────────────────────────────────
+                        csv_data = sales_df.to_csv(index=False)
+                        st.download_button(
+                            "⬇️ Export Sales Comps CSV",
+                            csv_data,
+                            file_name=f"salescomps_{data['property'].get('account_number', 'unknown')}.csv",
+                            mime="text/csv"
+                        )
                     else:
                         st.warning("No recent sales comparables found for this property.")
 
                 with tab4:
-                    st.subheader("Condition")
-                    if os.path.exists(data.get('evidence_image_path', '')): st.image(data['evidence_image_path'], width=600)
-                    st.write(data.get('vision', []))
+                    st.subheader("📸 Condition Analysis")
+                    vision_items = data.get('vision', [])
+                    all_imgs = data.get('all_image_paths', [])
+                    
+                    # Separate summary object from issue detections
+                    condition_summary = None
+                    issues_only = []
+                    if isinstance(vision_items, list):
+                        for item in vision_items:
+                            if isinstance(item, dict):
+                                if item.get('issue') == 'CONDITION_SUMMARY':
+                                    condition_summary = item
+                                else:
+                                    issues_only.append(item)
+                    
+                    # ── Condition Summary Metrics ───────────────────────────
+                    if condition_summary:
+                        c1, c2, c3, c4 = st.columns(4)
+                        score = condition_summary.get('condition_score', 'N/A')
+                        eff_age = condition_summary.get('effective_age', 'N/A')
+                        with c1:
+                            score_label = "🟢 Good" if isinstance(score, (int, float)) and score >= 7 else "🟡 Fair" if isinstance(score, (int, float)) and score >= 4 else "🔴 Poor"
+                            st.metric("Condition Score", f"{score}/10 ({score_label})")
+                        with c2:
+                            st.metric("Effective Age", f"{eff_age} yrs")
+                        with c3:
+                            total_deductions = sum(i.get('deduction', 0) for i in issues_only)
+                            st.metric("Total Deductions", f"${total_deductions:,.0f}")
+                        with c4:
+                            st.metric("Issues Found", f"{len(issues_only)}")
+                    elif issues_only:
+                        c1, c2 = st.columns(2)
+                        total_deductions = sum(i.get('deduction', 0) for i in issues_only)
+                        with c1: st.metric("Total Deductions", f"${total_deductions:,.0f}")
+                        with c2: st.metric("Issues Found", f"{len(issues_only)}")
+                    
+                    # ── Depreciation Breakdown ─────────────────────────────
+                    if issues_only:
+                        physical = sum(i.get('deduction', 0) for i in issues_only if i.get('category', '').startswith('Physical'))
+                        functional = sum(i.get('deduction', 0) for i in issues_only if i.get('category', '').startswith('Functional'))
+                        external = sum(i.get('deduction', 0) for i in issues_only if i.get('category', '').startswith('External'))
+                        
+                        if any([physical, functional, external]):
+                            st.divider()
+                            st.caption("**Depreciation Breakdown (Texas Appraisal Categories)**")
+                            dep_c1, dep_c2, dep_c3 = st.columns(3)
+                            with dep_c1:
+                                st.metric("Physical Deterioration", f"${physical:,.0f}")
+                            with dep_c2:
+                                st.metric("Functional Obsolescence", f"${functional:,.0f}")
+                            with dep_c3:
+                                st.metric("External Obsolescence", f"${external:,.0f}")
+                        
+                        st.divider()
+                        
+                        # ── Issue Cards ─────────────────────────────────────
+                        st.caption(f"**{len(issues_only)} Condition Issues Identified**")
+                        for issue in issues_only:
+                            severity = issue.get('severity', 'Unknown')
+                            sev_color = "🔴" if severity == "High" else "🟡" if severity == "Medium" else "🟢"
+                            category = issue.get('category', 'Uncategorized')
+                            confidence = issue.get('confidence', 0)
+                            
+                            with st.expander(f"{sev_color} **{issue.get('issue', 'Unknown')}** — {severity} | ${issue.get('deduction', 0):,.0f} | {category}", expanded=False):
+                                st.write(issue.get('description', 'No description'))
+                                conf_c1, conf_c2 = st.columns(2)
+                                with conf_c1:
+                                    st.progress(min(confidence, 1.0), text=f"Confidence: {confidence*100:.0f}%")
+                                with conf_c2:
+                                    st.caption(f"Category: {category}")
+                    else:
+                        st.info("No condition issues detected from Street View imagery. The property exterior appears to be in acceptable condition.", icon="ℹ️")
+                    
+                    # ── Multi-Image Gallery ─────────────────────────────────
+                    st.divider()
+                    st.caption("**Street View Images** — Front, Left 45°, Right 45°")
+                    valid_imgs = [p for p in all_imgs if p and os.path.exists(p)]
+                    if valid_imgs:
+                        img_cols = st.columns(len(valid_imgs))
+                        labels = ["Front", "Left 45°", "Right 45°"]
+                        for idx, img_path in enumerate(valid_imgs):
+                            with img_cols[idx]:
+                                label = labels[idx] if idx < len(labels) else f"Angle {idx+1}"
+                                st.image(img_path, caption=label, use_container_width=True)
+                    elif os.path.exists(data.get('evidence_image_path', '')):
+                        st.image(data['evidence_image_path'], caption="Front View", width=600)
+                    else:
+                        st.warning("No Street View images available for this property.")
+
                 with tab5:
-                    st.subheader("Narrative"); st.info(data['narrative'])
-                    if os.path.exists(data.get('form_path', '')):
-                        with open(data['form_path'], "rb") as f:
-                            st.download_button("⬇️ Download PDF", f, file_name="protest.pdf", mime="application/pdf")
+                    st.subheader("📄 Protest Summary")
+                    
+                    # ── Condition-Adjusted Recommended Value ──────────────
+                    appraised = data['property'].get('appraised_value', 0) or 0
+                    justified = data['equity'].get('justified_value_floor', 0) if isinstance(data.get('equity'), dict) else 0
+                    justified = justified or 0
+                    mkt = data.get('market_value', 0) or 0
+                    
+                    # Calculate vision deductions
+                    vision_items = data.get('vision', [])
+                    total_vision_deduction = 0
+                    if isinstance(vision_items, list):
+                        for vi in vision_items:
+                            if isinstance(vi, dict) and vi.get('issue') != 'CONDITION_SUMMARY':
+                                total_vision_deduction += vi.get('deduction', 0)
+                    
+                    # Base value = lowest of appraised, justified (if valid), market (if valid)
+                    candidates = [appraised]
+                    if justified > 0: candidates.append(justified)
+                    if mkt > 0: candidates.append(mkt)
+                    base_value = min(candidates)
+                    recommended_value = max(0, base_value - total_vision_deduction)
+                    total_savings = max(0, appraised - recommended_value)
+                    
+                    rc1, rc2, rc3 = st.columns(3)
+                    with rc1:
+                        st.metric("🏠 Current Appraised", f"${appraised:,.0f}")
+                    with rc2:
+                        st.metric(
+                            "🎯 Recommended Protest Value", 
+                            f"${recommended_value:,.0f}",
+                            delta=f"-${total_savings:,.0f}" if total_savings > 0 else None,
+                            delta_color="inverse"
+                        )
+                    with rc3:
+                        if total_vision_deduction > 0:
+                            st.metric("🔧 Condition Deduction", f"-${total_vision_deduction:,.0f}")
+                        else:
+                            st.metric("🔧 Condition Deduction", "$0")
+                    
+                    if total_savings > 0:
+                        st.success(f"**Potential tax savings: ${total_savings * (tax_rate/100):,.0f}/year** based on a recommended protest value of ${recommended_value:,.0f} (base: ${base_value:,.0f} minus ${total_vision_deduction:,.0f} condition deduction).")
+                    
+                    st.divider()
+                    st.subheader("Narrative")
+                    st.info(data['narrative'])
+                    pdf_path = data.get('combined_pdf_path', '')
+                    if pdf_path and os.path.exists(pdf_path):
+                        with open(pdf_path, "rb") as f:
+                            st.download_button(
+                                "📥 Download Complete Protest Packet",
+                                f,
+                                file_name=f"ProtestPacket_{data['property'].get('account_number', 'unknown')}.pdf",
+                                mime="application/pdf",
+                                type="primary"
+                            )
                 with tab6: st.json(data)

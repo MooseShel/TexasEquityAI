@@ -132,9 +132,11 @@ class EquityAgent:
         Uses SalesAgent to get Sales Comparables Table.
         """
         try:
+            logger.info(f"EquityAgent: Initiating Sales Analysis for {subject_property.get('address', 'Unknown')}...")
             from backend.agents.sales_agent import SalesAgent
             agent = SalesAgent()
             comps = agent.find_sales_comps(subject_property)
+            logger.info(f"EquityAgent: Sales Analysis complete. Found {len(comps)} comps.")
             return {
                 "sales_comps": comps,
                 "sales_count": len(comps)

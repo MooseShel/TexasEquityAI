@@ -38,6 +38,7 @@ class SalesAgent:
             logger.info(f"SalesAgent: Detected partial address '{address}'. Appending suffix '{suffix}'.")
             address += suffix
         
+        print(f"DEBUG: SalesAgent.find_sales_comps CALLED for {address}")
         logger.info(f"SalesAgent: Querying APIs with address: '{address}'")
 
         # Determine Property Type
@@ -88,6 +89,13 @@ class SalesAgent:
                 unique_comps.append(c)
                 seen_addrs.add(key)
         comps = unique_comps
+
+        # --- SELECT 5 MOST RECENT, DISPLAY BY DISTANCE ---
+        # Recency is key evidence for ARB hearings (§23.01), but distance is the
+        # most intuitive display order for homeowners.
+        comps.sort(key=lambda c: c.sale_date or '', reverse=True)  # newest first
+        comps = comps[:5]
+        comps.sort(key=lambda c: c.dist_from_subject if c.dist_from_subject is not None else 999)
 
         # --- FORMATTING RESULTS ---
         results = []

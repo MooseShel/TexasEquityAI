@@ -183,13 +183,44 @@ class HCADFormService:
                 pdf.cell(col_widths_sales[6], 8, src, 1, 1, 'C')
             
             pdf.ln(5)
-            # Calculate Average PPS for context
+            # Calculate Average PPS and Median Sale Price for context
             try:
                 valid_pps = [float(str(c.get('Price/SqFt','0')).replace('$','')) for c in sales_comps if c.get('Price/SqFt')]
+                valid_prices = [float(str(c.get('Sale Price','0')).replace('$','').replace(',','')) for c in sales_comps if c.get('Sale Price')]
+                
                 if valid_pps:
                     avg_pps = sum(valid_pps) / len(valid_pps)
                     pdf.set_font("Helvetica", 'B', 10)
-                    pdf.cell(0, 10, f"Average Sales Price per SqFt: ${avg_pps:.2f}", ln=True, align='R')
+                    pdf.cell(0, 8, f"Average Sales Price per SqFt: ${avg_pps:.2f}  |  Comps Analyzed: {len(sales_comps)}", ln=True, align='R')
+                
+                if valid_prices:
+                    valid_prices.sort()
+                    mid = len(valid_prices) // 2
+                    median_price = valid_prices[mid] if len(valid_prices) % 2 else (valid_prices[mid-1] + valid_prices[mid]) / 2
+                    
+                    pdf.ln(5)
+                    # Valuation conclusion box
+                    appraised = property_data.get('appraised_value', 0) or 0
+                    pdf.set_fill_color(255, 240, 240)
+                    pdf.set_font("Helvetica", 'B', 11)
+                    pdf.cell(95, 10, "MEDIAN COMPARABLE SALE PRICE", 1, 0, 'R')
+                    pdf.cell(95, 10, f"${median_price:,.0f}", 1, 1, 'C', True)
+                    pdf.cell(95, 10, "CURRENT APPRAISED VALUE", 1, 0, 'R')
+                    pdf.cell(95, 10, f"${appraised:,.0f}", 1, 1, 'C')
+                    
+                    if appraised > median_price:
+                        gap = appraised - median_price
+                        pdf.set_fill_color(255, 200, 200)
+                        pdf.cell(95, 10, "OVER-APPRAISAL vs MARKET", 1, 0, 'R')
+                        pdf.cell(95, 10, f"${gap:,.0f} ABOVE MARKET", 1, 1, 'C', True)
+                    else:
+                        pdf.set_fill_color(200, 255, 200)
+                        pdf.cell(95, 10, "MARKET POSITION", 1, 0, 'R')
+                        pdf.cell(95, 10, "AT OR BELOW MARKET", 1, 1, 'C', True)
+                    
+                    pdf.ln(3)
+                    pdf.set_font("Helvetica", '', 8)
+                    pdf.cell(0, 6, "Sales data per Texas Tax Code Sec. 23.01 & Sec. 41.43(b)(3). Market value determined by sales comparison approach.", ln=True, align='C')
             except: pass
 
         # --- PAGE 4: PHOTOGRAPHIC EVIDENCE ---

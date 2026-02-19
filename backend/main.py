@@ -76,6 +76,7 @@ async def get_full_protest(
          pass
             
     async def protest_generator():
+        print("DEBUG: protest_generator STARTED!")
         try:
             yield json.dumps({"status": "🔍 Resolver Agent: Locating property and resolving address..."}) + "\n"
             
@@ -235,7 +236,9 @@ async def get_full_protest(
                         "address": property_details.get("address"),
                         "appraised_value": property_details.get("appraised_value"),
                         "building_area": property_details.get("building_area"),
-                        "year_built": property_details.get("year_built")
+                        "year_built": property_details.get("year_built"),
+                        "neighborhood_code": property_details.get("neighborhood_code"),
+                        "district": property_details.get("district")
                     }
                     await supabase_service.upsert_property(clean_prop)
                 except: pass
@@ -277,6 +280,26 @@ async def get_full_protest(
                 subject_permits = await permit_agent.get_property_permits(prop_address)
             permit_summary = permit_agent.analyze_permits(subject_permits)
             property_details['permit_summary'] = permit_summary
+
+            # 4. Sales Comparison Analysis (Independent of Equity)
+            print("DEBUG: Executing Sales Analysis Block in Main...")
+            yield json.dumps({"status": "💰 Sales Agent: Fetching recent sales comparables..."}) + "\n"
+            logger.info("Main: Calling get_sales_analysis...")
+            try:
+                sales_results = equity_engine.get_sales_analysis(property_details)
+                print(f"DEBUG: get_sales_analysis result type: {type(sales_results)}")
+            except Exception as e:
+                print(f"DEBUG: get_sales_analysis CRASHED: {e}")
+                sales_results = None
+                
+            equity_results = {} # Initialize early
+            if sales_results:
+                count = sales_results.get('sales_count', 0)
+                logger.info(f"Main: get_sales_analysis returned {count} comps.")
+                equity_results['sales_comps'] = sales_results.get('sales_comps', [])
+                equity_results['sales_count'] = count
+            else:
+                logger.warning("Main: get_sales_analysis returned None.")
 
             yield json.dumps({"status": "⚖️ Equity Specialist: Discovering comparable properties..."}) + "\n"
 
@@ -360,20 +383,19 @@ async def get_full_protest(
                     yield json.dumps({"error": friendly_error}) + "\n"
                     return # Stop execution gracefully
 
-                equity_results = equity_engine.find_equity_5(property_details, real_neighborhood)
-                
-                # 4a. Sales Comparison Analysis
-                sales_results = equity_engine.get_sales_analysis(property_details)
-                if sales_results:
-                    equity_results['sales_comps'] = sales_results.get('sales_comps', [])
-                    equity_results['sales_count'] = sales_results.get('sales_count', 0)
+                equity_results['justified_value_floor'] = equity_engine.find_equity_5(property_details, real_neighborhood).get('justified_value_floor', 0)
+                # Merge full equity results safely
+                eq_full = equity_engine.find_equity_5(property_details, real_neighborhood)
+                equity_results.update(eq_full)
                 
                 # 4b. Comparative Permit Analysis
                 comp_renovations = await permit_agent.summarize_comp_renovations(equity_results.get('equity_5', []))
                 property_details['comp_renovations'] = comp_renovations
             except Exception as e:
                 logger.error(f"Equity Analysis Error: {e}")
-                equity_results = {"error": "Could not perform live equity analysis"}
+                # Don't clobber sales comps in equity_results if they exist
+                if "sales_comps" not in equity_results:
+                    equity_results["error"] = "Could not perform live equity analysis"
 
             # 5. Vision & Location Analysis (Flood Zones)
             search_address = property_details.get('address', '')

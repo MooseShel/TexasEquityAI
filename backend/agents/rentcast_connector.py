@@ -47,6 +47,9 @@ class RentCastConnector:
                 if data and "comparables" in data:
                     raw_comps = data["comparables"]
                     logger.info(f"RentCast: Found {len(raw_comps)} comparables.")
+                    if raw_comps:
+                        logger.info(f"RentCast: First comp keys: {list(raw_comps[0].keys())}")
+                        logger.info(f"RentCast: First comp date fields: lastSaleDate={raw_comps[0].get('lastSaleDate')}, listedDate={raw_comps[0].get('listedDate')}, correlationPrice={raw_comps[0].get('correlationPrice')}")
                     
                     for comp in raw_comps:
                         try:
@@ -57,7 +60,7 @@ class RentCastConnector:
                                 comps_list.append(SalesComparable(
                                     address=comp.get("formattedAddress") or comp.get("addressLine1"),
                                     sale_price=float(price),
-                                    sale_date=comp.get("dateTaken") or comp.get("createdDate"), # Adjust based on actual API field
+                                    sale_date=comp.get("lastSaleDate") or comp.get("listedDate"),
                                     sqft=int(sqft),
                                     price_per_sqft=round(float(price) / float(sqft), 2),
                                     year_built=comp.get("yearBuilt"),

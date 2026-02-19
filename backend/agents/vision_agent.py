@@ -177,42 +177,88 @@ class VisionAgent:
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
 
-    async def analyze_property_condition(self, image_paths: List[str]) -> List[Dict]:
+    async def analyze_property_condition(self, image_paths: List[str], property_data: dict = None) -> List[Dict]:
         """
-        Uses Gemini 1.5 Vision (with OpenAI/Grok fallbacks) to detect physical defects.
+        Uses OpenAI GPT-4o (primary), Gemini (secondary w/ retry), Grok (tertiary)
+        to detect physical defects and estimate depreciation.
         """
         if not image_paths or image_paths[0] == "mock_street_view.jpg":
              logger.info("No valid images for vision analysis.")
              return []
 
-        prompt = """
-        You are a Licensed Property Inspector and Real Estate Appraisal Expert.
-        Analyze the provided Street View images of a residential property to identify physical defects that justify a reduction in taxable value.
+        # Build context-aware prompt with property details
+        prop_value = 0
+        prop_age = "Unknown"
+        prop_sqft = 0
+        prop_type = "residential"
+        if property_data:
+            prop_value = property_data.get('appraised_value', 0) or 0
+            year_built = property_data.get('year_built', 0)
+            if year_built and int(str(year_built)[:4]) > 1900:
+                import datetime
+                prop_age = f"{datetime.datetime.now().year - int(str(year_built)[:4])} years (built {year_built})"
+            prop_sqft = property_data.get('building_area', 0) or 0
+            prop_type = property_data.get('property_type', 'residential')
+
+        prompt = f"""
+        You are a Licensed Texas Property Inspector and Certified Residential Appraiser.
+        Analyze the provided Street View images of a {prop_type} property.
         
-        Categories to inspect:
-        1. Foundation: Visible cracks in slab/skirting, uneven siding, or doors/windows that appear out of square.
-        2. Roofing: Curled or missing shingles, discoloration, sagging ridge lines, or moss/debris buildup.
-        3. Exterior Condition: Peeling paint, rotting wood trim, cracked windows, or damaged siding/brickwork.
-        4. Site Issues: Cracked driveway, overgrown trees impacting the structure, or signs of poor drainage.
+        PROPERTY CONTEXT:
+        - Current Appraised Value: ${prop_value:,.0f}
+        - Age: {prop_age}
+        - Building Area: {prop_sqft:,.0f} sqft
         
-        For each genuine defect identified:
-        - Provide a concise 'issue' name.
-        - A detailed 'description' of what is visible.
-        - A 'severity' level (Low, Medium, High).
-        - An estimated 'deduction' in property value (USD) based on typical repair costs (range $1,000 - $25,000).
-        - A 'confidence' score between 0.0 and 1.0.
-        - Provide bounding box coordinates [ymin, xmin, ymax, xmax] normalized to 1000 for the defect location.
+        Inspect for depreciation under three Texas appraisal categories:
         
-        IMPORTANT: If the images are blurry or the house is obscured by trees, mention that. If no issues are found, return an empty list.
+        1. PHYSICAL DETERIORATION (curable & incurable):
+           - Foundation: Cracks in slab/skirting, settling, uneven surfaces
+           - Roof: Missing/curling shingles, sagging ridge, moss/debris, age-related wear
+           - Exterior: Peeling paint, rotting wood, damaged siding/brick, cracked windows
+           - Driveway/Walkways: Cracks, heaving, deterioration
         
-        Return ONLY a JSON list of objects:
-        [{"issue": "...", "description": "...", "severity": "...", "deduction": 123, "confidence": 0.9, "bbox": [ymin, xmin, ymax, xmax]}]
+        2. FUNCTIONAL OBSOLESCENCE:
+           - Outdated design elements, poor layout indicators, inadequate features
+           - Single-car garage in multi-car neighborhood, no covered entry
+        
+        3. EXTERNAL OBSOLESCENCE:
+           - Power lines/transmission towers, commercial adjacency, busy road
+           - Overgrown neighboring lots, abandoned nearby structures
+           - Drainage issues, flood-prone indicators
+        
+        For each genuine defect identified, provide:
+        - "issue": concise name
+        - "description": detailed observation from the image
+        - "severity": "Low", "Medium", or "High"
+        - "category": "Physical Deterioration", "Functional Obsolescence", or "External Obsolescence"
+        - "deduction": estimated value impact in USD (scale to the ${prop_value:,.0f} property value — e.g. roof replacement ~3-5% of value, foundation ~5-10%, paint ~1-2%)
+        - "confidence": 0.0 to 1.0
+        - "bbox": [ymin, xmin, ymax, xmax] normalized to 1000
+
+        Also include ONE summary object at the END of the list with:
+        - "issue": "CONDITION_SUMMARY"
+        - "condition_score": overall condition 1-10 (10=excellent, 1=condemned)
+        - "effective_age": estimated effective age in years (may differ from actual age based on maintenance)
+        - "total_physical": total physical deterioration deduction
+        - "total_functional": total functional obsolescence deduction
+        - "total_external": total external obsolescence deduction
+        
+        IMPORTANT: Be thorough but honest. Only report defects clearly visible in the images.
+        If images are blurry or obstructed by trees, note that with low confidence scores.
+        If no issues are found, return an empty list.
+        
+        Return ONLY a valid JSON list of objects.
         """
 
-        # 1. Try OpenAI (GPT-4o) - PRIMARY
+        image_paths_existing = [p for p in image_paths if os.path.exists(p)]
+        if not image_paths_existing:
+             logger.info("No valid local images found for analysis.")
+             return []
+
+        # 1. Try OpenAI (GPT-4o) - PRIMARY (best structured image analysis)
         if self.openai_client:
             try:
-                logger.info("Attempting Vision analysis with OpenAI (Primary)...")
+                logger.info("Attempting Vision analysis with OpenAI GPT-4o (Primary)...")
                 messages = [
                     {
                         "role": "user",
@@ -222,54 +268,71 @@ class VisionAgent:
                     }
                 ]
                 
-                # Encode images
                 valid_images = False
-                for p in image_paths:
-                    if os.path.exists(p):
-                        try:
-                            base64_image = self._encode_image(p)
-                            messages[0]["content"].append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                            })
-                            valid_images = True
-                        except Exception as img_err:
-                            logger.error(f"Failed to encode image {p}: {img_err}")
+                for p in image_paths_existing:
+                    try:
+                        base64_image = self._encode_image(p)
+                        messages[0]["content"].append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        })
+                        valid_images = True
+                    except Exception as img_err:
+                        logger.error(f"Failed to encode image {p}: {img_err}")
 
                 if valid_images:
                     response = self.openai_client.chat.completions.create(
                         model="gpt-4o",
                         messages=messages,
-                        max_tokens=1000,
+                        max_tokens=2000,
                         response_format={"type": "json_object"}
                     )
                     content = response.choices[0].message.content
                     
-                    # Parse OpenAI specific JSON format
                     try:
                         data = json.loads(content)
                         if isinstance(data, dict):
-                            if "issues" in data:
-                                return data["issues"]
-                            # If typical wrapper detected, look for list values
+                            if "issues" in data: return data["issues"]
                             for key, value in data.items():
-                                if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict) and "issue" in value[0]:
+                                if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
                                     return value
-                            # fallback if it returns just a list
                             return [] 
                         elif isinstance(data, list):
                             return data
                     except json.JSONDecodeError:
-                        # Fallback to standard parser if json_object wasn't perfect
                         return self._parse_json_response(content)
                         
             except Exception as e:
-                logger.warning(f"OpenAI Vision failed: {e}. Falling back to Grok...")
+                logger.warning(f"OpenAI Vision failed: {e}. Falling back to Gemini...")
 
-        # 2. Try xAI (Grok-2) - SECONDARY
+        # 2. Try Gemini - SECONDARY (with retry for 429s)
+        if self.gemini_client:
+            import time
+            retries = [15, 30]  # Backoff delays in seconds
+            for attempt in range(len(retries) + 1):
+                try:
+                    logger.info(f"Attempting Vision analysis with Gemini (attempt {attempt + 1})...")
+                    imgs = [Image.open(p) for p in image_paths_existing]
+                    if imgs:
+                        response = self.gemini_client.models.generate_content(
+                            model='gemini-2.0-flash', 
+                            contents=[prompt] + imgs
+                        )
+                        return self._parse_json_response(response.text)
+                except Exception as e:
+                    error_str = str(e)
+                    if '429' in error_str and attempt < len(retries):
+                        delay = retries[attempt]
+                        logger.warning(f"Gemini 429 rate limit — retrying in {delay}s (attempt {attempt + 1})...")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"Gemini Vision failed: {e}. Falling back to Grok...")
+                        break
+
+        # 3. Try xAI (Grok-2) - TERTIARY
         if self.xai_client:
             try:
-                logger.info("Attempting Vision analysis with xAI (Grok fallback)...")
+                logger.info("Attempting Vision analysis with xAI Grok (Tertiary)...")
                 messages = [
                     {
                         "role": "user",
@@ -280,44 +343,27 @@ class VisionAgent:
                 ]
                 
                 valid_images = False
-                for p in image_paths:
-                    if os.path.exists(p):
-                        try:
-                            # Grok uses same image format as OpenAI
-                            base64_image = self._encode_image(p)
-                            messages[0]["content"].append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                            })
-                            valid_images = True
-                        except: pass
+                for p in image_paths_existing:
+                    try:
+                        base64_image = self._encode_image(p)
+                        messages[0]["content"].append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        })
+                        valid_images = True
+                    except: pass
 
                 if valid_images:
                     response = self.xai_client.chat.completions.create(
                         model="grok-2-vision-latest",
                         messages=messages,
-                        max_tokens=1000
+                        max_tokens=2000
                     )
                     return self._parse_json_response(response.choices[0].message.content)
             except Exception as e:
-                logger.warning(f"xAI Vision failed: {e}. Falling back to Gemini...")
+                logger.warning(f"xAI Vision failed: {e}.")
 
-        # 3. Try Gemini - TERTIARY
-        if self.gemini_client:
-            try:
-                logger.info("Attempting Vision analysis with Gemini (Final fallback)...")
-                imgs = [Image.open(p) for p in image_paths if os.path.exists(p)]
-                
-                if imgs:
-                    response = self.gemini_client.models.generate_content(
-                        model='gemini-2.0-flash', 
-                        contents=[prompt] + imgs
-                    )
-                    return self._parse_json_response(response.text)
-            except Exception as e:
-                logger.error(f"Gemini Vision failed: {e}")
-
-        logger.error("All Vision providers failed or no keys provided.")
+        logger.error("All Vision providers failed.")
         return []
 
     def _parse_json_response(self, text: str) -> List[Dict]:

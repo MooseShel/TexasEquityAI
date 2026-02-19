@@ -75,23 +75,53 @@ class RealEstateAPIConnector:
                 # Mapping fields - adjusting based on likely JSON keys
                 # address, soldPrice, soldDate, squareFootage, yearBuilt
                 try:
-                    c_addr = comp.get('address', {}).get('deliveryLine', comp.get('address')) # potentially nested
-                    if not c_addr: continue
+                    # Address can be a string or a nested dict
+                    raw_addr = comp.get('address', '')
+                    if isinstance(raw_addr, dict):
+                        # Build clean address from dict fields
+                        street = raw_addr.get('street') or raw_addr.get('deliveryLine') or raw_addr.get('line1') or ''
+                        city = raw_addr.get('city', '')
+                        state = raw_addr.get('state', '')
+                        zip_code = raw_addr.get('zip') or raw_addr.get('zipCode') or ''
+                        c_addr = f"{street}, {city}, {state} {zip_code}".strip().rstrip(',')
+                    else:
+                        c_addr = str(raw_addr)
                     
-                    price = comp.get('soldPrice') or comp.get('price') or 0
-                    date = comp.get('soldDate') or comp.get('date')
-                    sqft = comp.get('squareFootage') or comp.get('buildingSize') or 0
+                    if not c_addr or c_addr.strip() in ('', ','): continue
+                    
+                    # Price — try multiple key names
+                    price = (comp.get('soldPrice') or comp.get('lastSalePrice') or 
+                             comp.get('price') or comp.get('salePrice') or
+                             comp.get('lastSaleAmount') or 0)
+                    try:
+                        price = float(str(price).replace('$', '').replace(',', ''))
+                    except (ValueError, TypeError):
+                        price = 0
+                    
+                    date = comp.get('soldDate') or comp.get('lastSaleDate') or comp.get('date')
+                    
+                    # SqFt — try multiple key names
+                    sqft = (comp.get('squareFootage') or comp.get('buildingSize') or 
+                            comp.get('livingArea') or comp.get('sqft') or
+                            comp.get('buildingArea') or 0)
+                    try:
+                        sqft = int(float(str(sqft).replace(',', '')))
+                    except (ValueError, TypeError):
+                        sqft = 0
                     
                     # Calculate PPS
-                    pps = price / sqft if sqft and sqft > 0 else 0
+                    pps = price / sqft if sqft and sqft > 0 and price > 0 else 0
+                    
+                    # Year built
+                    year = comp.get('yearBuilt') or comp.get('year_built')
                     
                     sales_comps.append(SalesComparable(
-                        address=str(c_addr),
+                        address=c_addr,
                         sale_price=float(price),
                         sale_date=str(date) if date else None,
                         sqft=int(sqft),
                         price_per_sqft=float(pps),
-                        year_built=comp.get('yearBuilt'),
+                        year_built=year,
                         source="RealEstateAPI",
                         dist_from_subject=comp.get('distance')
                     ))
