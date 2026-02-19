@@ -273,14 +273,27 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         connector = DistrictConnectorFactory.get_connector(current_district, current_account)
         original_address = account_number if any(c.isalpha() for c in account_number) else None
 
-        # Use cached data directly if it has real content — skip the scraper entirely
-        if (cached_property
+        # Use cached data directly if it has REAL content — skip the scraper entirely
+        # A valid cache record must have scraped key fields (year_built or neighborhood_code),
+        # not just the old $450k placeholder defaults
+        def is_valid_cache(rec):
+            if not rec:
+                return False
+            has_real_value = rec.get('appraised_value') and rec.get('appraised_value') not in (450000, 0)
+            has_real_area  = rec.get('building_area') and rec.get('building_area') != 2500
+            has_year       = bool(rec.get('year_built'))
+            has_nbhd       = bool(rec.get('neighborhood_code'))
+            # Must have at least one rich field to be considered a real scrape
+            return has_real_value or has_year or has_nbhd or has_real_area
+
+        if (is_valid_cache(cached_property)
                 and cached_property.get('address')
-                and cached_property.get('appraised_value')
                 and not manual_value and not manual_address):
             logger.info(f"Using Supabase cached record for {current_account} — skipping scraper.")
             property_details = cached_property
         else:
+            if cached_property and not is_valid_cache(cached_property):
+                logger.warning(f"Supabase cache for {current_account} looks like a ghost record (appraised={cached_property.get('appraised_value')}, year_built={cached_property.get('year_built')}, nbhd={cached_property.get('neighborhood_code')}) — forcing fresh scrape.")
             property_details = await connector.get_property_details(current_account, address=original_address)
 
         if property_details and property_details.get('account_number'):
