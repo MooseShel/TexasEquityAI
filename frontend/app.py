@@ -525,7 +525,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
             if final_data:
                 status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
                 data = final_data
-                tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Property", "⚖️ Equity", "📸 Vision", "📄 Protest", "⚙️ Data"])
+                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏠 Property", "⚖️ Equity", "💰 Sales Comps", "📸 Vision", "📄 Protest", "⚙️ Data"])
                 with tab1:
                     col1, col2 = st.columns(2)
                     with col1: st.subheader("Details"); st.json(data['property'])
@@ -576,6 +576,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 'year_built': 'Year Built',
                                 'value_per_sqft': '$/Sq Ft',
                                 'similarity_score': 'Similarity',
+                                'neighborhood_code': 'Nbhd Code'
                             }
                             # Only keep columns that exist in the DataFrame
                             cols_to_show = {k: v for k, v in display_cols.items() if k in equity_df.columns}
@@ -600,34 +601,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 hide_index=True
                             )
                         
-                        # ── Sales Comps Table ────────────────────────────────
-                        sales_comps = data['equity'].get('sales_comps', [])
-                        if sales_comps:
-                            st.divider()
-                            st.subheader("💰 Sales Comparable Analysis")
-                            st.caption("Recent sales of similar properties used to determine market value.")
-                            
-                            sales_df = pd.DataFrame(sales_comps)
-                            if not sales_df.empty:
-                                # Rename cols for display
-                                sales_display_cols = {
-                                    'Address': 'Address',
-                                    'Sale Price': 'Sale Price',
-                                    'Sale Date': 'Sale Date',
-                                    'SqFt': 'Sq Ft',
-                                    'Price/SqFt': '$/Sq Ft',
-                                    'Source': 'Source',
-                                    'Distance': 'Distance'
-                                }
-                                # Filter and rename
-                                s_cols_to_show = {k: v for k, v in sales_display_cols.items() if k in sales_df.columns}
-                                sales_display = sales_df[list(s_cols_to_show.keys())].rename(columns=s_cols_to_show)
-                                
-                                st.dataframe(
-                                    sales_display,
-                                    use_container_width=True,
-                                    hide_index=True
-                                )
+
+                        # ── Map View ───────────────────────────────────────── (Moved map logic here if needed, or keep in Equity)
 
                         # ── Map View ─────────────────────────────────────────
                         st.subheader("📍 Comparable Properties Map")
@@ -717,12 +692,44 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             st.info("Map unavailable — could not geocode property addresses.")
 
                 with tab3:
+                    st.subheader("💰 Sales Comparable Analysis")
+                    sales_comps = data['equity'].get('sales_comps', [])
+                    if sales_comps:
+                        sales_df = pd.DataFrame(sales_comps)
+                        if not sales_df.empty:
+                            sales_display_cols = {
+                                'Address': 'Address',
+                                'Sale Price': 'Sale Price',
+                                'Sale Date': 'Sale Date',
+                                'SqFt': 'Sq Ft',
+                                'Price/SqFt': '$/Sq Ft',
+                                'Year Built': 'Year Built',
+                                'Distance': 'Distance',
+                                'Source': 'Source'
+                            }
+                            s_cols_to_show = {k: v for k, v in sales_display_cols.items() if k in sales_df.columns}
+                            sales_display = sales_df[list(s_cols_to_show.keys())].rename(columns=s_cols_to_show)
+                            
+                            # Format
+                            s_fmt = {}
+                            if 'Sale Price' in sales_display.columns: s_fmt['Sale Price'] = '{}' # Already string formatted in backend?
+                            # Backend formats as string: "${...}"
+                            
+                            st.dataframe(
+                                sales_display,
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                    else:
+                        st.warning("No recent sales comparables found for this property.")
+
+                with tab4:
                     st.subheader("Condition")
                     if os.path.exists(data.get('evidence_image_path', '')): st.image(data['evidence_image_path'], width=600)
                     st.write(data.get('vision', []))
-                with tab4:
+                with tab5:
                     st.subheader("Narrative"); st.info(data['narrative'])
                     if os.path.exists(data.get('form_path', '')):
                         with open(data['form_path'], "rb") as f:
                             st.download_button("⬇️ Download PDF", f, file_name="protest.pdf", mime="application/pdf")
-                with tab5: st.json(data)
+                with tab6: st.json(data)

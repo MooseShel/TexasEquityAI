@@ -103,8 +103,8 @@ class HCADFormService:
             # Table Header
             pdf.set_font("Helvetica", 'B', 9)
             pdf.set_fill_color(240, 240, 240)
-            col_widths = [70, 30, 30, 30, 30]
-            headers = ["Comparable Address", "Appraised Val", "Sq Ft", "$/SqFt", "Similarity"]
+            col_widths = [60, 25, 20, 25, 20, 40]
+            headers = ["Address", "Appraised", "Sq Ft", "$/SqFt", "Sim", "Nbhd Code"]
             
             for i, h in enumerate(headers):
                 pdf.cell(col_widths[i], 8, h, 1, 0, 'C', True)
@@ -118,12 +118,14 @@ class HCADFormService:
                 area = comp.get('building_area', 1) # Avoid div by zero if any
                 vps = comp.get('value_per_sqft', val/area if area > 0 else 0)
                 sim = comp.get('similarity_score', 0)
+                nbhd = str(comp.get('neighborhood_code', 'N/A'))
                 
                 pdf.cell(col_widths[0], 8, addr, 1, 0, 'L')
                 pdf.cell(col_widths[1], 8, f"${val:,.0f}", 1, 0, 'C')
                 pdf.cell(col_widths[2], 8, f"{area:,.0f}", 1, 0, 'C')
                 pdf.cell(col_widths[3], 8, f"${vps:.2f}", 1, 0, 'C')
-                pdf.cell(col_widths[4], 8, f"{sim:.2f}", 1, 1, 'C')
+                pdf.cell(col_widths[4], 8, f"{sim:.1f}%", 1, 0, 'C')
+                pdf.cell(col_widths[5], 8, nbhd, 1, 1, 'C')
             
             pdf.ln(10)
             pdf.set_fill_color(255, 240, 240)
@@ -146,8 +148,9 @@ class HCADFormService:
             pdf.set_font("Helvetica", 'B', 9)
             pdf.set_fill_color(240, 240, 240)
             # Address, Price, Date, SqFt, $/SqFt
-            col_widths_sales = [80, 25, 25, 20, 20, 20]
-            headers_sales = ["Address", "Price", "Date", "SqFt", "$/SqFt", "Dist"]
+            # Address, Price, Date, SqFt, $/SqFt, Dist, Source
+            col_widths_sales = [65, 25, 20, 15, 20, 15, 30]
+            headers_sales = ["Address", "Price", "Date", "SqFt", "$/SqFt", "Dist", "Source"]
             
             for i, h in enumerate(headers_sales):
                 pdf.cell(col_widths_sales[i], 8, h, 1, 0, 'C', True)
@@ -169,13 +172,15 @@ class HCADFormService:
                 
                 pps = str(comp.get('Price/SqFt', '0'))
                 dist = str(comp.get('Distance', 'N/A'))
+                src = str(comp.get('Source', 'N/A'))
                 
                 pdf.cell(col_widths_sales[0], 8, addr, 1, 0, 'L')
                 pdf.cell(col_widths_sales[1], 8, f"${price:,.0f}", 1, 0, 'C')
                 pdf.cell(col_widths_sales[2], 8, date[:10], 1, 0, 'C')
                 pdf.cell(col_widths_sales[3], 8, f"{sqft:,.0f}", 1, 0, 'C')
                 pdf.cell(col_widths_sales[4], 8, pps, 1, 0, 'C')
-                pdf.cell(col_widths_sales[5], 8, dist, 1, 1, 'C')
+                pdf.cell(col_widths_sales[5], 8, dist, 1, 0, 'C')
+                pdf.cell(col_widths_sales[6], 8, src, 1, 1, 'C')
             
             pdf.ln(5)
             # Calculate Average PPS for context
