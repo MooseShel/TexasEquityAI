@@ -37,7 +37,20 @@ class TCADConnector(AppraisalDistrictConnector):
     async def get_property_details(self, account_number: str, address: Optional[str] = None) -> Dict:
         """
         Scrapes property details from TCAD given an account number (PROP_ID).
+        Step 0: Check Supabase bulk-data first — instant lookup, no browser needed.
+        Step 1: Fall back to Playwright scraping if not in DB.
         """
+        # 0. Supabase bulk-data lookup (works on cloud, no browser)
+        try:
+            from backend.db.supabase_client import supabase_service
+            cached = await supabase_service.get_property_by_account(account_number)
+            if cached and cached.get('address') and cached.get('district') == 'TCAD':
+                logger.info(f"TCAD: Returning bulk-data record for {account_number} (no scraping needed).")
+                return cached
+        except Exception as e:
+            logger.warning(f"TCAD: Supabase bulk lookup failed: {e}")
+
+        # 1. Playwright scraping fallback
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
@@ -76,6 +89,7 @@ class TCADConnector(AppraisalDistrictConnector):
                     else:
                         logger.warning("TCAD: No result link found")
                         return {}
+
 
                 # 2. Extract Details
                 details = {}
@@ -150,8 +164,18 @@ class TCADConnector(AppraisalDistrictConnector):
                     details['neighborhood_code'] = nbhd_match.group(1)
 
                 details['district'] = "TCAD"
-                
+
+                # Write-back to Supabase so next lookup is instant (self-healing cache)
+                try:
+                    from backend.db.supabase_client import supabase_service
+                    cache_record = {k: v for k, v in details.items() if v is not None}
+                    await supabase_service.upsert_property(cache_record)
+                    logger.info(f"TCAD: Cached scraped data for {account_number} to Supabase.")
+                except Exception as e:
+                    logger.warning(f"TCAD: Failed to cache scraped data: {e}")
+
                 return details
+
 
             except Exception as e:
                 logger.error(f"TCAD: Error scraping details: {e}")
