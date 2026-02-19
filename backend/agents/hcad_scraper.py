@@ -41,8 +41,16 @@ class HCADScraper(AppraisalDistrictConnector):
             from backend.db.supabase_client import supabase_service
             cached = await supabase_service.get_property_by_account(account_number)
             if cached and cached.get('address') and cached.get('district') == 'HCAD':
-                logger.info(f"HCAD: Returning bulk-data record for {account_number} (no scraping needed).")
-                return cached
+                # Only trust this cache if it has real scraped fields — not a ghost/placeholder record
+                has_real_value = cached.get('appraised_value') and cached.get('appraised_value') not in (450000, 0)
+                has_real_area  = cached.get('building_area') and cached.get('building_area') != 2500
+                has_year       = bool(cached.get('year_built'))
+                has_nbhd       = bool(cached.get('neighborhood_code'))
+                if has_real_value or has_year or has_nbhd or has_real_area:
+                    logger.info(f"HCAD: Returning bulk-data record for {account_number} (no scraping needed).")
+                    return cached
+                else:
+                    logger.warning(f"HCAD: Supabase record for {account_number} looks like a ghost/placeholder (appraised={cached.get('appraised_value')}, year={cached.get('year_built')}) — skipping cache, forcing scrape.")
         except Exception as e:
             logger.warning(f"HCAD: Supabase bulk lookup failed: {e}")
 
