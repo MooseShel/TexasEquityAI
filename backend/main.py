@@ -209,13 +209,10 @@ async def get_full_protest(
                              # Also update the db immediately? proper upsert later handles it.
                         property_details = cached_property
                     else:
-                        property_details = {
-                            "account_number": current_account,
-                            "address": f"{current_account}, {district_city}",
-                            "appraised_value": 450000,
-                            "building_area": 2500,
-                            "district": current_district
-                        }
+                        # Scraper returned no data — don't fabricate values, surface an error
+                        logger.error(f"Scraper returned no property details for account {current_account}.")
+                        yield json.dumps({"error": f"Could not retrieve property details for account '{current_account}' from the appraisal district portal. Please verify the account number or use the Manual Override fields to enter values directly."}) + "\n"
+                        return
             
             # AGGRESSIVE CLEANING
             raw_addr = property_details.get('address', '')
@@ -266,13 +263,12 @@ async def get_full_protest(
                         market_value = market_data['sale_price']
                     
                     if not market_value or market_value == 0:
-                        market_value = await bridge.get_estimated_market_value(450000, prop_address)
+                        market_value = await bridge.get_estimated_market_value(
+                            property_details.get('appraised_value', 0), prop_address
+                        )
                 except:
-                    if not market_value or market_value == 0: 
-                        market_value = 1961533 if "Lamonte" in prop_address else 450000
-                
-                if "Lamonte" in prop_address and market_value < 1000000:
-                    market_value = 1961533
+                    if not market_value or market_value == 0:
+                        market_value = property_details.get('appraised_value', 0)
             
             # 3b. Permit Analysis (Subject Property)
             subject_permits = []

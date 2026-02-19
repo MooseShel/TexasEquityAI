@@ -286,13 +286,11 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         if property_details and property_details.get('account_number'):
             current_account = property_details.get('account_number')
         if not property_details:
-             property_details = cached_property or {
-                "account_number": current_account,
-                "address": f"{current_account}, Texas",
-                "appraised_value": manual_value or 450000,
-                "building_area": manual_area or 2500,
-                "district": current_district
-            }
+            if cached_property:
+                property_details = cached_property
+            else:
+                yield {"error": f"Could not retrieve property details for '{current_account}' from the appraisal district portal. Please verify the account number or address, or use the Manual Override fields to enter values directly."}
+                return
         raw_addr = property_details.get('address', '')
         district_context = property_details.get('district', 'HCAD')
         property_details['address'] = normalize_address(raw_addr, district_context)
@@ -329,7 +327,9 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 if market_data and market_data.get('sale_price'):
                     market_value = market_data['sale_price']
                 if not market_value:
-                    market_value = await agents["bridge"].get_estimated_market_value(property_details.get('appraised_value', 450000), prop_address)
+                    market_value = await agents["bridge"].get_estimated_market_value(
+                        property_details.get('appraised_value', 0), prop_address
+                    )
             except: pass
         subject_permits = await agents["permit_agent"].get_property_permits(prop_address)
         permit_summary = agents["permit_agent"].analyze_permits(subject_permits)
