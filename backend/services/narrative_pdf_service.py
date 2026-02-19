@@ -8,22 +8,37 @@ import logging
 import re
 
 def clean_text(text: str) -> str:
-    """Replace non-latin-1 characters like smart quotes with ASCII equivalents."""
+    """Replace non-latin-1 characters with ASCII equivalents, preserving spaces."""
     if not text:
         return ""
-    # Very aggressive replacement for common Unicode hurdles
     replacements = {
+        # Smart quotes
         "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
         "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
+        # Dashes
         "\u2013": "-", "\u2014": "-", "\u2015": "-",
+        # Other punctuation
         "\u2026": "...", "\u2022": "*", "\u00b7": "*",
-        "\u00a7": "Sect.", "\u00a9": "(C)", "\u00ae": "(R)", "\u2122": "(TM)"
+        "\u00a7": "Sect.", "\u00a9": "(C)", "\u00ae": "(R)", "\u2122": "(TM)",
+        # Unicode spaces — must be replaced with a regular space BEFORE ascii encode
+        # otherwise words get squashed together
+        "\u00a0": " ",   # non-breaking space
+        "\u2009": " ",   # thin space
+        "\u200a": " ",   # hair space
+        "\u2002": " ",   # en space
+        "\u2003": " ",   # em space
+        "\u202f": " ",   # narrow no-break space
+        "\u205f": " ",   # medium mathematical space
+        "\u3000": " ",   # ideographic space
+        "\u200b": "",    # zero-width space (just drop it)
+        "\u200c": "",    # zero-width non-joiner
+        "\u200d": "",    # zero-width joiner
+        "\ufeff": "",    # BOM
     }
     for char, replacement in replacements.items():
         text = text.replace(char, replacement)
-    
-    # Final safety: encode to ASCII and ignore errors to be 100% sure for basic FPDF
-    return text.encode('ascii', 'ignore').decode('ascii')
+    # Final safety: encode to latin-1 range (not strict ASCII) to handle accented chars
+    return text.encode('latin-1', 'replace').decode('latin-1')
 
 logger = logging.getLogger(__name__)
 
@@ -97,16 +112,16 @@ class NarrativeAgent:
         - Average Sale Price per SqFt: ${avg_sale_pps}
         - Sales Comps Detail: {sales_comps_detail}
         
-        Evidence 3: Condition & Location Issues (Physical Depreciation)
-        - Condition Score: {condition_score}/10
-        - Effective Age: {effective_age} years
-        - Identified Issues (with severity and estimated deduction):
+        Evidence 3: Condition & Location Issues (Physical Depreciation - Texas §23.013)
+        - Condition Score: {condition_score}/10 (10=excellent, 1=condemned)
+        - Effective Age Estimate: {effective_age} years
+        - Identified Issues (name, severity, estimated deduction):
           {issues_detail}
-        - Depreciation Breakdown:
+        - Category Totals:
           Physical Deterioration: ${total_physical}
           Functional Obsolescence: ${total_functional}
           External Obsolescence: ${total_external}
-        - Total Condition Deduction: ${total_deduction}
+          TOTAL DEDUCTION: ${total_deduction}
         
         Evidence 4: Comparative Permit History
         - Subject Renovation Status: {subject_permits}
@@ -119,15 +134,24 @@ class NarrativeAgent:
         SALES SITUATION: {sales_situation}
         
         The narrative MUST cite applicable Texas Tax Code sections:
-        - Texas Tax Code §41.43(b)(1) — Unequal Appraisal: The appraised value exceeds the median appraised value of comparable properties.
-        - Texas Tax Code §41.43(b)(3) — Market Value: The appraised value exceeds the property's market value as indicated by recent comparable sales.
-        - Texas Tax Code §23.01 — Appraisal Methods: Market value must be determined by the application of generally accepted appraisal methods, including the sales comparison approach.
+        - Texas Tax Code Sect.41.43(b)(1) - Unequal Appraisal
+        - Texas Tax Code Sect.41.43(b)(3) - Market Value
+        - Texas Tax Code Sect.23.01 - Appraisal Methods
         
         Structure it professionally for an Appraisal Review Board (ARB) hearing.
         {equity_argument}
         {sales_argument}
-        Use the Flood Risk and Permit lack-of-renovation to argue for additional 'External Obsolescence' and 'Physical Depreciation' adjustments where applicable.
-        IMPORTANT: Only argue positions that are supported by the data above. Do NOT claim the appraised value exceeds comparable values if the justified value is higher than the appraised value.
+        
+        For Evidence 3 (Condition): 
+        - If issues_detail is NOT "None identified", name each issue explicitly with its deduction amount.
+        - If issues_detail IS "None identified", write ONE sentence acknowledging no exterior defects were visible from street-level imagery. Do NOT pad this section with generic text.
+        
+        CRITICAL FORMATTING RULES:
+        - Write all dollar values as plain text (e.g. "$1,961,533" not "$1,961,533surpasses...").
+        - DO NOT use LaTeX, markdown math, or any special formatting for numbers.
+        - Use normal prose with standard punctuation. Do not join words together.
+        - Write plain paragraphs. No special characters or Unicode math symbols.
+        IMPORTANT: Only argue positions supported by data. Do NOT claim over-assessment if the justified value is higher than the appraised value.
         """
         
         prompt = PromptTemplate.from_template(prompt_template)
