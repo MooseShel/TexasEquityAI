@@ -223,6 +223,37 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         detected_district = DistrictConnectorFactory.detect_district_from_account(current_account)
         if detected_district and detected_district != current_district:
             current_district = detected_district
+
+        # 0c. Global DB Lookup (Layer 2)
+        # Check if account exists in another district
+        try:
+            db_record = await supabase_service.get_property_by_account(current_account)
+            if db_record and db_record.get('district'):
+                db_dist = db_record.get('district')
+                if current_district and db_dist != current_district:
+                    current_district = db_dist
+                    # yield {"warning": f"📍 Auto-corrected district to **{db_dist}** (found in database)."}
+        except Exception: pass
+
+        # 0d. Global Address Lookup (Layer 2.5)
+        # If input is address-like and we haven't found a definitive district match yet
+        if any(c.isalpha() for c in current_account) and not detected_district:
+            try:
+                candidates = await supabase_service.search_address_globally(current_account)
+                if candidates:
+                    best = candidates[0]
+                    if best.get('district') and best.get('account_number'):
+                        new_dist = best['district']
+                        new_acc = best['account_number']
+                        
+                        if new_dist != current_district:
+                            current_district = new_dist
+                            # Warning for the user
+                            yield {"warning": f"📍 Ambiguous address found in **{new_dist}**. Switched search to {new_dist} (Account #{new_acc})."}
+                        
+                        current_account = new_acc
+            except Exception: pass
+
         yield {"status": f"⛏️ Data Mining Agent: Scraping {current_district or 'District'} records..."}
         cached_property = await supabase_service.get_property_by_account(current_account)
         connector = DistrictConnectorFactory.get_connector(current_district, current_account)
@@ -481,6 +512,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     force_fresh_comps=force_fresh_comps
                 ):
                     if "status" in chunk: st.write(chunk["status"])
+                    if "warning" in chunk: st.warning(chunk["warning"], icon="⚠️")
                     if "error" in chunk:
                         st.error(chunk["error"])
                         status.update(label="❌ Generation Failed", state="error", expanded=True)

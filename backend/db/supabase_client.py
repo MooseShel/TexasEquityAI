@@ -124,4 +124,30 @@ class SupabaseService:
             return []
 
 # Singleton instance
+    async def search_address_globally(self, address_query: str, limit: int = 5) -> list:
+        """
+        Search for properties by address across ALL districts.
+        Useful when user input is ambiguous (e.g. "123 Main St" without City/Zip).
+        """
+        if not self.client or not address_query: return []
+        
+        # Basic cleaning to help ILIKE match better
+        clean_q = "".join(c for c in address_query if c.isalnum() or c.isspace()).strip()
+        if len(clean_q) < 4: return []
+        
+        try:
+            # Use ILIKE for case-insensitive partial match
+            # This is fast enough on indexed 'address' column for prefix searches
+            # For "123 Main", we might get multiple, but usually user types full street
+            response = self.client.table("properties") \
+                .select("account_number, address, district, appraised_value") \
+                .ilike("address", f"%{clean_q}%") \
+                .limit(limit) \
+                .execute()
+            return response.data or []
+        except Exception as e:
+            logger.warning(f"search_address_globally failed: {e}")
+            return []
+
+# Singleton instance
 supabase_service = SupabaseService()

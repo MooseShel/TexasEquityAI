@@ -18,3 +18,12 @@ debug/
 # Large Binary Files
 *.pt
 yolov8n.pt
+
+# Bulk Data Directories
+TCAD_DATA/
+DCAD2025/
+CCAD_DATA/
+TAD_DATA/
+hcad_downloads/
+*.zip
+*.csv

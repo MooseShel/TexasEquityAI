@@ -124,6 +124,30 @@ async def get_full_protest(
             except Exception as e:
                 logger.warning(f"Global DB lookup failed during district check: {e}")
 
+            # 0d. Global Address Lookup (Layer 2.5)
+            # If input looks like an address but we aren't sure of district (e.g. "123 Main St"),
+            # search ALL districts. This turns "123 Main St" into "Account 123456" + "TCAD" instantly.
+            if any(c.isalpha() for c in current_account) and not detected_district:
+                try:
+                    candidates = await supabase_service.search_address_globally(current_account)
+                    if candidates:
+                        # Pick best match (first result is usually best match from ILIKE)
+                        best = candidates[0]
+                        if best.get('district') and best.get('account_number'):
+                            new_dist = best['district']
+                            new_acc = best['account_number']
+                            logger.info(f"Global Address Match: '{current_account}' -> {new_dist} Account #{new_acc} ({best['address']})")
+                            
+                            if new_dist != current_district:
+                                logger.info(f"Address-Correcting district from {current_district} to {new_dist}")
+                                current_district = new_dist
+                            
+                            # CRITICAL: Switch to the real account number!
+                            # This allows the next step (get_property_by_account) to hit the DB cache instantly.
+                            current_account = new_acc
+                except Exception as e:
+                    logger.warning(f"Global Address Lookup failed: {e}")
+
 
             yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping HCAD records and history..."}) + "\n"
             
