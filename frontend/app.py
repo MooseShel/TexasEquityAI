@@ -599,6 +599,35 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 use_container_width=True,
                                 hide_index=True
                             )
+                        
+                        # ── Sales Comps Table ────────────────────────────────
+                        sales_comps = data['equity'].get('sales_comps', [])
+                        if sales_comps:
+                            st.divider()
+                            st.subheader("💰 Sales Comparable Analysis")
+                            st.caption("Recent sales of similar properties used to determine market value.")
+                            
+                            sales_df = pd.DataFrame(sales_comps)
+                            if not sales_df.empty:
+                                # Rename cols for display
+                                sales_display_cols = {
+                                    'Address': 'Address',
+                                    'Sale Price': 'Sale Price',
+                                    'Sale Date': 'Sale Date',
+                                    'SqFt': 'Sq Ft',
+                                    'Price/SqFt': '$/Sq Ft',
+                                    'Source': 'Source',
+                                    'Distance': 'Distance'
+                                }
+                                # Filter and rename
+                                s_cols_to_show = {k: v for k, v in sales_display_cols.items() if k in sales_df.columns}
+                                sales_display = sales_df[list(s_cols_to_show.keys())].rename(columns=s_cols_to_show)
+                                
+                                st.dataframe(
+                                    sales_display,
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
 
                         # ── Map View ─────────────────────────────────────────
                         st.subheader("📍 Comparable Properties Map")

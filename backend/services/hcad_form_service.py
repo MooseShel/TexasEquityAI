@@ -132,6 +132,61 @@ class HCADFormService:
             justified_val = equity_data.get('justified_value_floor', 0)
             pdf.cell(60, 10, f"${justified_val:,.0f}", 1, 1, 'C', True)
 
+        # --- PAGE 3b: SALES COMPARABLES GRID ---
+        sales_comps = equity_data.get('sales_comps', []) if equity_data else []
+        if sales_comps:
+            pdf.add_page()
+            pdf.set_font("Helvetica", 'B', 14)
+            pdf.cell(0, 10, "SALES COMPARABLE ANALYSIS", ln=True, align='C')
+            pdf.set_font("Helvetica", '', 10)
+            pdf.cell(0, 8, "Recent sales of similar properties in the vicinity.", ln=True, align='C')
+            pdf.ln(5)
+            
+            # Table Header
+            pdf.set_font("Helvetica", 'B', 9)
+            pdf.set_fill_color(240, 240, 240)
+            # Address, Price, Date, SqFt, $/SqFt
+            col_widths_sales = [80, 25, 25, 20, 20, 20]
+            headers_sales = ["Address", "Price", "Date", "SqFt", "$/SqFt", "Dist"]
+            
+            for i, h in enumerate(headers_sales):
+                pdf.cell(col_widths_sales[i], 8, h, 1, 0, 'C', True)
+            pdf.ln()
+
+            # Table Rows
+            pdf.set_font("Helvetica", size=9)
+            for comp in sales_comps:
+                # Handle possible key variations from SalesComparable model or dict
+                addr = clean_text(comp.get('Address', 'N/A'))
+                price_str = str(comp.get('Sale Price', '0')).replace('$','').replace(',','')
+                try: price = float(price_str)
+                except: price = 0
+                
+                date = str(comp.get('Sale Date', 'N/A'))
+                sqft_str = str(comp.get('SqFt', '0')).replace(',','')
+                try: sqft = float(sqft_str)
+                except: sqft = 0
+                
+                pps = str(comp.get('Price/SqFt', '0'))
+                dist = str(comp.get('Distance', 'N/A'))
+                
+                pdf.cell(col_widths_sales[0], 8, addr, 1, 0, 'L')
+                pdf.cell(col_widths_sales[1], 8, f"${price:,.0f}", 1, 0, 'C')
+                pdf.cell(col_widths_sales[2], 8, date[:10], 1, 0, 'C')
+                pdf.cell(col_widths_sales[3], 8, f"{sqft:,.0f}", 1, 0, 'C')
+                pdf.cell(col_widths_sales[4], 8, pps, 1, 0, 'C')
+                pdf.cell(col_widths_sales[5], 8, dist, 1, 1, 'C')
+            
+            pdf.ln(5)
+            # Calculate Average PPS for context
+            try:
+                valid_pps = [float(str(c.get('Price/SqFt','0')).replace('$','')) for c in sales_comps if c.get('Price/SqFt')]
+                if valid_pps:
+                    avg_pps = sum(valid_pps) / len(valid_pps)
+                    pdf.set_font("Helvetica", 'B', 10)
+                    pdf.cell(0, 10, f"Average Sales Price per SqFt: ${avg_pps:.2f}", ln=True, align='R')
+            except: pass
+
         # --- PAGE 4: PHOTOGRAPHIC EVIDENCE ---
         pdf.add_page()
         pdf.set_font("Helvetica", 'B', 12)

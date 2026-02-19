@@ -126,3 +126,19 @@ class EquityAgent:
             'justified_value_floor': justified_value_floor,
             'subject_value_per_sqft': subj_val / subj_area
         }
+
+    def get_sales_analysis(self, subject_property: Dict) -> Dict:
+        """
+        Uses SalesAgent to get Sales Comparables Table.
+        """
+        try:
+            from backend.agents.sales_agent import SalesAgent
+            agent = SalesAgent()
+            comps = agent.find_sales_comps(subject_property)
+            return {
+                "sales_comps": comps,
+                "sales_count": len(comps)
+            }
+        except Exception as e:
+            logger.error(f"Sales Analysis Failed: {e}")
+            return {"sales_comps": [], "sales_count": 0, "error": str(e)}

@@ -362,6 +362,12 @@ async def get_full_protest(
 
                 equity_results = equity_engine.find_equity_5(property_details, real_neighborhood)
                 
+                # 4a. Sales Comparison Analysis
+                sales_results = equity_engine.get_sales_analysis(property_details)
+                if sales_results:
+                    equity_results['sales_comps'] = sales_results.get('sales_comps', [])
+                    equity_results['sales_count'] = sales_results.get('sales_count', 0)
+                
                 # 4b. Comparative Permit Analysis
                 comp_renovations = await permit_agent.summarize_comp_renovations(equity_results.get('equity_5', []))
                 property_details['comp_renovations'] = comp_renovations
