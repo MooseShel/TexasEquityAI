@@ -12,8 +12,9 @@ outputs/
 *.png
 *.json
 *.log
-# Allow requirements.txt explicitly
+# Allow Streamlit Cloud config files explicitly
 !requirements.txt
+!packages.txt
 debug/
 
 # Large Binary Files
