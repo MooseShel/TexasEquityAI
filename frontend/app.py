@@ -574,7 +574,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                     yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old)."}
 
 
-            def _detect_commercial(prop: Dict) -> bool:
+            def _detect_commercial(prop: dict) -> bool:
                 """Detect commercial property from property_type string OR HCAD state class codes."""
                 pt = str(prop.get('property_type', '') or '').lower().strip()
 
