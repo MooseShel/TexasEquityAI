@@ -814,9 +814,11 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 comp_images=comp_images  # AI Comp Photo Comparison data
             )
             logger.info(f"Professional Protest Packet generated: {combined_path}")
+            pdf_error = None
         except Exception as e:
             logger.error(f"Unified PDF generation failed: {e}")
             combined_path = None
+            pdf_error = str(e)
         
         # ── Data Persistence for QR Code (Enhancement #10) ────────────────────
         try:
@@ -839,6 +841,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         yield {"data": {
             "property": property_details, "market_value": market_value, "equity": equity_results,
             "vision": vision_detections, "narrative": narrative, "combined_pdf_path": combined_path,
+            "pdf_error": pdf_error,
             "evidence_image_path": image_path,
             "all_image_paths": annotated_paths
         }}
@@ -1394,15 +1397,18 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     st.subheader("Narrative")
                     st.info(data['narrative'])
                     pdf_path = data.get('combined_pdf_path', '')
+                    pdf_error = data.get('pdf_error')
                     if pdf_path and os.path.exists(pdf_path):
                         with open(pdf_path, "rb") as f:
                             st.download_button(
                                 "📥 Download Complete Protest Packet",
-                                f,
+                                f.read(),
                                 file_name=f"ProtestPacket_{data['property'].get('account_number', 'unknown')}.pdf",
                                 mime="application/pdf",
                                 type="primary"
                             )
+                    elif pdf_error:
+                        st.error(f"❌ PDF Generation Failed: {pdf_error}")
                     else:
                         st.warning(f"⚠️ Protest PDF not found. (Path: {pdf_path or 'None'})")
                         st.caption("Please check the logs or try regenerating the packet.")
