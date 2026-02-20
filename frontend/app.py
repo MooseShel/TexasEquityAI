@@ -856,9 +856,9 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 "market_value": market_value,
                 "status": "complete"
             }
-            await supabase_service.save_protest(protest_record)
-            if equity_results.get('equity_5'):
-                 await supabase_service.save_equity_comps(current_account, equity_results.get('equity_5'))
+            saved = await supabase_service.save_protest(protest_record)
+            if saved and equity_results.get('equity_5'):
+                 await supabase_service.save_equity_comps(saved.get('id', current_account), equity_results.get('equity_5'))
             logger.info(f"Saved protest record for {current_account} to Supabase.")
         except Exception as db_err:
             logger.error(f"Failed to save protest record to DB: {db_err}")
