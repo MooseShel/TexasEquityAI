@@ -842,14 +842,17 @@ class PDFService:
                 # Adjustment rows (simplified for sales — compute basic adjustments)
                 from backend.services.valuation_service import valuation_service
                 for sc_i, sc in enumerate(sp_comps):
-                    sc_dict = sc if isinstance(sc, dict) else {
-                        'building_area': sc_areas[sc_i],
-                        'appraised_value': sc_prices[sc_i],
+                    # Build a normalized comp dict for valuation_service (maps API keys → internal keys)
+                    sc_normalized = {
+                        'building_area': sc_areas[sc_i] or self._parse_val(sc_get(sc, 'SqFt', sc_get(sc, 'sqft', 0))),
+                        'appraised_value': sc_prices[sc_i] or self._parse_val(sc_get(sc, 'Sale Price', sc_get(sc, 'sale_price', 0))),
                         'year_built': sc_get(sc, 'Year Built', sc_get(sc, 'year_built', '')),
-                        'building_grade': property_data.get('building_grade', 'B-'),
+                        'building_grade': sc_get(sc, 'Grade', sc_get(sc, 'building_grade', property_data.get('building_grade', 'B-'))),
+                        'land_value': self._parse_val(sc_get(sc, 'land_value', 0)),
+                        'neighborhood_code': sc_get(sc, 'neighborhood_code', nbhd),
                     }
-                    if 'adjustments' not in sc_dict:
-                        adj = valuation_service.calculate_adjustments(property_data, sc_dict)
+                    if 'adjustments' not in (sc if isinstance(sc, dict) else {}):
+                        adj = valuation_service.calculate_adjustments(property_data, sc_normalized)
                         if isinstance(sc, dict):
                             sc['adjustments'] = adj
                         else:
@@ -1219,6 +1222,9 @@ class PDFService:
             for ci, (comp_key, img_path) in enumerate(comp_entries[:6]):
                 if not os.path.exists(img_path):
                     continue
+                
+                # Extract condition text
+                condition_text = comp_images.get(f"{comp_key}_condition", "Condition assessment unavailable.")
                 
                 # Grid layout constants
                 col = ci % 2
