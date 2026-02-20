@@ -1218,7 +1218,11 @@ class PDFService:
                 pdf.set_xy(105, pdf.get_y())
                 pdf.set_font("Arial", '', 8)
                 subj_condition = comp_images.get('subject_condition', 'Good condition - No major defects detected')
-                pdf.multi_cell(95, 5, clean_text(f"AI Assessment: {subj_condition}"))
+                # Truncate cleanly with ellipsis so text doesn't overflow the column
+                subj_text = clean_text(f"AI Assessment: {subj_condition}")
+                if len(subj_text) > 320:
+                    subj_text = subj_text[:317] + "..."
+                pdf.multi_cell(95, 5, subj_text)
                 pdf.set_y(max(pdf.get_y(), pdf.get_y()) + 5)
 
             # Comp images (2 per row)
@@ -1265,10 +1269,15 @@ class PDFService:
                 except:
                     pass
 
-                # 3. Condition text — placed at fixed offset below image
+                # 3. Condition text — sized to fit exactly within the allocated row height
+                # Row height = 80, image ends at +57, text area = ~22mm, line_h=3.5 => ~6 lines
+                # At Arial 6.5pt in 90mm width, ~22 chars/line × 6 lines ≈ 130 chars max
                 pdf.set_xy(x_offset, current_y + 58)
                 pdf.set_font("Arial", '', 6.5)
-                pdf.multi_cell(90, 3.5, clean_text(f"AI Assessment: {condition_text}")[:220])
+                raw_assessment = clean_text(f"AI Assessment: {condition_text}")
+                if len(raw_assessment) > 130:
+                    raw_assessment = raw_assessment[:127] + "..."
+                pdf.multi_cell(90, 3.5, raw_assessment)
 
             # Move past the last row
             pdf.set_y(row_start_y + row_height + 5)
