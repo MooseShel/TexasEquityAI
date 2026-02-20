@@ -628,7 +628,9 @@ class PDFService:
 
         # (Equity grids and map moved to appendix — see end of document)
 
-        # Pre-compute remodel label for use in sales and equity grids
+        # Pre-compute labels for use in both sales and equity grids
+        subj_grade_disp = str(property_data.get('building_grade', 'N/A'))
+        subj_year_built = str(property_data.get('year_built', ''))
         remodel_label = "New/Rebuilt" if property_data.get('year_built') and int(str(property_data.get('year_built'))[:4]) >= (datetime.datetime.now().year - 5) else str(property_data.get('year_built', ''))
 
 
