@@ -963,6 +963,11 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
 
                         equity_df = pd.DataFrame(data['equity'].get('equity_5', []))
                         if not equity_df.empty:
+                            # Ensure property_type column exists (Supabase omits null keys)
+                            if 'property_type' not in equity_df.columns:
+                                equity_df['property_type'] = 'Residential'
+                            else:
+                                equity_df['property_type'] = equity_df['property_type'].fillna('Residential')
                             # Select and rename display columns
                             display_cols = {
                                 'address': 'Address',
