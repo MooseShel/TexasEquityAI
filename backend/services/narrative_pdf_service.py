@@ -186,7 +186,6 @@ class PDFService:
         
         pdf.set_font("Arial", 'B', 12)
         pdf.set_text_color(30, 41, 59)
-        pdf.cell(10) # Indent
         pdf.cell(0, 8, "1. The AI Squad: Multi-Agent Intelligence", ln=True)
         
         pdf.set_font("Arial", '', 9)
@@ -1405,13 +1404,10 @@ class PDFService:
             # Argument callout
             if not has_renos:
                 pdf.set_fill_color(239, 246, 255)
-                pdf.rect(15, pdf.get_y(), 180, 20, 'F')
-                pdf.set_xy(20, pdf.get_y() + 3)
                 pdf.set_font("Arial", 'B', 8)
-                pdf.cell(0, 5, "Deferred Maintenance Argument (TC 23.01)", ln=True)
-                pdf.set_x(20)
+                pdf.cell(0, 7, "  Deferred Maintenance Argument (TC 23.01)", ln=True, fill=True)
                 pdf.set_font("Arial", '', 7)
-                pdf.multi_cell(165, 4, clean_text(
+                pdf.multi_cell(0, 4, clean_text(
                     "City permit records show no major renovations or improvements filed for this property. "
                     "The absence of documented upgrades, combined with the property's age, supports a "
                     "deferred-maintenance depreciation model. The district's valuation may not adequately "
