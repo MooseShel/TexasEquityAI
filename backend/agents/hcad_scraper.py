@@ -82,8 +82,41 @@ class HCADScraper(AppraisalDistrictConnector):
                 logger.warning(f"HCAD: Failed to cache scraped data: {e}")
             return details
 
-        # 2. Fallback: Discovery (Manual Mapping)
-        logger.warning(f"New Portal flow failed. Trying Discovery fallback for {account_number}")
+        # 2. Fallback: Discovery via Street Search (if address is known)
+        # If primary scrape failed but we have an address (e.g. from manual input or global DB),
+        # try to find the property by searching its street.
+        if not details and address:
+            logger.info(f"HCAD: Primary lookup failed. Attempting fallback discovery for address: {address}")
+            try:
+                # Extract street name from address
+                import re
+                # Simple logic: remove house number, get street
+                street_search = address
+                match = re.search(r'^\d+\s+(.*)', address)
+                if match:
+                    street_search = match.group(1).strip()
+                
+                logger.info(f"HCAD: Discovery fallback searching for neighbors on '{street_search}'")
+                neighbors = await self.get_neighbors_by_street(street_search)
+                
+                # Look for our account or address in the results
+                target_clean = account_number.strip().replace('-', '')
+                for n in neighbors:
+                    if n.get('account_number') == target_clean:
+                        logger.info(f"HCAD: Discovery found target account {account_number} in street results!")
+                        # We found basic info (address, maybe owner) from the table
+                        # We can try to promote this to a full record or just return what we have
+                        return {
+                            "account_number": account_number,
+                            "address": n.get('address', address),
+                            "district": "HCAD",
+                            "fallback_method": "street_discovery"
+                        }
+            except Exception as e:
+                logger.warning(f"HCAD: Discovery fallback failed: {e}")
+
+        # 3. Final Fallback: Manual Mapping (Last Resort)
+        logger.warning(f"New Portal flow failed. Trying hardcoded Discovery fallback for {account_number}")
         address_fallback = await self._discover_address(account_number)
         if address_fallback:
             return {

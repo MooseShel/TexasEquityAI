@@ -127,9 +127,13 @@ class EquityAgent:
         adj_values = []
         
         for comp in equity_5_list:
-            adjustments = valuation_service.calculate_adjustments(subject_property, comp)
-            comp['adjustments'] = adjustments
-            adj_values.append(adjustments['adjusted_value'])
+            try:
+                adjustments = valuation_service.calculate_adjustments(subject_property, comp)
+                comp['adjustments'] = adjustments
+                adj_values.append(adjustments['adjusted_value'])
+            except Exception as e:
+                logger.warning(f"Adjustment calc failed for comp {comp.get('account_number')}: {e}")
+                comp['adjustments'] = {}
         
         # New Justified Value Floor = Median of adjusted total values
         if adj_values:
@@ -138,10 +142,15 @@ class EquityAgent:
         else:
             justified_value_floor = subj_val
 
+        # Safe calc for subject PPS
+        subj_pps = 0
+        if subj_area and subj_area > 0:
+            subj_pps = subj_val / subj_area
+
         return {
             'equity_5': equity_5_list,
             'justified_value_floor': justified_value_floor,
-            'subject_value_per_sqft': subj_val / subj_area
+            'subject_value_per_sqft': subj_pps
         }
 
     def get_sales_analysis(self, subject_property: Dict) -> Dict:
