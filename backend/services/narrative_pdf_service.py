@@ -182,10 +182,7 @@ class PDFService:
         pdf.ln(8)
 
         # Section 1: The AI Squad
-        pdf.set_fill_color(240, 245, 255)
-        section_start_y = pdf.get_y()
-        pdf.rect(10, section_start_y, 190, 75, 'F')  # Taller box to prevent text overflow
-        pdf.set_y(section_start_y + 5)
+        pdf.ln(5)
         
         pdf.set_font("Arial", 'B', 12)
         pdf.set_text_color(30, 41, 59)
@@ -1049,10 +1046,7 @@ class PDFService:
         pdf.ln(5)
 
         # Value comparison summary box
-        pdf.set_fill_color(245, 247, 250)
-        pdf.rect(15, pdf.get_y(), 180, 35, 'F')
-        y_box = pdf.get_y() + 3
-        pdf.set_xy(20, y_box)
+        pdf.ln(3)
         pdf.set_font("Arial", 'B', 10)
         pdf.cell(0, 7, "Value Comparison at a Glance", ln=True)
 
@@ -1208,28 +1202,31 @@ class PDFService:
 
             # Subject property image
             subj_img = comp_images.get('subject')
+            subj_img_bottom = pdf.get_y()
             if subj_img and os.path.exists(subj_img):
                 pdf.set_fill_color(220, 225, 235)
                 pdf.set_font("Arial", 'B', 8)
                 pdf.cell(0, 7, f"  SUBJECT: {clean_text(property_data.get('address', ''))}", ln=True, fill=True)
+                img_top_y = pdf.get_y()
                 try:
-                    pdf.image(subj_img, x=10, y=pdf.get_y(), w=90, h=55)
+                    pdf.image(subj_img, x=10, y=img_top_y, w=90, h=55)
                 except: pass
-                pdf.set_xy(105, pdf.get_y())
+                pdf.set_xy(105, img_top_y)
                 pdf.set_font("Arial", '', 8)
                 subj_condition = comp_images.get('subject_condition', 'Good condition - No major defects detected')
-                # Truncate cleanly with ellipsis so text doesn't overflow the column
                 subj_text = clean_text(f"AI Assessment: {subj_condition}")
                 if len(subj_text) > 320:
                     subj_text = subj_text[:317] + "..."
                 pdf.multi_cell(95, 5, subj_text)
-                pdf.set_y(max(pdf.get_y(), pdf.get_y()) + 5)
+                # Ensure Y is past the image (image is 55mm tall)
+                subj_img_bottom = img_top_y + 55 + 5
+                pdf.set_y(max(pdf.get_y(), subj_img_bottom))
 
             # Comp images (2 per row)
             comp_entries = [(k, v) for k, v in comp_images.items()
                           if k not in ('subject', 'subject_condition') and not k.endswith('_condition')]
             # Start position for comps - ensure clean start after subject
-            pdf.ln(5)
+            pdf.ln(3)
             row_height = 80  # Header(6) + image(50) + text(~22) + margin(2)
             row_start_y = pdf.get_y()  # Anchor for current row
 
@@ -1247,7 +1244,7 @@ class PDFService:
                     if ci > 0:
                         row_start_y = row_start_y + row_height
                     # Page break check
-                    if row_start_y + row_height > 260:
+                    if row_start_y + row_height > 255:
                         pdf.add_page()
                         self._draw_header(pdf, property_data, "AI PROPERTY CONDITION COMPARISON (cont.)")
                         row_start_y = 35
@@ -1269,9 +1266,7 @@ class PDFService:
                 except:
                     pass
 
-                # 3. Condition text — sized to fit exactly within the allocated row height
-                # Row height = 80, image ends at +57, text area = ~22mm, line_h=3.5 => ~6 lines
-                # At Arial 6.5pt in 90mm width, ~22 chars/line × 6 lines ≈ 130 chars max
+                # 3. Condition text — placed below image with proper spacing
                 pdf.set_xy(x_offset, current_y + 58)
                 pdf.set_font("Arial", '', 6.5)
                 raw_assessment = clean_text(f"AI Assessment: {condition_text}")
