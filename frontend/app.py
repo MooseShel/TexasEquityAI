@@ -563,23 +563,6 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             bld_area  = int(property_details.get('building_area') or 0)
             prop_district = property_details.get('district', 'HCAD')
 
-            # ── Layer 0: DB-first lookup (fastest — no browser, works on cloud) ──
-            if not force_fresh_comps and nbhd_code and bld_area > 0:
-                db_comps = await supabase_service.get_neighbors_from_db(
-                    current_account, nbhd_code, bld_area, district=prop_district
-                )
-                if len(db_comps) >= 3:
-                    real_neighborhood = db_comps
-                    yield {"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} comps from database instantly."}
-
-            # ── Layer 1: Cached comps (previously scraped, TTL 30 days) ──────────
-            if not real_neighborhood and not force_fresh_comps:
-                cached = await supabase_service.get_cached_comps(current_account)
-                if cached:
-                    real_neighborhood = cached
-                    yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old)."}
-
-
             def _detect_commercial(prop: dict) -> bool:
                 """Detect commercial property from property_type string OR HCAD state class codes."""
                 pt = str(prop.get('property_type', '') or '').lower().strip()
@@ -589,7 +572,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                     'commercial', 'office', 'retail', 'industrial',
                     'mixed_use', 'mixed use', 'land', 'vacant',
                     'warehouse', 'restaurant', 'store', 'hotel', 'motel',
-                    'bank', 'service', 'manufacturing', 'flex',
+                    'bank', 'service', 'manufacturing', 'flex', 'apartment',
                 }
                 if any(kw in pt for kw in COMMERCIAL_KEYWORDS):
                     return True
@@ -598,7 +581,6 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 # A=residential, B=mobile home, C=vacant, D=farm, E=exempt,
                 # F=commercial, G=oil/gas, H=commercial, J=utilities, K=commercial
                 COMMERCIAL_CODE_PREFIXES = ('F', 'G', 'H', 'J', 'K', 'L', 'X')
-                # Typical pattern: "F1", "F2", "A2" — 1-2 char alpha-numeric code
                 import re as _re
                 m = _re.match(r'^([A-Z])\d?$', pt.upper())
                 if m and m.group(1) in COMMERCIAL_CODE_PREFIXES:
@@ -607,7 +589,9 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 return False
 
             is_commercial_prop = _detect_commercial(property_details)
-            if not real_neighborhood and is_commercial_prop:
+
+            # ── Commercial properties: use API-based comp pool directly ───────
+            if is_commercial_prop:
                 try:
                     from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
                     commercial_agent = CommercialEnrichmentAgent()
@@ -622,6 +606,24 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                         logger.warning("Commercial: Could not build sales comp pool from API.")
                 except Exception as ce:
                     logger.error(f"Commercial comp pool error: {ce}")
+
+            # ── Residential properties: DB-first then scrape ──────────────────
+            if not is_commercial_prop:
+                # Layer 0: DB-first lookup (fastest — no browser, works on cloud)
+                if not force_fresh_comps and nbhd_code and bld_area > 0:
+                    db_comps = await supabase_service.get_neighbors_from_db(
+                        current_account, nbhd_code, bld_area, district=prop_district
+                    )
+                    if len(db_comps) >= 3:
+                        real_neighborhood = db_comps
+                        yield {"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} comps from database instantly."}
+
+                # Layer 1: Cached comps (previously scraped, TTL 30 days)
+                if not real_neighborhood and not force_fresh_comps:
+                    cached = await supabase_service.get_cached_comps(current_account)
+                    if cached:
+                        real_neighborhood = cached
+                        yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old)."}
 
             # ── Layers 2-3: Playwright scraping (residential only) ───────────────
             if not real_neighborhood and not is_commercial_prop:
