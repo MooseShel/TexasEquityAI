@@ -641,6 +641,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
 
         yield {"status": "📸 Vision Agent: Analyzing property condition..."}
         search_address = property_details.get('address', '')
+        flood_data = None
         coords = agents["vision_agent"]._geocode_address(search_address)
         if coords:
             flood_data = await agents["fema_agent"].get_flood_zone(coords['lat'], coords['lng'])
@@ -659,6 +660,25 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             annotated_paths = image_paths if image_paths else []
         if annotated_paths:
             image_path = annotated_paths[0]
+
+        # ── AI Comp Photo Comparison (Enhancement #1) ────────────────────────
+        comp_images = None
+        equity_comps = equity_results.get('equity_5', []) if isinstance(equity_results, dict) else []
+        if equity_comps and image_paths:
+            yield {"status": "🔍 AI Condition Analyst: Comparing property conditions across comps..."}
+            try:
+                comp_images = await agents["vision_agent"].fetch_comp_images(
+                    subject_address=search_address,
+                    subject_image_path=image_path,
+                    comparables=equity_comps,
+                    max_comps=5
+                )
+                n_fetched = len([k for k in (comp_images or {}) if not k.endswith('_condition') and k != 'subject'])
+                logger.info(f"Comp photo comparison: {n_fetched} comp images fetched + analyzed")
+            except Exception as e:
+                logger.warning(f"Comp photo comparison failed (non-fatal): {e}")
+                comp_images = None
+
         yield {"status": "✍️ Legal Narrator: Evaluating protest viability..."}
 
         # ── Protest Viability Gate ────────────────────────────────────────────
@@ -719,42 +739,22 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 "corrected values and re-run the analysis."
             )
 
-        os.makedirs("outputs", exist_ok=True)
-        form_path = f"outputs/Form_41_44_{current_account}.pdf"
-        agents["form_service"].generate_form_41_44(property_details, {
-            "narrative": narrative, 
-            "vision_data": vision_detections, 
-            "evidence_image_path": image_path,
-            "equity_results": equity_results
-        }, form_path)
-        
-        # Generate Evidence Packet PDF (with maps + sales comps)
-        evidence_path = f"outputs/EvidencePacket_{current_account}.pdf"
+        # ── Unified Professional Protest Packet ───────────────────────────────────────────
+        combined_path = f"outputs/ProtestPacket_{current_account}.pdf"
         try:
             sales_comps_raw = equity_results.get('sales_comps', [])
             agents["pdf_service"].generate_evidence_packet(
-                narrative, property_details, equity_results, vision_detections, evidence_path,
-                sales_data=sales_comps_raw, image_paths=annotated_paths
+                narrative, property_details, equity_results, vision_detections, combined_path,
+                sales_data=sales_comps_raw, image_paths=annotated_paths,
+                flood_data=flood_data,
+                permit_data=property_details.get('permit_summary'),
+                comp_renovations=property_details.get('comp_renovations', []),
+                comp_images=comp_images  # AI Comp Photo Comparison data
             )
-            logger.info(f"Evidence packet generated: {evidence_path}")
+            logger.info(f"Professional Protest Packet generated: {combined_path}")
         except Exception as e:
-            logger.error(f"Evidence packet generation failed: {e}")
-            evidence_path = None
-        
-        # Merge Form + Evidence Packet into one PDF
-        combined_path = f"outputs/ProtestPacket_{current_account}.pdf"
-        try:
-            from pypdf import PdfWriter
-            writer = PdfWriter()
-            writer.append(form_path)
-            if evidence_path and os.path.exists(evidence_path):
-                writer.append(evidence_path)
-            writer.write(combined_path)
-            writer.close()
-            logger.info(f"Combined protest packet: {combined_path}")
-        except Exception as e:
-            logger.error(f"PDF merge failed: {e}")
-            combined_path = form_path  # fallback to form only
+            logger.error(f"Unified PDF generation failed: {e}")
+            combined_path = None
         
         yield {"data": {
             "property": property_details, "market_value": market_value, "equity": equity_results,
@@ -819,6 +819,21 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
             if final_data:
                 status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
                 data = final_data
+                
+                # --- Prominent Download Button at Top ---
+                pdf_path = data.get('combined_pdf_path', '')
+                if pdf_path and os.path.exists(pdf_path):
+                    with open(pdf_path, "rb") as f:
+                        st.download_button(
+                            "📥 DOWNLOAD COMPLETE PROTEST PACKET (8-PAGE PDF)",
+                            f,
+                            file_name=f"ProtestPacket_{data['property'].get('account_number', 'unknown')}.pdf",
+                            mime="application/pdf",
+                            type="primary",
+                            use_container_width=True
+                        )
+                st.divider()
+                
                 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏠 Property", "⚖️ Equity", "💰 Sales Comps", "📸 Vision", "📄 Protest", "⚙️ Data"])
                 with tab1:
                     col1, col2 = st.columns(2)

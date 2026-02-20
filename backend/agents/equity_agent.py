@@ -4,6 +4,7 @@ from sklearn.neighbors import NearestNeighbors
 from typing import List, Dict
 import logging
 from backend.agents.sales_agent import SalesAgent
+from backend.services.valuation_service import valuation_service
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +119,27 @@ class EquityAgent:
         top_20_sorted = top_20.sort_values(by='value_per_sqft', ascending=True)
         
         # Select top 5
-        equity_5 = top_20_sorted.head(5)
+        equity_5_df = top_20_sorted.head(5).copy()
         
-        justified_value_floor = equity_5['value_per_sqft'].median() * subj_area
+        # Phase 2: Professional Adjustments
+        logger.info(f"Applying professional adjustments to {len(equity_5_df)} comps...")
+        equity_5_list = equity_5_df.to_dict('records')
+        adj_values = []
         
+        for comp in equity_5_list:
+            adjustments = valuation_service.calculate_adjustments(subject_property, comp)
+            comp['adjustments'] = adjustments
+            adj_values.append(adjustments['adjusted_value'])
+        
+        # New Justified Value Floor = Median of adjusted total values
+        if adj_values:
+            adj_values.sort()
+            justified_value_floor = adj_values[len(adj_values)//2]
+        else:
+            justified_value_floor = subj_val
+
         return {
-            'equity_5': equity_5.to_dict('records'),
+            'equity_5': equity_5_list,
             'justified_value_floor': justified_value_floor,
             'subject_value_per_sqft': subj_val / subj_area
         }

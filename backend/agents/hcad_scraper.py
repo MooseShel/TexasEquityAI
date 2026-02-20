@@ -236,6 +236,50 @@ class HCADScraper(AppraisalDistrictConnector):
                         details['address'] = " ".join([a.strip() for a in addr_parts if a.strip()])
                 except: pass
 
+                # Owner Name, Mailing Address, Legal Description
+                try:
+                    owner_info = await page.locator("#OwnerInfoComponent").inner_text()
+                    lines = [l.strip() for l in owner_info.split('\n') if l.strip()]
+                    # Owner name is typically the first non-account, non-address line
+                    for line in lines:
+                        if 'Owner' in line and ':' in line:
+                            details['owner_name'] = line.split(':', 1)[1].strip()
+                            break
+                    # Try broader extraction from all text
+                    if not details.get('owner_name') and len(lines) >= 2:
+                        # First line after header is usually owner
+                        for line in lines:
+                            if not line.startswith('Account') and not any(c.isdigit() for c in line[:3]):
+                                details['owner_name'] = line
+                                break
+                except: pass
+
+                try:
+                    owner_box = await page.evaluate("""() => {
+                        const comp = document.getElementById('OwnerInfoComponent');
+                        if (!comp) return {};
+                        const text = comp.innerText;
+                        const result = {};
+                        
+                        // Owner Name
+                        const ownerMatch = text.match(/Owner\\s*(?:Name)?\\s*[:\\-]?\\s*([^\\n]+)/i);
+                        if (ownerMatch) result.owner_name = ownerMatch[1].trim();
+                        
+                        // Mailing Address
+                        const mailMatch = text.match(/Mailing\\s*(?:Address)?\\s*[:\\-]?\\s*([^\\n]+)/i);
+                        if (mailMatch) result.mailing_address = mailMatch[1].trim();
+                        
+                        // Legal Description
+                        const legalMatch = text.match(/Legal\\s*(?:Description)?\\s*[:\\-]?\\s*([^\\n]+)/i);
+                        if (legalMatch) result.legal_description = legalMatch[1].trim();
+                        
+                        return result;
+                    }""")
+                    if owner_box.get('owner_name'): details['owner_name'] = owner_box['owner_name']
+                    if owner_box.get('mailing_address'): details['mailing_address'] = owner_box['mailing_address']
+                    if owner_box.get('legal_description'): details['legal_description'] = owner_box['legal_description']
+                except: pass
+
                 # Area - Multi-label robust extraction
                 area_found = 0
                 area_labels = ["Living Area", "Gross Area", "Net Area", "Main Area", "SQ FT"]
@@ -335,45 +379,82 @@ class HCADScraper(AppraisalDistrictConnector):
 
                 vals = await extract_vals()
                 
-                # If current year is "Pending" or 0, try previous years from dropdown
-                if not vals['appraised'] or "Pending" in vals['appraised'] or self._parse_currency(vals['appraised']) == 0:
-                    logger.info("Values pending/missing for default year. Attempting year-switching loop...")
-                    try:
-                        await page.click("#dropdownMenuButton1", timeout=5000)
+                # Phase B: Detailed Enrichment
+                logger.info("Extracting detailed building, valuation, and land details...")
+                
+                # 1. Building Details (Grade/Quality)
+                try:
+                    expand_btn = page.locator("#imgExpand").first
+                    if await expand_btn.is_visible():
+                        await expand_btn.click()
                         await asyncio.sleep(1)
-                        dropdown_items = page.locator(".dropdown-item")
-                        item_texts = await dropdown_items.all_inner_texts()
-                        
-                        years = sorted([t.strip() for t in item_texts if t.strip().isdigit()], reverse=True)
-                        logger.info(f"Available years in HCAD dropdown: {years}")
-                        
-                        found_valid_year = False
-                        for year_to_try in years[1:3]: 
-                            logger.info(f"Switching to HCAD year: {year_to_try}")
-                            await page.click(f".dropdown-item:has-text('{year_to_try}')", timeout=5000)
-                            await asyncio.sleep(6)
-                            
-                            new_vals = await extract_vals()
-                            logger.info(f"Extracted vals for {year_to_try}: {new_vals}")
-                            
-                            if new_vals['appraised'] and "Pending" not in new_vals['appraised'] and self._parse_currency(new_vals['appraised']) > 0:
-                                vals = new_vals
-                                found_valid_year = True
-                                break
-                            
-                            await page.click("#dropdownMenuButton1", timeout=5000)
-                            await asyncio.sleep(1)
+                        details['building_grade'] = await page.locator("#BuildingDataView tr:has-text('Grade Adjustment') td.data").first.inner_text()
+                        details['building_quality'] = await page.locator("#BuildingDataView tr:has-text('Cond / Desir / Util') td.data").first.inner_text()
+                        # Style (from main table)
+                        style_text = await page.locator("#BuildingSummaryComponent table tbody tr:nth-child(2) td:nth-child(6)").inner_text()
+                        details['style'] = style_text.strip()
+                except: pass
 
-                        if not found_valid_year:
-                             logger.warning("Could not find a year with valid appraisal values for HCAD.")
-                    except Exception as e:
-                        logger.warning(f"Failed HCAD year-switching: {e}")
+                # 2. Land Details (Breakdown & Total Area)
+                try:
+                    land_table = page.locator("#LandDetailsDiv table")
+                    if await land_table.is_visible():
+                        rows = await land_table.locator("tbody tr").all()
+                        breakdown = []
+                        total_land_area = 0
+                        for row in rows:
+                            text = await row.inner_text()
+                            if "SF" in text:
+                                cells = await row.locator("td").all_inner_texts()
+                                if len(cells) >= 10:
+                                    use = cells[1].strip().replace("\n", " ")
+                                    units = self._parse_number(cells[3].replace(",", ""))
+                                    breakdown.append({"use": use, "units": units})
+                                    total_land_area += units
+                        details['land_breakdown'] = breakdown
+                        details['land_area'] = total_land_area
+                except: pass
 
+                # 3. Multi-Year Valuation History
+                history = {}
+                # Capture current year first
+                current_year_el = page.locator("#dropdownMenuButton1")
+                current_year = await current_year_el.inner_text()
+                history[current_year.strip()] = vals
+                
+                # Try Switching Years
+                try:
+                    await current_year_el.click(timeout=5000)
+                    await asyncio.sleep(1)
+                    dropdown_items = page.locator(".dropdown-item")
+                    item_texts = await dropdown_items.all_inner_texts()
+                    years = sorted([t.strip() for t in item_texts if t.strip().isdigit()], reverse=True)
+                    
+                    # Look for up to 4 years of history
+                    for year_to_try in years[:4]:
+                        if year_to_try == current_year.strip(): continue
+                        
+                        logger.info(f"Switching to year {year_to_try} for history...")
+                        await page.click(f".dropdown-item:has-text('{year_to_try}')", timeout=5000)
+                        await asyncio.sleep(4) # Allow Blazor to settle
+                        
+                        new_vals = await extract_vals()
+                        history[year_to_try] = new_vals
+                        
+                        # Set primary vals to most recent NON-PENDING year if current is pending
+                        if ("Pending" in vals['appraised'] or self._parse_currency(vals['appraised']) == 0) and \
+                           ("Pending" not in new_vals['appraised'] and self._parse_currency(new_vals['appraised']) > 0):
+                            vals = new_vals
+                            logger.info(f"Using {year_to_try} as primary value (current was pending)")
+
+                        await page.click("#dropdownMenuButton1", timeout=5000)
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"Failed to extract history: {e}")
+
+                details['valuation_history'] = history
                 details['appraised_value'] = self._parse_currency(vals['appraised'])
-                if vals['market'] and "Pending" not in vals['market']:
-                    details['market_value'] = self._parse_currency(vals['market'])
-                else:
-                    details['market_value'] = details['appraised_value']
+                details['market_value'] = self._parse_currency(vals['market']) or details['appraised_value']
 
                 return details
 

@@ -331,6 +331,21 @@ async def get_full_protest(
                     await supabase_service.upsert_property(clean_prop)
                 except: pass
 
+            # Enrich property_details with owner/legal info from API sources
+            # (HCAD scraping is inconsistent for these fields)
+            if property_details and rentcast_fallback_data:
+                rc = rentcast_fallback_data.get('rentcast_data', {}) or {}
+                enrich_fields = {
+                    'owner_name': rc.get('ownerName') or rc.get('owner') or rentcast_fallback_data.get('owner_name'),
+                    'mailing_address': rc.get('mailingAddress') or rc.get('ownerMailingAddress') or rentcast_fallback_data.get('mailing_address'),
+                    'legal_description': rc.get('legalDescription') or rentcast_fallback_data.get('legal_description'),
+                    'land_area': rc.get('lotSize') or rentcast_fallback_data.get('land_area'),
+                }
+                for k, v in enrich_fields.items():
+                    if v and not property_details.get(k):
+                        property_details[k] = v
+                        logger.info(f"Enriched property_details['{k}'] from RentCast/API fallback")
+
             yield json.dumps({"status": "📊 Market Analyst: Querying RentCast for market values..."}) + "\n"
             
             # 3. Market Data

@@ -88,6 +88,9 @@ class RentCastAgent:
             "building_area": prop.get("squareFootage"),
             "year_built": prop.get("yearBuilt"),
             "legal_description": prop.get("legalDescription"),
+            "owner_name": prop.get("ownerName") or prop.get("owner"),
+            "mailing_address": prop.get("mailingAddress") or prop.get("ownerMailingAddress"),
+            "land_area": prop.get("lotSize"),
             "rentcast_data": prop,       # full payload cached for downstream reuse
             # Sale data baked in — no second call needed
             "_sale_price": prop.get("lastSalePrice"),

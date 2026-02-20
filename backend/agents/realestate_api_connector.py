@@ -203,6 +203,11 @@ class RealEstateAPIConnector:
                 "last_sale_price": float(prop.get("lastSalePrice") or 0),
                 "last_sale_date": prop.get("lastSaleDate") or prop.get("saleDate"),
                 "mortgageHistory": prop.get("mortgageHistory", []),
+                # Owner / legal enrichment fields
+                "owner_name": prop.get("ownerName") or prop.get("owner"),
+                "mailing_address": prop.get("mailingAddress") or prop.get("ownerAddress"),
+                "legal_description": prop.get("legalDescription"),
+                "land_area": float(prop.get("lotSize") or 0),
                 "_raw": prop,
             }
             logger.info(f"RealEstateAPI: Normalized detail → appraised=${normalized['appraised_value']:,.0f}, area={normalized['building_area']} sqft")

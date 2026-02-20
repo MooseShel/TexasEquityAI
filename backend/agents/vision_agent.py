@@ -447,3 +447,175 @@ class VisionAgent:
 
     def calculate_total_deduction(self, detections: List[Dict]) -> float:
         return sum(d.get('deduction', 0) for d in detections)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ██  COMP PHOTO COMPARISON (Enhancement #1)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    async def get_comp_street_view(self, address: str) -> Optional[str]:
+        """
+        Fetches a single front-facing Street View image for a comparable property.
+        Uses only 1 API call (vs 3 for subject) to save cost.
+        Returns the local file path or None.
+        """
+        if not self.google_api_key:
+            return None
+        try:
+            slug = address.replace(' ', '_').replace(',', '').replace('.', '')[:60]
+            path = f"data/comp_{slug}_front.jpg"
+
+            # Skip if already fetched (cache hit)
+            if os.path.exists(path) and os.path.getsize(path) > 5000:
+                logger.info(f"Comp Street View cache hit: {path}")
+                return path
+
+            os.makedirs("data", exist_ok=True)
+            result = await self._fetch_single_image(address, f"comp_{slug}", "front")
+            if result and os.path.exists(result) and os.path.getsize(result) > 5000:
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Comp Street View error for {address}: {e}")
+            return None
+
+    async def quick_condition_summary(self, image_path: str) -> str:
+        """
+        Lightweight AI condition assessment — returns 1-2 sentence summary.
+        Uses much fewer tokens than the full analyze_property_condition pipeline.
+        Tries OpenAI first (fastest), then Gemini, then Grok.
+        """
+        if not image_path or not os.path.exists(image_path):
+            return "No image available for condition assessment."
+
+        prompt = (
+            "You are a property appraiser. Look at this Street View image and provide a "
+            "brief 1-2 sentence condition assessment. Focus on: roof condition, paint/siding, "
+            "driveway, landscaping, and overall maintenance level. Be specific about what you see. "
+            "Rate overall condition as: Excellent, Good, Fair, or Poor. "
+            "Return ONLY the text summary, no JSON or formatting."
+        )
+
+        # 1. Try OpenAI (fastest and cheapest for short responses)
+        if self.openai_client:
+            try:
+                base64_image = self._encode_image(image_path)
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]
+                    }],
+                    max_tokens=150
+                )
+                content = response.choices[0].message.content
+                if content:
+                    return content.strip()
+            except Exception as e:
+                logger.warning(f"OpenAI quick condition failed: {e}")
+
+        # 2. Try Gemini
+        if self.gemini_client:
+            try:
+                img = Image.open(image_path)
+                response = self.gemini_client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=[prompt, img]
+                )
+                if response.text:
+                    return response.text.strip()
+            except Exception as e:
+                logger.warning(f"Gemini quick condition failed: {e}")
+
+        # 3. Try Grok
+        if self.xai_client:
+            try:
+                base64_image = self._encode_image(image_path)
+                response = self.xai_client.chat.completions.create(
+                    model="grok-2-vision-latest",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]
+                    }],
+                    max_tokens=150
+                )
+                content = response.choices[0].message.content
+                if content:
+                    return content.strip()
+            except Exception as e:
+                logger.warning(f"Grok quick condition failed: {e}")
+
+        return "Condition could not be assessed — all vision providers unavailable."
+
+    async def fetch_comp_images(self, subject_address: str, 
+                                 subject_image_path: str,
+                                 comparables: List[Dict],
+                                 max_comps: int = 5) -> Dict:
+        """
+        Fetches Street View images for subject + comparables and runs
+        quick AI condition analysis on each. Returns a dict suitable
+        for passing to PDFService.generate_evidence_packet(comp_images=...).
+
+        Returns dict like:
+        {
+            'subject': '/path/to/subject_front.jpg',
+            'subject_condition': 'Good condition. Well-maintained exterior...',
+            '830 Azalea St': '/path/to/comp_front.jpg',
+            '830 Azalea St_condition': 'Fair condition. Visible roof wear...',
+            ...
+        }
+        """
+        import asyncio
+        result = {}
+
+        # Subject image + condition
+        if subject_image_path and os.path.exists(subject_image_path):
+            result['subject'] = subject_image_path
+            logger.info("Analyzing subject property condition for comparison grid...")
+            result['subject_condition'] = await self.quick_condition_summary(subject_image_path)
+        else:
+            # Try to fetch subject image
+            subj_img = await self.get_comp_street_view(subject_address)
+            if subj_img:
+                result['subject'] = subj_img
+                result['subject_condition'] = await self.quick_condition_summary(subj_img)
+
+        # Comp images — fetch in parallel, but analyze sequentially to avoid rate limits
+        comp_list = comparables[:max_comps]
+        
+        async def _fetch_one(comp):
+            addr = comp.get('address', '')
+            if not addr:
+                return None, None, None
+            img = await self.get_comp_street_view(addr)
+            return addr, img, comp
+
+        # Parallel fetch
+        fetch_tasks = [_fetch_one(c) for c in comp_list]
+        fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+        # Sequential analysis (to avoid rate limits on AI providers)
+        for fetch_result in fetch_results:
+            if isinstance(fetch_result, Exception):
+                logger.warning(f"Comp fetch error: {fetch_result}")
+                continue
+            addr, img_path, comp = fetch_result
+            if not addr or not img_path:
+                continue
+
+            result[addr] = img_path
+            logger.info(f"Analyzing comp condition: {addr}")
+            try:
+                condition = await self.quick_condition_summary(img_path)
+                result[f"{addr}_condition"] = condition
+            except Exception as e:
+                logger.warning(f"Comp condition analysis failed for {addr}: {e}")
+                result[f"{addr}_condition"] = "Condition analysis unavailable."
+
+        logger.info(f"Comp photo comparison complete: {len([k for k in result if not k.endswith('_condition') and k != 'subject'])} comp images fetched")
+        return result
