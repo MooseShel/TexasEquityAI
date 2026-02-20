@@ -611,8 +611,10 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 except Exception as ce:
                     logger.error(f"Commercial comp pool error: {ce}")
 
-            # ── Residential properties: DB-first then scrape ──────────────────
-            if not is_commercial_prop:
+            # ── Residential (or commercial fallback): DB-first then scrape ─────
+            if not real_neighborhood:
+                if is_commercial_prop:
+                    yield {"status": "⚖️ Commercial fallback: Trying database comps..."}
                 # Layer 0: DB-first lookup (fastest — no browser, works on cloud)
                 if not force_fresh_comps and nbhd_code and bld_area > 0:
                     db_comps = await supabase_service.get_neighbors_from_db(
