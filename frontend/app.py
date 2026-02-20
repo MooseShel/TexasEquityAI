@@ -232,7 +232,6 @@ def setup_playwright():
         except Exception as e:
             logger.error(f"Failed to install Playwright: {e}")
 
-@st.cache_resource
 def get_agents():
     # Ensure browsers are installed before agents start
     setup_playwright()
