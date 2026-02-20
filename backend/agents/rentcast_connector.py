@@ -121,6 +121,8 @@ class RentCastConnector:
             raw_props = data if isinstance(data, list) else data.get("properties", [])
             logger.info(f"RentCast: Found {len(raw_props)} sold properties nearby.")
 
+            skipped_no_price = 0
+            skipped_no_sqft = 0
             for prop in raw_props:
                 try:
                     ptype = prop.get("propertyType", "")
@@ -131,17 +133,21 @@ class RentCastConnector:
                     sqft  = prop.get("squareFootage") or prop.get("buildingSize") or 0
                     date  = prop.get("lastSaleDate") or prop.get("soldDate")
 
-                    if not price or float(price) <= 0 or not sqft or int(sqft) <= 0:
+                    if not price or float(price) <= 0:
+                        skipped_no_price += 1
                         continue
 
                     price_f = float(price)
-                    sqft_i  = int(sqft)
+                    sqft_i  = int(sqft) if sqft else 0
+                    # Allow comps with 0 sqft but valid sale price (common for land/commercial)
+                    pps = round(price_f / sqft_i, 2) if sqft_i > 0 else 0.0
+
                     comps_list.append(SalesComparable(
                         address=prop.get("formattedAddress") or prop.get("addressLine1", ""),
                         sale_price=price_f,
                         sale_date=str(date) if date else None,
                         sqft=sqft_i,
-                        price_per_sqft=round(price_f / sqft_i, 2),
+                        price_per_sqft=pps,
                         year_built=prop.get("yearBuilt"),
                         source="RentCast",
                         dist_from_subject=prop.get("distance"),
@@ -149,6 +155,8 @@ class RentCastConnector:
                     ))
                 except Exception as e:
                     logger.warning(f"RentCast: Skipping malformed sold property: {e}")
+            if skipped_no_price or skipped_no_sqft:
+                logger.info(f"RentCast sold props: {len(comps_list)} usable, {skipped_no_price} skipped (no price), {skipped_no_sqft} skipped (no sqft)")
         else:
             logger.warning(f"RentCast Properties Error: {response.status_code} - {response.text[:200]}")
 
