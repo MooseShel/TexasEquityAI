@@ -655,7 +655,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                             return await connector.get_property_details(neighbor['account_number'])
                     tasks = [safe_scrape(n) for n in pool_list[:10]]
                     deep_results = await asyncio.gather(*tasks)
-                    return [res for res in deep_results if res and res.get('building_area', 0) > 0]
+                    return [res for res in deep_results if res and (res.get('building_area', 0) > 0 or res.get('appraised_value', 0) > 0)]
 
                 # Street-level scrape
                 discovered_neighbors = await connector.get_neighbors_by_street(street_name)

@@ -223,7 +223,10 @@ class TCADConnector(AppraisalDistrictConnector):
                         neighbors.append({
                             "account_number": acc.strip(),
                             "address": addr.strip(),
+                            "appraised_value": self._parse_currency(val_str),
                             "market_value": self._parse_currency(val_str),
+                            "building_area": 0,
+                            "year_built": None,
                             "district": "TCAD"
                         })
                     except:
@@ -282,7 +285,10 @@ class TCADConnector(AppraisalDistrictConnector):
                         neighbors.append({
                             "account_number": acc.strip(),
                             "address": addr.strip(),
+                            "appraised_value": self._parse_currency(val_str),
                             "market_value": self._parse_currency(val_str),
+                            "building_area": 0,
+                            "year_built": None,
                             "district": "TCAD"
                         })
                     except:

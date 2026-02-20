@@ -131,13 +131,19 @@ class CCADConnector(AppraisalDistrictConnector):
 
     def _normalize_data(self, item: Dict) -> Dict:
         """Normalizes a raw Socrata API record into the standard schema."""
+        def _safe_float(val, default=0.0):
+            try: return float(val) if val else default
+            except (ValueError, TypeError): return default
+        def _safe_int(val, default=0):
+            try: return int(float(val)) if val else default
+            except (ValueError, TypeError): return default
         return {
             "account_number": item.get("geoid", ""),
             "address": item.get("situsconcat", "Unknown"),
-            "appraised_value": float(item.get("currvalappraised") or 0), 
-            "market_value": float(item.get("currvalmarket") or 0),
-            "building_area": float(item.get("imprvmainarea") or 0), 
-            "year_built": int(item.get("imprvyearbuilt") or 0),
+            "appraised_value": _safe_float(item.get("currvalappraised")),
+            "market_value": _safe_float(item.get("currvalmarket")),
+            "building_area": _safe_float(item.get("imprvmainarea")),
+            "year_built": _safe_int(item.get("imprvyearbuilt")),
             "neighborhood_code": item.get("nbhdcode", "Unknown"),
             "legal_description": item.get("legaldescription", ""),
             "district": "CCAD"
