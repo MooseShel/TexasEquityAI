@@ -824,6 +824,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             )
 
         # ── Unified Professional Protest Packet ───────────────────────────────────────────
+        os.makedirs("outputs", exist_ok=True)
         combined_path = f"outputs/ProtestPacket_{current_account}.pdf"
         try:
             sales_comps_raw = equity_results.get('sales_comps', [])
@@ -994,7 +995,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
 
                             st.dataframe(
                                 equity_display.style.format(fmt, na_rep='—'),
-                                use_container_width=True,
+                                width='stretch',
                                 hide_index=True
                             )
                         
@@ -1191,7 +1192,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             
                             st.dataframe(
                                 sales_display,
-                                use_container_width=True,
+                                width='stretch',
                                 hide_index=True
                             )
                         
@@ -1365,7 +1366,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         for idx, img_path in enumerate(valid_imgs):
                             with img_cols[idx]:
                                 label = labels[idx] if idx < len(labels) else f"Angle {idx+1}"
-                                st.image(img_path, caption=label, use_container_width=True)
+                                st.image(img_path, caption=label, width='stretch')
                     elif os.path.exists(data.get('evidence_image_path', '')):
                         st.image(data['evidence_image_path'], caption="Front View", width=600)
                     else:
