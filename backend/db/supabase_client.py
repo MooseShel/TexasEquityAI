@@ -149,7 +149,7 @@ class SupabaseService:
             max_area = int(building_area * (1 + tolerance))
             response = (
                 self.client.table("properties")
-                .select("account_number,address,appraised_value,market_value,building_area,land_area,year_built,neighborhood_code,district,building_grade,building_quality,valuation_history,land_breakdown")
+                .select("account_number,address,appraised_value,market_value,building_area,land_area,year_built,neighborhood_code,district,building_grade,building_quality,valuation_history,land_breakdown,property_type")
                 .eq("neighborhood_code", neighborhood_code)
                 .eq("district", district)
                 .neq("account_number", account_number)
