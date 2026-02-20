@@ -327,7 +327,8 @@ class PDFService:
         if HAS_QRCODE:
             try:
                 acct = property_data.get('account_number', '').replace('-', '')
-                qr_url = f"https://texasequityai.com/report/{acct}"
+                # Use query param for Streamlit routing
+                qr_url = f"https://texasequityai.streamlit.app/?account={acct}"
                 qr = qrcode.QRCode(version=1, box_size=6, border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
                 qr.add_data(qr_url)
                 qr.make(fit=True)

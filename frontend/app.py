@@ -43,6 +43,68 @@ from backend.utils.address_utils import normalize_address, is_real_address
 
 st.set_page_config(page_title="Texas Equity AI", layout="wide")
 
+# ── QR Code / Link Routing (Enhancement #10) ─────────────────────────────────
+# Check if the app is loaded with ?account=XXXXXXXX
+query_params = st.query_params
+url_account = query_params.get("account")
+
+if url_account:
+    st.info(f"📂 Loading Digital Evidence for Account: {url_account}")
+    try:
+        # Run async fetch in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        saved_protest = loop.run_until_complete(supabase_service.get_latest_protest(url_account))
+        loop.close()
+
+        if saved_protest:
+            st.success("✅ Digital Evidence retrieved successfully.")
+            
+            # Unpack data
+            p_data = saved_protest.get("property_data", {})
+            e_data = saved_protest.get("equity_data", {})
+            v_data = saved_protest.get("vision_data", [])
+            narrative_text = saved_protest.get("narrative", "")
+            
+            st.title(f"Property Tax Evidence: {p_data.get('address', url_account)}")
+            st.markdown(f"**Account Number**: {p_data.get('account_number', url_account)}")
+            
+            # Reuse the displaying logic? It's complex to extract.
+            # We'll create a simplified read-only view here.
+            
+            tab_overview, tab_equity, tab_vision, tab_narrative = st.tabs(["Overview", "Fair Equity", "Property Condition", "Legal Argument"])
+            
+            with tab_overview:
+                st.subheader("Property Details")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Appraised Value", f"${p_data.get('appraised_value', 0):,.0f}")
+                c2.metric("Market Value", f"${p_data.get('market_value', 0):,.0f}")
+                c3.metric("Year Built", p_data.get('year_built', 'N/A'))
+                
+            with tab_equity:
+                st.subheader("Equity Analysis")
+                if e_data and 'equity_5' in e_data:
+                    st.dataframe(pd.DataFrame(e_data['equity_5']))
+                else:
+                    st.write("No equity data available.")
+
+            with tab_vision:
+                st.subheader("Visual Condition Analysis")
+                for detection in v_data:
+                    st.write(f"- {detection.get('label', 'Issue')}: {detection.get('description', '')}")
+            
+            with tab_narrative:
+                st.subheader("Protest Narrative")
+                st.markdown(narrative_text)
+            
+            # Stop execution so we don't show the generating form
+            st.stop()
+        else:
+            st.warning("No generated report found for this account. Please generate one below.")
+    except Exception as e:
+        st.error(f"Failed to load report: {e}")
+
+
 # ── Live Agent Log Capture ─────────────────────────────────────────────────
 class StreamlitLogCapture(logging.Handler):
     """
@@ -756,6 +818,24 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             logger.error(f"Unified PDF generation failed: {e}")
             combined_path = None
         
+        # ── Data Persistence for QR Code (Enhancement #10) ────────────────────
+        try:
+            protest_record = {
+                "account_number": current_account,
+                "property_data": property_details,
+                "equity_data": equity_results,
+                "vision_data": vision_detections,
+                "narrative": narrative,
+                "market_value": market_value,
+                "status": "complete"
+            }
+            await supabase_service.save_protest(protest_record)
+            if equity_results.get('equity_5'):
+                 await supabase_service.save_equity_comps(current_account, equity_results.get('equity_5'))
+            logger.info(f"Saved protest record for {current_account} to Supabase.")
+        except Exception as db_err:
+            logger.error(f"Failed to save protest record to DB: {db_err}")
+
         yield {"data": {
             "property": property_details, "market_value": market_value, "equity": equity_results,
             "vision": vision_detections, "narrative": narrative, "combined_pdf_path": combined_path,

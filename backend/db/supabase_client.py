@@ -44,6 +44,23 @@ class SupabaseService:
         response = self.client.table("protests").insert(protest_data).execute()
         return response.data[0] if response.data else None
 
+    async def get_latest_protest(self, account_number: str):
+        """
+        Fetches the most recent protest generated for this account.
+        """
+        if not self.client: return None
+        try:
+            response = self.client.table("protests") \
+                .select("*") \
+                .eq("account_number", account_number) \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error fetching protest for {account_number}: {e}")
+            return None
+
     async def save_equity_comps(self, protest_id: str, comps: list):
         if not self.client: return None
         for comp in comps:
