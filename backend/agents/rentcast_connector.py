@@ -66,10 +66,10 @@ class RentCastConnector:
 
             for comp in raw_comps:
                 try:
-                    # Only use actual sale price — skip AVM estimates (correlationPrice) and listings
-                    price = comp.get("lastSalePrice") or comp.get("price") or 0
+                    # Use actual sale price first, fall back to correlationPrice (AVM comparable)
+                    price = comp.get("lastSalePrice") or comp.get("correlationPrice") or comp.get("price") or 0
                     sqft  = comp.get("squareFootage") or 0
-                    date  = comp.get("lastSaleDate")
+                    date  = comp.get("lastSaleDate") or comp.get("listedDate")
                     ptype = comp.get("propertyType", "")
 
                     if not price or float(price) <= 0 or not sqft or int(sqft) <= 0:
