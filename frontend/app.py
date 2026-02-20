@@ -453,15 +453,17 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 try:
                     ptype = await agents["bridge"].detect_property_type(current_account)
                     logger.info(f"detect_property_type returned '{ptype}' for '{current_account}'")
-                    is_confirmed_residential = ptype in ('Single Family', 'Condo', 'Townhouse', 'Manufactured', 'Multi-Family')
-                    # None means RentCast doesn't know → treat as potential commercial
-                    if not is_confirmed_residential:
+                    # Only classify as commercial with POSITIVE evidence.
+                    # None/unknown defaults to residential (most TX properties are residential).
+                    KNOWN_COMMERCIAL = ('Apartment', 'Land')
+                    if ptype in KNOWN_COMMERCIAL:
                         is_likely_commercial = True
-                        ptype_source = f"Unknown_or_Commercial({ptype})"
+                        ptype_source = f"RentCast_Commercial({ptype})"
+                    elif ptype is None:
+                        logger.info(f"Property type unknown for '{current_account}' — defaulting to residential")
                 except Exception as e:
-                    logger.warning(f"detect_property_type failed: {e} — assuming potential commercial")
-                    is_likely_commercial = True
-                    ptype_source = "TypeError_fallback"
+                    logger.warning(f"detect_property_type failed: {e} — defaulting to residential")
+                    # Don't assume commercial on error — residential is the safe default
 
             commercial_data = None
             if is_likely_commercial:

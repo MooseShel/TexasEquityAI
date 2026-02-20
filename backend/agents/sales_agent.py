@@ -31,9 +31,8 @@ def _filter_comps_by_type(comps: List[SalesComparable], prop_type: str) -> List[
     Filter a list of comps to match the subject property type.
     - Residential subjects: remove comps with clearly commercial/land types.
     - Commercial subjects: remove comps with clearly residential types.
-    If a comp has no property_type tag (empty string), it passes through.
-    SOFT FILTER: if filtering removes ALL comps, keep the originals — some data
-    is better than no data, especially for mixed-use or misclassified properties.
+    If a comp has no property_type tag (empty string), it passes through — we don't
+    discard valid sold records just because the API didn't tag them.
     """
     filtered = []
     for c in comps:
@@ -43,10 +42,6 @@ def _filter_comps_by_type(comps: List[SalesComparable], prop_type: str) -> List[
         if prop_type == "Commercial" and pt in _RESIDENTIAL_TYPES:
             continue  # skip single-family/condo comps for commercial subject
         filtered.append(c)
-    # Soft fallback: if filtering removed everything, keep all comps
-    if not filtered and comps:
-        logger.warning(f"Type filter ({prop_type}) removed ALL {len(comps)} comps — keeping originals as fallback.")
-        return comps
     return filtered
 
 
