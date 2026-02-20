@@ -574,9 +574,34 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                     real_neighborhood = cached
                     yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old)."}
 
-            # ── Commercial/Land properties: skip Playwright HCAD scraping, use API sales comps ──
-            NON_RESIDENTIAL_TYPES = ('commercial', 'office', 'retail', 'industrial', 'mixed_use', 'land', 'vacant')
-            is_commercial_prop = str(property_details.get('property_type', '')).lower() in NON_RESIDENTIAL_TYPES
+
+            def _detect_commercial(prop: Dict) -> bool:
+                """Detect commercial property from property_type string OR HCAD state class codes."""
+                pt = str(prop.get('property_type', '') or '').lower().strip()
+
+                # Literal type words (from most APIs / district portals)
+                COMMERCIAL_KEYWORDS = {
+                    'commercial', 'office', 'retail', 'industrial',
+                    'mixed_use', 'mixed use', 'land', 'vacant',
+                    'warehouse', 'restaurant', 'store', 'hotel', 'motel',
+                    'bank', 'service', 'manufacturing', 'flex',
+                }
+                if any(kw in pt for kw in COMMERCIAL_KEYWORDS):
+                    return True
+
+                # HCAD state class codes → first letter signals property category
+                # A=residential, B=mobile home, C=vacant, D=farm, E=exempt,
+                # F=commercial, G=oil/gas, H=commercial, J=utilities, K=commercial
+                COMMERCIAL_CODE_PREFIXES = ('F', 'G', 'H', 'J', 'K', 'L', 'X')
+                # Typical pattern: "F1", "F2", "A2" — 1-2 char alpha-numeric code
+                import re as _re
+                m = _re.match(r'^([A-Z])\d?$', pt.upper())
+                if m and m.group(1) in COMMERCIAL_CODE_PREFIXES:
+                    return True
+
+                return False
+
+            is_commercial_prop = _detect_commercial(property_details)
             if not real_neighborhood and is_commercial_prop:
                 try:
                     from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
@@ -659,6 +684,22 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                         await supabase_service.save_cached_comps(current_account, real_neighborhood)
                     except Exception as e:
                         logger.warning(f"Failed to cache comps: {e}")
+
+            # ── Final fallback: API-based sales comps (catches commercial misclassified as residential
+            #    AND addresses like Hempstead Rd where street scraping returns nothing)
+            if not real_neighborhood:
+                try:
+                    from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+                    commercial_agent_fb = CommercialEnrichmentAgent()
+                    yield {"status": "🏢 Fallback Comps: Street scrape empty — querying API sales comps..."}
+                    comp_pool_fb = commercial_agent_fb.get_equity_comp_pool(
+                        property_details.get('address', account_number), property_details
+                    )
+                    if comp_pool_fb:
+                        real_neighborhood = comp_pool_fb
+                        yield {"status": f"⚖️ Equity Specialist: Recovered {len(real_neighborhood)} sales comps from API fallback."}
+                except Exception as _fb_e:
+                    logger.warning(f"Final comp fallback failed: {_fb_e}")
 
             if not real_neighborhood:
                 yield {"error": "Could not find sufficient comparable properties for equity analysis. The property may be unique, commercial, or in a low-density area. Try using a manual address override."}
