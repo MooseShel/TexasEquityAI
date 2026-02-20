@@ -130,6 +130,7 @@ def import_hcad_data(sample: int = None, include_all: bool = False, data_dir: st
                 "year_built":        yr_impr,
                 "neighborhood_code": nbhd_code,
                 "district":          "HCAD",
+                "state_class":       state_class if state_class else None,
             }
             # Remove None values
             record = {k: v for k, v in record.items() if v is not None}

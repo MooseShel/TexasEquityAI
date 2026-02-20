@@ -431,39 +431,34 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             if cached_property and not is_valid_cache(cached_property):
                 logger.warning(f"Supabase cache for {current_account} looks like a ghost record (appraised={cached_property.get('appraised_value')}, year_built={cached_property.get('year_built')}, nbhd={cached_property.get('neighborhood_code')}) — forcing fresh scrape.")
             
-            # ── New Flow: Prioritize Commercial Data Sources if Commercial ──
-            # 1. Check property type using the RentCast data we might already have from resolve_address
+            # ── Property Type Detection (multi-source chain) ────────────────
+            from backend.agents.property_type_resolver import resolve_property_type
             is_likely_commercial = False
             ptype_source = "Unknown"
             ptype = "Unknown"
 
+            # Fast path: if we already have RentCast cached data, check it first
             if rentcast_fallback_data:
-                # Read propertyType from the cached payload — avoids a second RentCast API call
-                ptype = (rentcast_fallback_data.get('rentcast_data') or {}).get('propertyType', '')
-                logger.info(f"RentCast cached propertyType='{ptype}' for '{current_account}'")
-                if ptype and ptype not in ('Single Family', 'Condo', 'Townhouse', 'Manufactured', 'Multi-Family'):
+                rc_ptype = (rentcast_fallback_data.get('rentcast_data') or {}).get('propertyType', '')
+                if rc_ptype and rc_ptype not in ('Single Family', 'Condo', 'Townhouse', 'Manufactured', 'Multi-Family'):
                     is_likely_commercial = True
-                    ptype_source = f"RentCast_Cached({ptype})"
-                # If ptype IS residential, we are confirmed residential — no extra call needed
+                    ptype_source = f"RentCast_Cached({rc_ptype})"
+                elif rc_ptype:
+                    ptype_source = f"RentCast_Cached({rc_ptype})"
+                    # Confirmed residential — skip deeper checks
 
-            # Only call detect_property_type() when we have no cached RentCast data at all
-            # (e.g. address not in RentCast, or account number input)
-            if not rentcast_fallback_data and any(c.isalpha() for c in current_account):
-                yield {"status": "🏢 Property Type Check: Verifying residential vs commercial..."}
-                try:
-                    ptype = await agents["bridge"].detect_property_type(current_account)
-                    logger.info(f"detect_property_type returned '{ptype}' for '{current_account}'")
-                    # Only classify as commercial with POSITIVE evidence.
-                    # None/unknown defaults to residential (most TX properties are residential).
-                    KNOWN_COMMERCIAL = ('Apartment', 'Land')
-                    if ptype in KNOWN_COMMERCIAL:
-                        is_likely_commercial = True
-                        ptype_source = f"RentCast_Commercial({ptype})"
-                    elif ptype is None:
-                        logger.info(f"Property type unknown for '{current_account}' — defaulting to residential")
-                except Exception as e:
-                    logger.warning(f"detect_property_type failed: {e} — defaulting to residential")
-                    # Don't assume commercial on error — residential is the safe default
+            # Full resolver chain if RentCast didn't give us a definitive answer
+            if not rentcast_fallback_data or ptype_source == "Unknown":
+                yield {"status": "🏢 Property Type Check: Resolving via multi-source chain..."}
+                resolved_type, resolved_source = await resolve_property_type(
+                    account_number=current_account,
+                    address=current_account if any(c.isalpha() for c in current_account) else "",
+                    district=prop_district if 'prop_district' in dir() else "HCAD",
+                )
+                ptype = resolved_type
+                ptype_source = resolved_source
+                is_likely_commercial = (resolved_type == "Commercial")
+                logger.info(f"PropertyTypeResolver: {resolved_type} ({resolved_source}) for '{current_account}'")
 
             commercial_data = None
             if is_likely_commercial:
