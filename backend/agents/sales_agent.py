@@ -175,8 +175,8 @@ class SalesAgent:
                         })
                         logger.info(f"SalesAgent: Inferred value ${estimated_price:,.0f} from loan.")
 
-        # Truncate to 5 best comps NOW (after mortgage inference so the fallback could trigger)
-        results = results[:5]
+        # Truncate to 10 best comps NOW (after mortgage inference so the fallback could trigger)
+        results = results[:10]
 
         logger.info(f"SalesAgent: Final count {len(results)}. Sources: {source_used}")
         return results

@@ -118,8 +118,8 @@ class EquityAgent:
         # Sort by value_per_sqft ascending — lowest-taxed comps first
         top_20_sorted = top_20.sort_values(by='value_per_sqft', ascending=True)
         
-        # Select top 5
-        equity_5_df = top_20_sorted.head(5).copy()
+        # Select top 10
+        equity_5_df = top_20_sorted.head(10).copy()
         
         # Phase 2: Professional Adjustments
         logger.info(f"Applying professional adjustments to {len(equity_5_df)} comps...")
