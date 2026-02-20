@@ -407,6 +407,25 @@ class PDFService:
 
         pdf.ln(3)
 
+        # ── Current Value Breakdown ──
+        subj_impr_front = max(0, appraised - subj_land)
+        pdf.set_fill_color(220, 225, 235)
+        pdf.set_font("Arial", 'B', 9)
+        pdf.cell(0, 7, "  Current Value Breakdown", ln=True, fill=True)
+        vb_w = [63, 64, 63]
+        vb_heads = ["Land Value", "Improvement Value", "Total Appraised Value"]
+        pdf.set_font("Arial", 'B', 7)
+        for i, h in enumerate(vb_heads):
+            pdf.cell(vb_w[i], 7, h, 1, 0, 'C', True)
+        pdf.ln()
+        pdf.set_font("Arial", '', 8)
+        pdf.cell(vb_w[0], 7, self._fmt(subj_land) if subj_land else "See History", 1, 0, 'C')
+        pdf.cell(vb_w[1], 7, self._fmt(subj_impr_front) if subj_impr_front else "See History", 1, 0, 'C')
+        pdf.cell(vb_w[2], 7, self._fmt(appraised), 1, 0, 'C')
+        pdf.ln()
+
+        pdf.ln(3)
+
         # ── Physical Attributes Table ──
         pdf.set_fill_color(220, 225, 235)
         pdf.set_font("Arial", 'B', 8)
@@ -607,177 +626,8 @@ class PDFService:
 
 
 
-        # ── PAGES 4+(N): EQUITY COMP GRIDS ───────────────────────────────────
-        # Paginate 3 comps per page
-        if comps:
-            comp_pages = []
-            for i in range(0, len(comps), 3):
-                comp_pages.append(comps[i:i+3])
+        # (Equity grids and map moved to appendix — see end of document)
 
-            for page_idx, page_comps in enumerate(comp_pages):
-                pdf.add_page()
-                self._draw_header(pdf, property_data, "RESIDENTIAL EQUITY COMP GRID")
-                
-                # Methodology Methodology
-                pdf.set_font("Arial", 'I', 8)
-                pdf.set_text_color(100, 100, 100)
-                methodology_text = (
-                    "Adjustments are calculated using standard appraisal methods: "
-                    "Depreciation based on Marshall & Swift residential cost tables. "
-                    "Size adjustments applied at 50% of base rate (diminishing returns)."
-                )
-                pdf.multi_cell(0, 4, clean_text(methodology_text), align='L')
-                pdf.set_text_color(0, 0, 0)
-                pdf.ln(2)
-
-                n_comps = len(page_comps)
-                # Column widths: Factor col + Subject col + N comp cols
-                factor_w = 32
-                data_w = int((190 - factor_w) / max(1 + n_comps, 1))
-                col_w = [factor_w] + [data_w] * (1 + n_comps)
-
-                # Build comp labels
-                start_letter = page_idx * 3
-                headers = ["", "Subject"]
-                for ci in range(len(page_comps)):
-                    headers.append(f"Comp {chr(65 + start_letter + ci)}")
-
-                self._table_header(pdf, col_w, headers, (200, 210, 230))
-
-                # ── Row builders ──
-                def subj_val(key, fmt_fn=None):
-                    v = property_data.get(key, '')
-                    return fmt_fn(v) if fmt_fn else str(v or 'N/A')
-
-                def comp_val(comp, key, fmt_fn=None):
-                    v = comp.get(key, '')
-                    return fmt_fn(v) if fmt_fn else str(v or 'N/A')
-
-                def adj_val(comp, key):
-                    return self._fmt(comp.get('adjustments', {}).get(key, 0))
-
-                # ── Grid Rows ──
-                # -- Identity section --
-                self._table_row(pdf, col_w, ["Prop ID", property_data.get('account_number', '')] + 
-                                [comp_val(c, 'account_number') for c in page_comps])
-                self._table_row(pdf, col_w, ["Neighborhood", str(nbhd)] + 
-                                [str(c.get('neighborhood_code', nbhd)) for c in page_comps])
-                self._table_row(pdf, col_w, ["Situs", clean_text(property_data.get('address', ''))[:25]] + 
-                                [clean_text(c.get('address', ''))[:25] for c in page_comps])
-
-                # -- Value section --
-                self._table_row(pdf, col_w, ["Year Built", str(property_data.get('year_built', ''))] + 
-                                [str(c.get('year_built', '')) for c in page_comps])
-                self._table_row(pdf, col_w, ["Market Value", self._fmt(appraised)] + 
-                                [self._fmt(c.get('appraised_value', 0)) for c in page_comps])
-                self._table_row(pdf, col_w, ["Total SQFT", f"{subj_area:,.0f} SF"] + 
-                                [f"{c.get('building_area', 0):,.0f} SF" for c in page_comps])
-                self._table_row(pdf, col_w, ["Market Price/SQFT", self._pps(appraised, subj_area)] + 
-                                [self._pps(c.get('appraised_value', 0), c.get('building_area', 1)) for c in page_comps])
-
-                # Spacer
-                pdf.ln(2)
-
-                # -- Adjustment section header --
-                subj_grade_disp = str(property_data.get('building_grade', 'N/A'))
-                subj_year_built = str(property_data.get('year_built', ''))
-
-                self._table_row(pdf, col_w, ["TTL Cost Factor", ""] + ["" for _ in page_comps])
-                self._table_row(pdf, col_w, ["Year Remodeled", subj_year_built] + 
-                                [str(c.get('adjustments', {}).get('comp_remodel', c.get('year_built', ''))) for c in page_comps])
-                
-                remodel_label = "New/Rebuilt" if property_data.get('year_built') and int(str(property_data.get('year_built'))[:4]) >= (datetime.datetime.now().year - 5) else str(property_data.get('year_built', ''))
-                self._table_row(pdf, col_w, ["Remodel Adj", remodel_label] + 
-                                [self._fmt(c.get('adjustments', {}).get('remodel', 0)) for c in page_comps])
-
-                self._table_row(pdf, col_w, ["Grade Adj", subj_grade_disp] + 
-                                [f"{c.get('adjustments', {}).get('comp_grade', 'N/A')} {adj_val(c, 'grade')}" for c in page_comps])
-                self._table_row(pdf, col_w, ["Size Index Adj", ""] + 
-                                [adj_val(c, 'size') for c in page_comps])
-                self._table_row(pdf, col_w, ["Neighborhood Adj", str(nbhd)] + 
-                                [f"{c.get('neighborhood_code', nbhd)} {adj_val(c, 'neighborhood')}" for c in page_comps])
-                self._table_row(pdf, col_w, ["% Good Adj", f"{page_comps[0].get('adjustments', {}).get('subject_pct_good', 97)}%"] + 
-                                [f"{c.get('adjustments', {}).get('comp_pct_good', 80)}% {adj_val(c, 'percent_good')}" for c in page_comps])
-
-                pdf.ln(2)
-
-                self._table_row(pdf, col_w, ["Size Adj", "-"] + 
-                                [adj_val(c, 'size') for c in page_comps])
-
-                pdf.ln(2)
-
-                self._table_row(pdf, col_w, ["Lump Sum Adj", ""] + 
-                                [adj_val(c, 'lump_sum') for c in page_comps])
-
-                pdf.ln(2)
-
-                self._table_row(pdf, col_w, ["Sub Area Diff", ""] + 
-                                [adj_val(c, 'sub_area_diff') for c in page_comps])
-
-                pdf.ln(2)
-
-                # Land / Segments / Other
-                self._table_row(pdf, col_w, ["Land Value Adj", self._fmt(subj_land)] + 
-                                [adj_val(c, 'land_value') for c in page_comps])
-                self._table_row(pdf, col_w, ["Segments & Adj", "$0"] + 
-                                [adj_val(c, 'segments') for c in page_comps])
-                self._table_row(pdf, col_w, ["Other Improvements", "$0"] + 
-                                [adj_val(c, 'other_improvements') for c in page_comps])
-
-                pdf.ln(2)
-
-                # Net Adjustment  
-                pdf.set_fill_color(230, 240, 255)
-                pdf.set_font("Arial", 'B', 7)
-                net_vals = ["Net Adjustment", ""]
-                for c in page_comps:
-                    net_vals.append(self._fmt(c.get('adjustments', {}).get('net_adjustment', 0)))
-                for i, v in enumerate(net_vals):
-                    pdf.cell(col_w[i], 8, clean_text(str(v)), 1, 0, 'C' if i > 0 else 'L', True)
-                pdf.ln()
-
-                pdf.ln(1)
-
-                # Indicated Value
-                ind_vals = ["Indicated Value", ""]
-                for c in page_comps:
-                    ind_vals.append(self._fmt(c.get('adjustments', {}).get('indicated_value', 0)))
-                pdf.set_fill_color(220, 255, 220)
-                for i, v in enumerate(ind_vals):
-                    pdf.cell(col_w[i], 8, clean_text(str(v)), 1, 0, 'C' if i > 0 else 'L', True)
-                pdf.ln()
-
-                pdf.ln(3)
-
-                # Median Equity Summary (on every page for consistency)
-                median_equity = equity_floor
-                pdf.set_font("Arial", 'B', 8)
-                pdf.cell(90, 8, f"Median Equity Value: {self._fmt(median_equity)}", 0, 0, 'L')
-                pdf.cell(90, 8, f"Median Equity Value / SQFT: {self._pps(median_equity, subj_area)}", 0, 1, 'R')
-
-                page_num = 3 + page_idx
-
-
-        # ── EQUITY MAP PAGE ══════════════════════════════════════════════════
-        pdf.add_page()
-        self._draw_header(pdf, property_data, "EQUITY GEOGRAPHIC CONTEXT")
-        if comps:
-            addrs = [c.get('address') for c in comps[:7] if c.get('address')]
-            map_p = self._generate_static_map(property_data.get('address'), addrs, "blue")
-            if map_p:
-                pdf.image(map_p, x=10, y=40, w=190)
-                try: os.unlink(map_p)
-                except: pass
-            else:
-                pdf.set_font("Arial", '', 10)
-                pdf.ln(20)
-                pdf.cell(0, 10, "Map: Google Maps API key required for geographic context.", ln=True, align='C')
-
-            # Legend
-            pdf.set_y(200)
-            pdf.set_font("Arial", 'B', 8)
-            pdf.cell(0, 6, f"Owner Name: {clean_text(owner_name)}  |  Address: {clean_text(property_data.get('address', ''))}", ln=True)
-            pdf.cell(0, 6, f"Account Number: {property_data.get('account_number', '')}  |  {clean_text(property_data.get('address', ''))}", ln=True)
 
         # ── SALES COMP GRIDS ═════════════════════════════════════════════════
         if sales_data and len(sales_data) > 0:
@@ -1896,6 +1746,148 @@ class PDFService:
             self._draw_header(pdf, property_data, "SUPPORTING ANALYSIS")
             pdf.set_font("Arial", '', 9)
             pdf.multi_cell(0, 5, clean_text(narrative))
+
+        # ══════════════════════════════════════════════════════════════════════════
+        # ██  APPENDIX: EQUITY COMP GRIDS (moved to back per user feedback)
+        # ══════════════════════════════════════════════════════════════════════════
+        if comps:
+            comp_pages = []
+            for i in range(0, len(comps), 3):
+                comp_pages.append(comps[i:i+3])
+
+            for page_idx, page_comps in enumerate(comp_pages):
+                pdf.add_page()
+                self._draw_header(pdf, property_data, "APPENDIX: EQUITY COMP GRID")
+                
+                pdf.set_font("Arial", 'I', 8)
+                pdf.set_text_color(100, 100, 100)
+                methodology_text = (
+                    "Adjustments are calculated using standard appraisal methods: "
+                    "Depreciation based on Marshall & Swift residential cost tables. "
+                    "Size adjustments applied at 50% of base rate (diminishing returns)."
+                )
+                pdf.multi_cell(0, 4, clean_text(methodology_text), align='L')
+                pdf.set_text_color(0, 0, 0)
+                pdf.ln(2)
+
+                n_comps = len(page_comps)
+                factor_w = 32
+                data_w = int((190 - factor_w) / max(1 + n_comps, 1))
+                col_w = [factor_w] + [data_w] * (1 + n_comps)
+
+                start_letter = page_idx * 3
+                headers = ["", "Subject"]
+                for ci in range(len(page_comps)):
+                    headers.append(f"Comp {chr(65 + start_letter + ci)}")
+
+                self._table_header(pdf, col_w, headers, (200, 210, 230))
+
+                def subj_val(key, fmt_fn=None):
+                    v = property_data.get(key, '')
+                    return fmt_fn(v) if fmt_fn else str(v or 'N/A')
+
+                def comp_val(comp, key, fmt_fn=None):
+                    v = comp.get(key, '')
+                    return fmt_fn(v) if fmt_fn else str(v or 'N/A')
+
+                def adj_val(comp, key):
+                    return self._fmt(comp.get('adjustments', {}).get(key, 0))
+
+                self._table_row(pdf, col_w, ["Prop ID", property_data.get('account_number', '')] + 
+                                [comp_val(c, 'account_number') for c in page_comps])
+                self._table_row(pdf, col_w, ["Neighborhood", str(nbhd)] + 
+                                [str(c.get('neighborhood_code', nbhd)) for c in page_comps])
+                self._table_row(pdf, col_w, ["Situs", clean_text(property_data.get('address', ''))[:25]] + 
+                                [clean_text(c.get('address', ''))[:25] for c in page_comps])
+
+                self._table_row(pdf, col_w, ["Year Built", str(property_data.get('year_built', ''))] + 
+                                [str(c.get('year_built', '')) for c in page_comps])
+                self._table_row(pdf, col_w, ["Market Value", self._fmt(appraised)] + 
+                                [self._fmt(c.get('appraised_value', 0)) for c in page_comps])
+                self._table_row(pdf, col_w, ["Total SQFT", f"{subj_area:,.0f} SF"] + 
+                                [f"{c.get('building_area', 0):,.0f} SF" for c in page_comps])
+                self._table_row(pdf, col_w, ["Market Price/SQFT", self._pps(appraised, subj_area)] + 
+                                [self._pps(c.get('appraised_value', 0), c.get('building_area', 1)) for c in page_comps])
+
+                pdf.ln(2)
+
+                subj_grade_disp = str(property_data.get('building_grade', 'N/A'))
+                subj_year_built = str(property_data.get('year_built', ''))
+
+                self._table_row(pdf, col_w, ["TTL Cost Factor", ""] + ["" for _ in page_comps])
+                self._table_row(pdf, col_w, ["Year Remodeled", subj_year_built] + 
+                                [str(c.get('adjustments', {}).get('comp_remodel', c.get('year_built', ''))) for c in page_comps])
+                
+                remodel_label = "New/Rebuilt" if property_data.get('year_built') and int(str(property_data.get('year_built'))[:4]) >= (datetime.datetime.now().year - 5) else str(property_data.get('year_built', ''))
+                self._table_row(pdf, col_w, ["Remodel Adj", remodel_label] + 
+                                [self._fmt(c.get('adjustments', {}).get('remodel', 0)) for c in page_comps])
+
+                self._table_row(pdf, col_w, ["Grade Adj", subj_grade_disp] + 
+                                [f"{c.get('adjustments', {}).get('comp_grade', 'N/A')} {adj_val(c, 'grade')}" for c in page_comps])
+                self._table_row(pdf, col_w, ["Size Index Adj", ""] + 
+                                [adj_val(c, 'size') for c in page_comps])
+                self._table_row(pdf, col_w, ["Neighborhood Adj", str(nbhd)] + 
+                                [f"{c.get('neighborhood_code', nbhd)} {adj_val(c, 'neighborhood')}" for c in page_comps])
+                self._table_row(pdf, col_w, ["% Good Adj", f"{page_comps[0].get('adjustments', {}).get('subject_pct_good', 97)}%"] + 
+                                [f"{c.get('adjustments', {}).get('comp_pct_good', 80)}% {adj_val(c, 'percent_good')}" for c in page_comps])
+
+                pdf.ln(2)
+                self._table_row(pdf, col_w, ["Size Adj", "-"] + [adj_val(c, 'size') for c in page_comps])
+                pdf.ln(2)
+                self._table_row(pdf, col_w, ["Lump Sum Adj", ""] + [adj_val(c, 'lump_sum') for c in page_comps])
+                pdf.ln(2)
+                self._table_row(pdf, col_w, ["Sub Area Diff", ""] + [adj_val(c, 'sub_area_diff') for c in page_comps])
+                pdf.ln(2)
+
+                self._table_row(pdf, col_w, ["Land Value Adj", self._fmt(subj_land)] + [adj_val(c, 'land_value') for c in page_comps])
+                self._table_row(pdf, col_w, ["Segments & Adj", "$0"] + [adj_val(c, 'segments') for c in page_comps])
+                self._table_row(pdf, col_w, ["Other Improvements", "$0"] + [adj_val(c, 'other_improvements') for c in page_comps])
+
+                pdf.ln(2)
+
+                pdf.set_fill_color(230, 240, 255)
+                pdf.set_font("Arial", 'B', 7)
+                net_vals = ["Net Adjustment", ""]
+                for c in page_comps:
+                    net_vals.append(self._fmt(c.get('adjustments', {}).get('net_adjustment', 0)))
+                for i, v in enumerate(net_vals):
+                    pdf.cell(col_w[i], 8, clean_text(str(v)), 1, 0, 'C' if i > 0 else 'L', True)
+                pdf.ln()
+
+                pdf.ln(1)
+
+                ind_vals = ["Indicated Value", ""]
+                for c in page_comps:
+                    ind_vals.append(self._fmt(c.get('adjustments', {}).get('indicated_value', 0)))
+                pdf.set_fill_color(220, 255, 220)
+                for i, v in enumerate(ind_vals):
+                    pdf.cell(col_w[i], 8, clean_text(str(v)), 1, 0, 'C' if i > 0 else 'L', True)
+                pdf.ln()
+
+                pdf.ln(3)
+                median_equity = equity_floor
+                pdf.set_font("Arial", 'B', 8)
+                pdf.cell(90, 8, f"Median Equity Value: {self._fmt(median_equity)}", 0, 0, 'L')
+                pdf.cell(90, 8, f"Median Equity Value / SQFT: {self._pps(median_equity, subj_area)}", 0, 1, 'R')
+
+        # ── EQUITY MAP PAGE (appendix) ════════════════════════════════════════
+        if comps:
+            pdf.add_page()
+            self._draw_header(pdf, property_data, "APPENDIX: EQUITY GEOGRAPHIC CONTEXT")
+            addrs = [c.get('address') for c in comps[:7] if c.get('address')]
+            map_p = self._generate_static_map(property_data.get('address'), addrs, "blue")
+            if map_p:
+                pdf.image(map_p, x=10, y=40, w=190)
+                try: os.unlink(map_p)
+                except: pass
+            else:
+                pdf.set_font("Arial", '', 10)
+                pdf.ln(20)
+                pdf.cell(0, 10, "Map: Google Maps API key required for geographic context.", ln=True, align='C')
+            pdf.set_y(200)
+            pdf.set_font("Arial", 'B', 8)
+            pdf.cell(0, 6, f"Owner Name: {clean_text(owner_name)}  |  Address: {clean_text(property_data.get('address', ''))}", ln=True)
+            pdf.cell(0, 6, f"Account Number: {property_data.get('account_number', '')}  |  {clean_text(property_data.get('address', ''))}", ln=True)
 
         # Signature block
         pdf.ln(8)
