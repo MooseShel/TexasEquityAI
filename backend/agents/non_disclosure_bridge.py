@@ -10,89 +10,132 @@ class RentCastAgent:
         self.api_key = os.getenv("RENTCAST_API_KEY")
         self.base_url = "https://api.rentcast.io/v1/properties"
 
-    async def get_sale_data(self, address: str) -> Optional[Dict]:
-        if not self.api_key: 
-            logger.warning("RentCast API Key missing.")
+    def _fetch_property(self, address: str) -> Optional[dict]:
+        """
+        Single internal call to /v1/properties for a given address.
+        Returns the first matching property dict, or None.
+        All public methods share this one HTTP call to avoid duplicates.
+        """
+        if not self.api_key:
             return None
         try:
             headers = {"X-Api-Key": self.api_key, "accept": "application/json"}
-            params = {"address": address}
-            logger.info(f"Querying RentCast for: {address}")
-            response = requests.get(self.base_url, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    prop = data[0]
-                    sale_price = prop.get("lastSalePrice")
-                    logger.info(f"RentCast found sale price: {sale_price}")
-                    return {
-                        "sale_price": sale_price,
-                        "sale_date": prop.get("lastSaleDate"),
-                        "source": "RentCast"
-                    }
-                else:
-                    logger.info("RentCast returned no data for this address.")
+            resp = requests.get(self.base_url, headers=headers,
+                                params={"address": address}, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    return data[0]
+                if isinstance(data, dict) and data:
+                    return data
+            elif resp.status_code == 404:
+                logger.info(f"RentCast: No record for '{address}' (404).")
             else:
-                logger.error(f"RentCast API Error: {response.status_code} - {response.text}")
-            return None
+                logger.warning(f"RentCast returned {resp.status_code} for '{address}'")
         except Exception as e:
-            logger.error(f"RentCast Agent Exception: {e}")
+            logger.error(f"RentCast fetch failed for '{address}': {e}")
+        return None
+
+    async def detect_property_type(self, address: str) -> Optional[str]:
+        """
+        Quick RentCast lookup to determine property type.
+        Reuses _fetch_property — NO extra API call.
+        """
+        logger.info(f"Resolving Address via RentCast: {address}")
+        prop = self._fetch_property(address)
+        if prop:
+            ptype = prop.get("propertyType")
+            logger.info(f"RentCast propertyType for '{address}': {ptype}")
+            return ptype
+        return None
+
+    async def get_sale_data(self, address: str,
+                            cached_prop: Optional[dict] = None) -> Optional[Dict]:
+        """
+        Returns last sale price/date for an address.
+        Accepts an already-fetched property dict to avoid a duplicate API call.
+        """
+        if not self.api_key:
+            logger.warning("RentCast API Key missing.")
             return None
+        prop = cached_prop or self._fetch_property(address)
+        if prop:
+            sale_price = prop.get("lastSalePrice")
+            logger.info(f"RentCast found sale price: {sale_price}")
+            return {
+                "sale_price": sale_price,
+                "sale_date": prop.get("lastSaleDate"),
+                "source": "RentCast"
+            }
+        return None
 
     async def resolve_address(self, address: str) -> Optional[Dict]:
         """
-        Resolves a street address to an HCAD Account Number (assessorID) and property details.
+        Resolves a street address to an assessorID and property details.
+        Makes exactly ONE RentCast API call and also extracts sale data inline.
         """
-        if not self.api_key: return None
-        try:
-            headers = {"X-Api-Key": self.api_key, "accept": "application/json"}
-            params = {"address": address}
-            logger.info(f"Resolving Address via RentCast: {address}")
-            response = requests.get(self.base_url, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    prop = data[0]
-                    # Map RentCast fields to our schema
-                    details = {
-                        "account_number": prop.get("assessorID"),
-                        "address": prop.get("formattedAddress"),
-                        "appraised_value": 0, # to be filled later or from taxAssessments if needed
-                        "building_area": prop.get("squareFootage"),
-                        "year_built": prop.get("yearBuilt"),
-                        "legal_description": prop.get("legalDescription"),
-                        "rentcast_data": prop # Keep full data for fallback
-                    }
-                    
-                    # Try to get latest appraised value from taxAssessments
-                    tax_assessments = prop.get("taxAssessments", {})
-                    if tax_assessments:
-                        # Get max year
-                        latest_year = max(tax_assessments.keys(), key=lambda x: int(x))
-                        details['appraised_value'] = tax_assessments[latest_year].get('value', 0)
-                        
-                    return details
+        if not self.api_key:
             return None
-        except Exception as e:
-            logger.error(f"RentCast Resolution Failed: {e}")
+        logger.info(f"Resolving Address via RentCast: {address}")
+        prop = self._fetch_property(address)
+        if not prop:
             return None
+
+        details = {
+            "account_number": prop.get("assessorID"),
+            "address": prop.get("formattedAddress"),
+            "appraised_value": 0,
+            "building_area": prop.get("squareFootage"),
+            "year_built": prop.get("yearBuilt"),
+            "legal_description": prop.get("legalDescription"),
+            "rentcast_data": prop,       # full payload cached for downstream reuse
+            # Sale data baked in — no second call needed
+            "_sale_price": prop.get("lastSalePrice"),
+            "_sale_date":  prop.get("lastSaleDate"),
+        }
+
+        # Appraised value from tax assessments
+        tax_assessments = prop.get("taxAssessments", {})
+        if tax_assessments:
+            latest_year = max(tax_assessments.keys(), key=lambda x: int(x))
+            details['appraised_value'] = tax_assessments[latest_year].get('value', 0)
+
+        return details
+
 
 class NonDisclosureBridge:
     def __init__(self):
         self.rentcast = RentCastAgent()
 
-    async def get_last_sale_price(self, address: str) -> Optional[Dict]:
-        # Try RentCast
+    async def get_last_sale_price(self, address: str,
+                                  resolved_data: Optional[Dict] = None) -> Optional[Dict]:
+        """
+        Returns last sale price.  If resolve_address() was already called, pass in
+        the result to skip the duplicate API hit.
+        """
+        # If the resolved data already has sale info embedded, use it
+        if resolved_data and resolved_data.get("_sale_price"):
+            return {
+                "sale_price": resolved_data["_sale_price"],
+                "sale_date":  resolved_data.get("_sale_date"),
+                "source": "RentCast"
+            }
+        # Otherwise fall back to a fresh lookup (only happens if resolve wasn't called)
         data = await self.rentcast.get_sale_data(address)
         if data and data.get("sale_price"):
             return data
-            
         return None
 
     async def resolve_address(self, address: str) -> Optional[Dict]:
         return await self.rentcast.resolve_address(address)
+
+    async def detect_property_type(self, address: str) -> Optional[str]:
+        """
+        Returns property type. NOTE: this makes one RentCast call.
+        If resolve_address() was already called for this address, consider
+        reading rentcast_data['propertyType'] instead to avoid a duplicate.
+        """
+        return await self.rentcast.detect_property_type(address)
 
     def calculate_fallback_value(self, neighborhood_sales: list) -> float:
         if not neighborhood_sales: return 1.0
@@ -101,7 +144,4 @@ class NonDisclosureBridge:
         return sorted(ratios)[len(ratios)//2]
 
     async def get_estimated_market_value(self, appraised_value: float, address: str) -> float:
-        # Without real market data, we rely on the appraised value as the best estimate
-        # or potentially a conservative multiplier if we had regional trend data.
-        # For now, we avoid making up numbers.
         return appraised_value

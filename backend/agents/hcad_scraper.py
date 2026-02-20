@@ -21,6 +21,20 @@ if sys.platform == 'win32':
 
 logger = logging.getLogger(__name__)
 
+async def _launch_browser(p):
+    """Launch Chromium with Windows-safe flags to avoid [WinError 6] invalid handle."""
+    kwargs = dict(
+        headless=True,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ],
+    )
+    if sys.platform == 'win32':
+        kwargs['handle_sigint'] = False
+    return await p.chromium.launch(**kwargs)
+
 class HCADScraper(AppraisalDistrictConnector):
     """
     ULTRA-ROBUST SCRAPER for Harris County Appraisal District (HCAD).
@@ -110,7 +124,7 @@ class HCADScraper(AppraisalDistrictConnector):
         async with async_playwright() as p:
             browser = None
             try:
-                browser = await p.chromium.launch(headless=True)
+                browser = await _launch_browser(p)
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                     viewport={'width': 1280, 'height': 800},
@@ -129,18 +143,35 @@ class HCADScraper(AppraisalDistrictConnector):
                 await self._bypass_security(page)
 
                 
-                # Step 2: Select Search Mode (Account vs Location)
+                # Step 2: Select Search Mode (Account vs Property Address)
+                # Actual portal radio IDs discovered via DOM inspection:
+                #   Property Address: input#PROPERTYADDRESS  (value='PROPERTYADDRESS')
+                #   Account Number:   input#ACCOUNTID        (value='ACCOUNTID')
                 is_address = any(c.isalpha() for c in account_number)
-                try:
-                    if is_address:
-                        logger.info("Selecting 'Location' search mode (Address detected)...")
-                        await page.click("label[for='LOCATION']", force=True)
+                if is_address:
+                    logger.info("Selecting 'Property Address' search mode...")
+                    for sel in ["#PROPERTYADDRESS", "input[value='PROPERTYADDRESS']", "label[for='PROPERTYADDRESS']",
+                                "label[for='LOCATION']", "input[value='LOCATION']"]:
+                        try:
+                            await page.click(sel, timeout=5000, force=True)
+                            logger.info(f"Clicked address selector: {sel}")
+                            break
+                        except Exception:
+                            continue
                     else:
-                        logger.info("Selecting 'Account Number' search mode...")
-                        await page.click("label[for='ACCOUNTNUMBER']", force=True)
-                    await asyncio.sleep(1)
-                except Exception as e:
-                    logger.warning(f"Failed to select search mode: {e}")
+                        logger.warning("Could not click Property Address radio — proceeding anyway.")
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.info("Selecting 'Account Number' search mode...")
+                    for sel in ["#ACCOUNTID", "input[value='ACCOUNTID']", "label[for='ACCOUNTID']",
+                                "label[for='ACCOUNTNUMBER']", "input[value='ACCOUNTNUMBER']"]:
+                        try:
+                            await page.click(sel, timeout=5000, force=True)
+                            logger.info(f"Clicked account selector: {sel}")
+                            break
+                        except Exception:
+                            continue
+                    await asyncio.sleep(0.5)
 
                 # Step 3: Search
                 input_selector = "input[placeholder*='Search like']"
@@ -355,17 +386,23 @@ class HCADScraper(AppraisalDistrictConnector):
                     await browser.close()
         return None
 
-    async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
+    async def get_neighbors_by_street(self, street_name: str, search_term: str = None) -> List[Dict]:
         """
         Searches for all properties on a street and extracts their info from the results table.
         Uses smart polling instead of fixed sleeps for reliability.
+        
+        Args:
+            street_name: Used for logging only (the conceptual street being searched).
+            search_term: The actual string typed into HCAD search box. Defaults to street_name.
+                         Pass a full address like '2504 N Loop W' to filter by street number range.
         """
-        logger.info(f"HCAD: Discovering neighbors on street: {street_name}")
+        actual_search = search_term or street_name
+        logger.info(f"HCAD: Discovering neighbors on street: {street_name} (search: '{actual_search}')")
         async with async_playwright() as p:
             neighbors = []
             browser = None
             try:
-                browser = await p.chromium.launch(headless=True)
+                browser = await _launch_browser(p)
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
                 )
@@ -376,16 +413,16 @@ class HCADScraper(AppraisalDistrictConnector):
                 
                 input_selector = "input[placeholder*='Search like']"
                 await page.wait_for_selector(input_selector, timeout=30000)
-                await page.fill(input_selector, street_name)
+                await page.fill(input_selector, actual_search)
                 await page.keyboard.press("Enter")
                 
                 # Smart polling: wait for results table or timeout
-                logger.info(f"HCAD: Waiting for results table for '{street_name}'...")
+                logger.info(f"HCAD: Waiting for results table for '{actual_search}'...")
                 try:
                     await page.wait_for_selector("tr", timeout=30000)
                     await asyncio.sleep(2)  # Brief settle for full render
                 except Exception:
-                    logger.warning(f"HCAD: Timed out waiting for results table for '{street_name}'")
+                    logger.warning(f"HCAD: Timed out waiting for results table for '{actual_search}'")
                     return []
                 
                 # Extract results from the table
@@ -394,27 +431,31 @@ class HCADScraper(AppraisalDistrictConnector):
                     const seen = new Set();
                     
                     // 1. Try Standard Search Table
+                    // HCAD table layout: [Account Number] | [Owner Name] | [Property Address]
                     const tableRows = document.querySelectorAll('tr');
                     tableRows.forEach(row => {
                         const cells = row.querySelectorAll('td');
-                        if (cells.length >= 3) {
-                            let acc = cells[0].innerText.trim();
-                            let addr = cells[1].innerText.trim();
-                            
-                            // Verify 13-digit account number
-                            if (!/^\\d{13}$/.test(acc) && /^\\d{13}$/.test(cells[1].innerText.trim())) {
-                                acc = cells[1].innerText.trim();
-                                addr = cells[2] ? cells[2].innerText.trim() : "Unknown";
-                            }
-
-                            if (/^\\d{13}$/.test(acc) && !seen.has(acc)) {
-                                seen.add(acc);
-                                results.push({
-                                    account_number: acc,
-                                    address: addr
-                                });
-                            }
+                        const texts = [...cells].map(td => td.innerText.trim());
+                        if (texts.length < 2) return;
+                        
+                        // Find the 13-digit account number cell
+                        let accIdx = texts.findIndex(t => /^\\d{13}$/.test(t));
+                        if (accIdx === -1) return;
+                        let acc = texts[accIdx];
+                        if (seen.has(acc)) return;
+                        seen.add(acc);
+                        
+                        // Property address: prefer a cell starting with a digit (house number)
+                        let addr = 'Unknown';
+                        for (let i = accIdx + 1; i < texts.length; i++) {
+                            if (/^\\d/.test(texts[i])) { addr = texts[i]; break; }
                         }
+                        // Fallback: cell at accIdx+2 (skip owner name)
+                        if (addr === 'Unknown' && texts.length > accIdx + 2) {
+                            addr = texts[accIdx + 2];
+                        }
+                        
+                        results.push({ account_number: acc, address: addr });
                     });
                     
                     // 2. Fallback: Scan all links if table failed

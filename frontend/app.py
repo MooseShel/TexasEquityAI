@@ -33,6 +33,7 @@ from backend.agents.district_factory import DistrictConnectorFactory
 from backend.agents.non_disclosure_bridge import NonDisclosureBridge
 from backend.agents.equity_agent import EquityAgent
 from backend.agents.vision_agent import VisionAgent
+from backend.agents.sales_agent import SalesAgent
 from backend.services.narrative_pdf_service import NarrativeAgent, PDFService
 from backend.db.supabase_client import supabase_service
 from backend.services.hcad_form_service import HCADFormService
@@ -42,24 +43,104 @@ from backend.utils.address_utils import normalize_address, is_real_address
 
 st.set_page_config(page_title="Texas Equity AI", layout="wide")
 
+# ── Live Agent Log Capture ─────────────────────────────────────────────────
+class StreamlitLogCapture(logging.Handler):
+    """
+    Captures backend log messages during protest generation and formats them
+    into user-friendly lines that can be shown in a live scrollable panel.
+    """
+    # Map logger names → (emoji, friendly name)
+    AGENT_MAP = {
+        "__main__":                                   ("🎯", "Orchestrator"),
+        "backend.agents.non_disclosure_bridge":       ("🔗", "Data Bridge"),
+        "backend.agents.sales_agent":                 ("💰", "Sales Specialist"),
+        "backend.agents.equity_agent":                ("⚖️", "Equity Specialist"),
+        "backend.agents.commercial_enrichment_agent": ("🏢", "Commercial Expert"),
+        "backend.agents.hcad_scraper":                ("🏛️", "HCAD Scraper"),
+        "backend.agents.vision_agent":                ("📸", "Vision Agent"),
+        "backend.agents.fema_agent":                  ("🌊", "FEMA Agent"),
+        "backend.agents.permit_agent":                ("🔨", "Permit Agent"),
+        "backend.agents.rentcast_connector":          ("📊", "RentCast"),
+        "backend.agents.realestate_api_connector":    ("🏘️", "RealEstateAPI"),
+        "backend.agents.narrative_pdf_service":       ("✍️", "Legal Narrator"),
+        "backend.db.supabase_client":                 ("🗄️", "Database"),
+    }
+    # Noisy loggers to suppress unless they error
+    SUPPRESS_INFO = {"httpx", "httpcore", "urllib3", "asyncio"}
+
+    def __init__(self):
+        super().__init__()
+        self.lines: list = []          # accumulated friendly lines
+        self.setLevel(logging.INFO)
+
+    def emit(self, record: logging.LogRecord):
+        # Suppress noisy HTTP libraries unless it's a warning/error
+        root_name = record.name.split(".")[0]
+        if root_name in self.SUPPRESS_INFO and record.levelno < logging.WARNING:
+            return
+
+        emoji, name = self.AGENT_MAP.get(
+            record.name,
+            ("•", record.name.split(".")[-1].replace("_", " ").title())
+        )
+        # Clean the message: strip the auto-added logger prefix added by basicConfig
+        msg = record.getMessage()
+        # Truncate very long api payloads
+        if len(msg) > 200:
+            msg = msg[:197] + "..."
+
+        if record.levelno >= logging.ERROR:
+            line = f"❌  {emoji} {name}: {msg}"
+        elif record.levelno >= logging.WARNING:
+            line = f"⚠️  {emoji} {name}: {msg}"
+        else:
+            line = f"{emoji} {name}: {msg}"
+
+        self.lines.append(line)
+
+    def flush_display(self, placeholder):
+        """Re-render last 60 lines into the placeholder as a styled code block."""
+        if self.lines:
+            placeholder.code("\n".join(self.lines[-60:]), language=None)
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_address(address: str):
-    """Geocode an address using the free Nominatim API (no key required)."""
+    """Geocode an address using the free Nominatim API (no key required).
+    Automatically strips unit/suite numbers and retries if the full address fails.
+    """
+    import re
     if not address or len(address) < 5:
         return None
-    try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": address, "format": "json", "limit": 1},
-            headers={"User-Agent": "TexasEquityAI/1.0"},
-            timeout=5
-        )
-        data = resp.json()
-        if data:
-            return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])}
-    except Exception:
-        pass
+
+    def _try_geocode(addr: str):
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": addr, "format": "json", "limit": 1},
+                headers={"User-Agent": "TexasEquityAI/1.0"},
+                timeout=5
+            )
+            data = resp.json()
+            if data:
+                return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])}
+        except Exception:
+            pass
+        return None
+
+    # Try full address first
+    result = _try_geocode(address)
+    if result:
+        return result
+
+    # Strip unit/suite suffix (e.g. "# 198", "Suite 4", "Ste B", "Apt 2", "Unit 5") and retry
+    cleaned = re.sub(r'\s*(#|Suite|Ste|Apt|Unit)\s*\S+', '', address, flags=re.IGNORECASE).strip().strip(',')
+    if cleaned != address:
+        result = _try_geocode(cleaned)
+        if result:
+            return result
+
     return None
+
 
 def calc_zoom_level(map_df):
     """Calculate pydeck zoom level to fit all points with padding."""
@@ -94,11 +175,11 @@ def get_agents():
     # Ensure browsers are installed before agents start
     setup_playwright()
     return {
-
         "factory": DistrictConnectorFactory(),
         "bridge": NonDisclosureBridge(),
         "equity_engine": EquityAgent(),
         "vision_agent": VisionAgent(),
+        "sales_agent": SalesAgent(),
         "narrative_agent": NarrativeAgent(),
         "pdf_service": PDFService(),
         "form_service": HCADFormService(),
@@ -225,8 +306,20 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         if any(c.isalpha() for c in account_number) and " " in account_number:
             resolved = await agents["bridge"].resolve_address(account_number)
             if resolved:
-                current_account = resolved.get('account_number')
-                rentcast_fallback_data = resolved
+                resolved_account = resolved.get('account_number')
+                resolved_ptype   = (resolved.get('rentcast_data') or {}).get('propertyType', '')
+                is_residential_resolve = resolved_ptype in ('Single Family', 'Condo', 'Townhouse', 'Residential')
+                # Only switch current_account if we got a real assessorID back
+                # (commercial properties often have assessorID=None in RentCast)
+                if resolved_account:
+                    current_account = resolved_account
+                else:
+                    logger.info("RentCast resolve returned no assessorID — keeping original input as account key.")
+                # Only use as fallback data if it's NOT a confirmed residential with no assessorID
+                if resolved_account or not is_residential_resolve:
+                    rentcast_fallback_data = resolved
+                else:
+                    logger.info(f"Skipping rentcast_fallback_data: residential type='{resolved_ptype}' but no assessorID — likely wrong match.")
                 if not current_district:
                     res_addr = resolved.get('address', '').lower()
                     if "dallas" in res_addr: current_district = "DCAD"
@@ -294,16 +387,74 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         else:
             if cached_property and not is_valid_cache(cached_property):
                 logger.warning(f"Supabase cache for {current_account} looks like a ghost record (appraised={cached_property.get('appraised_value')}, year_built={cached_property.get('year_built')}, nbhd={cached_property.get('neighborhood_code')}) — forcing fresh scrape.")
-            property_details = await connector.get_property_details(current_account, address=original_address)
+            
+            # ── New Flow: Prioritize Commercial Data Sources if Commercial ──
+            # 1. Check property type using the RentCast data we might already have from resolve_address
+            is_likely_commercial = False
+            ptype_source = "Unknown"
+            ptype = "Unknown"
 
+            if rentcast_fallback_data:
+                # Read propertyType from the cached payload — avoids a second RentCast API call
+                ptype = (rentcast_fallback_data.get('rentcast_data') or {}).get('propertyType', '')
+                logger.info(f"RentCast cached propertyType='{ptype}' for '{current_account}'")
+                if ptype and ptype not in ('Single Family', 'Condo', 'Townhouse', 'Residential'):
+                    is_likely_commercial = True
+                    ptype_source = f"RentCast_Cached({ptype})"
+                # If ptype IS residential, we are confirmed residential — no extra call needed
+
+            # Only call detect_property_type() when we have no cached RentCast data at all
+            # (e.g. address not in RentCast, or account number input)
+            if not rentcast_fallback_data and any(c.isalpha() for c in current_account):
+                yield {"status": "🏢 Property Type Check: Verifying residential vs commercial..."}
+                try:
+                    ptype = await agents["bridge"].detect_property_type(current_account)
+                    logger.info(f"detect_property_type returned '{ptype}' for '{current_account}'")
+                    is_confirmed_residential = ptype in ('Single Family', 'Condo', 'Townhouse', 'Residential')
+                    # None means RentCast doesn't know → treat as potential commercial
+                    if not is_confirmed_residential:
+                        is_likely_commercial = True
+                        ptype_source = f"Unknown_or_Commercial({ptype})"
+                except Exception as e:
+                    logger.warning(f"detect_property_type failed: {e} — assuming potential commercial")
+                    is_likely_commercial = True
+                    ptype_source = "TypeError_fallback"
+
+            commercial_data = None
+            if is_likely_commercial:
+                from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+                yield {"status": f"🏢 Commercial Property Detected ({ptype_source}): Prioritizing commercial data sources..."}
+                commercial_agent = CommercialEnrichmentAgent()
+                commercial_data = await commercial_agent.enrich_property(current_account)
+            
+            if commercial_data and (commercial_data.get('appraised_value', 0) > 0 or commercial_data.get('building_area', 0) > 0):
+                logger.info(f"Commercial Enrichment Successful — Skipping standard scraper. Value: ${commercial_data.get('appraised_value', 0)}")
+                property_details = {
+                    "account_number": commercial_data.get('account_number') or current_account,
+                    "district": current_district or "HCAD",
+                    "property_type": "commercial",
+                    **commercial_data
+                }
+            else:
+                # Standard Residential Flow (or fallback if commercial enrichment failed)
+                if is_likely_commercial:
+                     yield {"status": "⚠️ Commercial enrichment yielded limited data. Trying district portal..."}
+                else:
+                     yield {"status": f"⛏️ Residental Flow: Scraping {current_district or 'District'} records..."}
+                
+                property_details = await connector.get_property_details(current_account, address=original_address)
+        
         if property_details and property_details.get('account_number'):
             current_account = property_details.get('account_number')
+        
         if not property_details:
-            if cached_property:
-                property_details = cached_property
-            else:
-                yield {"error": f"Could not retrieve property details for '{current_account}' from the appraisal district portal. Please verify the account number or address, or use the Manual Override fields to enter values directly."}
+             # Final fallback: if standard scrape failed AND we have basic RentCast data
+             if rentcast_fallback_data:
+                property_details = rentcast_fallback_data
+             else:
+                yield {"error": f"Could not retrieve property data for '{current_account}'. Please try the Manual Override fields."}
                 return
+
         raw_addr = property_details.get('address', '')
         district_context = property_details.get('district', 'HCAD')
         property_details['address'] = normalize_address(raw_addr, district_context)
@@ -336,7 +487,11 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         prop_address = property_details.get('address', '')
         if is_real_address(prop_address):
             try:
-                market_data = await agents["bridge"].get_last_sale_price(prop_address)
+                # Pass resolved_data so get_last_sale_price reads the cached payload
+                # instead of making a second identical RentCast /v1/properties call
+                market_data = await agents["bridge"].get_last_sale_price(
+                    prop_address, resolved_data=rentcast_fallback_data
+                )
                 if market_data and market_data.get('sale_price'):
                     market_value = market_data['sale_price']
                 if not market_value:
@@ -375,8 +530,27 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                     real_neighborhood = cached
                     yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached comps (< 30 days old)."}
 
-            # ── Layers 2-3: Playwright scraping (fallback for cloud gaps) ────────
-            if not real_neighborhood:
+            # ── Commercial/Land properties: skip Playwright HCAD scraping, use API sales comps ──
+            NON_RESIDENTIAL_TYPES = ('commercial', 'office', 'retail', 'industrial', 'mixed_use', 'land', 'vacant')
+            is_commercial_prop = str(property_details.get('property_type', '')).lower() in NON_RESIDENTIAL_TYPES
+            if not real_neighborhood and is_commercial_prop:
+                try:
+                    from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+                    commercial_agent = CommercialEnrichmentAgent()
+                    yield {"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}
+                    comp_pool = commercial_agent.get_equity_comp_pool(
+                        property_details.get('address', account_number), property_details
+                    )
+                    if comp_pool:
+                        real_neighborhood = comp_pool
+                        yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} commercial sales comps for analysis."}
+                    else:
+                        logger.warning("Commercial: Could not build sales comp pool from API.")
+                except Exception as ce:
+                    logger.error(f"Commercial comp pool error: {ce}")
+
+            # ── Layers 2-3: Playwright scraping (residential only) ───────────────
+            if not real_neighborhood and not is_commercial_prop:
                 if force_fresh_comps:
                     yield {"status": "⚖️ Equity Specialist: Force-refreshing comps from live portal..."}
                 else:
@@ -407,7 +581,6 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 logger.info(f"Street discovery: extracted '{street_name}' from '{prop_address}'")
 
                 async def scrape_pool(pool_list, limit=3):
-                    usable = []
                     sem = asyncio.Semaphore(limit)
                     async def safe_scrape(neighbor):
                         async with sem:
@@ -424,8 +597,8 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
 
                 # Neighborhood code scrape fallback
                 if not real_neighborhood:
-                    is_commercial = connector.is_commercial_neighborhood_code(nbhd_code) if nbhd_code else False
-                    if is_commercial:
+                    is_nbhd_commercial = connector.is_commercial_neighborhood_code(nbhd_code) if nbhd_code else False
+                    if is_nbhd_commercial:
                         logger.info(f"Neighborhood code '{nbhd_code}' is commercial — skipping neighborhood-wide search.")
                         yield {"error": f"⚠️ This appears to be a **commercial property** (Neighborhood Code: '{nbhd_code}'). Residential equity analysis requires comparable residential properties. Please verify the property type and try a manual address override if needed."}
                         return
@@ -451,11 +624,14 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             
             # Sales Comparison Analysis (independent data source)
             try:
+                yield {"status": "💰 Sales Specialist: Searching for recent comparable sales..."}
                 sales_results = agents["equity_engine"].get_sales_analysis(property_details)
                 if sales_results:
                     equity_results['sales_comps'] = sales_results.get('sales_comps', [])
                     equity_results['sales_count'] = sales_results.get('sales_count', 0)
-                    logger.info(f"Sales Analysis: Found {equity_results['sales_count']} comps.")
+                    count = equity_results['sales_count']
+                    yield {"status": f"💰 Sales Specialist: Found {count} comparable{'s' if count != 1 else ''}."}
+                    logger.info(f"Sales Analysis: Found {count} comps.")
             except Exception as sales_err:
                 logger.error(f"Sales Analysis Error: {sales_err}")
             
@@ -593,9 +769,19 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
         st.error("Please enter an account number or address.")
     else:
         with st.status("🏗️ Building your Protest Packet...", expanded=True) as status:
+            # ── Live Log Panel ───────────────────────────────────────────
+            st.markdown("**📋 Live Agent Activity**")
+            log_placeholder = st.empty()   # will hold the scrollable code block
+            st.divider()
+
             final_data = None
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+
+            # Install log capture for this run
+            log_capture = StreamlitLogCapture()
+            logging.getLogger().addHandler(log_capture)
+
             async def main_loop():
                 data = None
                 async for chunk in protest_generator_local(
@@ -604,9 +790,12 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     manual_area=m_area if m_area > 0 else None, district=district_code,
                     force_fresh_comps=force_fresh_comps
                 ):
-                    if "status" in chunk: st.write(chunk["status"])
+                    if "status" in chunk:
+                        st.write(chunk["status"])
+                        log_capture.flush_display(log_placeholder)  # refresh log after each status
                     if "warning" in chunk: st.warning(chunk["warning"], icon="⚠️")
                     if "error" in chunk:
+                        log_capture.flush_display(log_placeholder)
                         st.error(chunk["error"])
                         status.update(label="❌ Generation Failed", state="error", expanded=True)
                         return None
@@ -614,7 +803,19 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         data = chunk["data"]
                 return data
 
-            final_data = loop.run_until_complete(main_loop())
+            try:
+                final_data = loop.run_until_complete(main_loop())
+            finally:
+                # Remove handler so it doesn't stay attached across reruns
+                logging.getLogger().removeHandler(log_capture)
+
+            # Collapse log panel into expander after run
+            log_placeholder.empty()
+            if log_capture.lines:
+                with st.expander(f"📋 Analysis Log ({len(log_capture.lines)} events)", expanded=False):
+                    st.code("\n".join(log_capture.lines), language=None)
+            st.divider()
+
             if final_data:
                 status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
                 data = final_data
@@ -630,7 +831,14 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         st.metric("Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f}", delta_color="inverse")
                 with tab2:
                     st.subheader("Equity Analysis")
-                    if "error" in data['equity'] or not data['equity']: st.error("Equity analysis failed.")
+                    equity_has_data = data['equity'] and (
+                        data['equity'].get('equity_5') or
+                        data['equity'].get('justified_value_floor', 0) > 0
+                    )
+                    if not equity_has_data:
+                        st.error("Equity analysis failed — no comparable properties could be found.")
+                        if data['equity'] and data['equity'].get('error'):
+                            st.caption(f"ℹ️ {data['equity']['error']}")
                     else:
                         justified_val = data['equity'].get('justified_value_floor', 0)
                         savings = max(0, appraised - justified_val)
@@ -663,13 +871,15 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             # Select and rename display columns
                             display_cols = {
                                 'address': 'Address',
+                                'property_type': 'Type',
                                 'appraised_value': 'Appraised Value',
                                 'market_value': 'Market Value',
                                 'building_area': 'Sq Ft',
                                 'year_built': 'Year Built',
                                 'value_per_sqft': '$/Sq Ft',
                                 'similarity_score': 'Similarity',
-                                'neighborhood_code': 'Nbhd Code'
+                                'neighborhood_code': 'Nbhd Code',
+                                'source': 'Source',
                             }
                             # Only keep columns that exist in the DataFrame
                             cols_to_show = {k: v for k, v in display_cols.items() if k in equity_df.columns}
@@ -873,6 +1083,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             
                             sales_display_cols = {
                                 'Address': 'Address',
+                                'Type': 'Type',
                                 'Sale Price': 'Sale Price',
                                 'Sale Date': 'Sale Date',
                                 'SqFt': 'Sq Ft',

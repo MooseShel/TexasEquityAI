@@ -70,6 +70,9 @@ class RealEstateAPIConnector:
             
             comps = data.get('comps', []) if isinstance(data, dict) else data
             
+            if comps:
+                logger.info(f"RealEstateAPI: Raw comp keys: {list(comps[0].keys())}")
+
             sales_comps = []
             for comp in comps:
                 # Mapping fields - adjusting based on likely JSON keys
@@ -97,6 +100,10 @@ class RealEstateAPIConnector:
                         price = float(str(price).replace('$', '').replace(',', ''))
                     except (ValueError, TypeError):
                         price = 0
+
+                    # Skip comps with no real sale price
+                    if price <= 0:
+                        continue
                     
                     date = comp.get('soldDate') or comp.get('lastSaleDate') or comp.get('date')
                     
@@ -114,6 +121,10 @@ class RealEstateAPIConnector:
                     
                     # Year built
                     year = comp.get('yearBuilt') or comp.get('year_built')
+
+                    # Property type for filtering
+                    ptype = (comp.get('propertyType') or comp.get('useCode') or
+                             comp.get('property_type') or '')
                     
                     sales_comps.append(SalesComparable(
                         address=c_addr,
@@ -123,7 +134,8 @@ class RealEstateAPIConnector:
                         price_per_sqft=float(pps),
                         year_built=year,
                         source="RealEstateAPI",
-                        dist_from_subject=comp.get('distance')
+                        dist_from_subject=comp.get('distance'),
+                        property_type=ptype,
                     ))
                 except Exception as e:
                     logger.warning(f"Error parsing comp: {e}")
@@ -138,8 +150,8 @@ class RealEstateAPIConnector:
 
     def get_property_detail(self, address: str) -> Optional[dict]:
         """
-        Fetch detailed property info including mortgage history.
-        Endpoint: POST /v2/PropertyDetail
+        Fetch detailed property info from RealEstateAPI /PropertyDetail.
+        Returns a normalized dict with standard schema keys, or None on failure.
         """
         if not self.check_api_key():
             return None
@@ -152,12 +164,50 @@ class RealEstateAPIConnector:
         payload = {"address": address}
 
         try:
-            logger.info(f"RealEstateAPI: Fetching details/mortgage for {address}...")
+            logger.info(f"RealEstateAPI: Fetching details for {address}...")
             response = requests.post(url, json=payload, headers=headers)
             if response.status_code != 200:
-                logger.error(f"RealEstateAPI Detail Error {response.status_code}: {response.text}")
+                logger.error(f"RealEstateAPI Detail Error {response.status_code}: {response.text[:200]}")
                 return None
-            return response.json()
+            raw = response.json()
+            if not raw:
+                return None
+
+            # Support both dict and list responses
+            prop = raw[0] if isinstance(raw, list) else raw
+
+            # Normalize to standard schema
+            appraised_value = float(
+                prop.get("assessedValue")
+                or prop.get("assessedTotalValue")
+                or prop.get("taxAssessedValue")
+                or prop.get("lastSalePrice")
+                or prop.get("estimatedValue")
+                or 0
+            )
+            building_area = float(
+                prop.get("buildingArea")
+                or prop.get("buildingSize")
+                or prop.get("squareFootage")
+                or prop.get("grossBuildingArea")
+                or 0
+            )
+
+            normalized = {
+                "address": prop.get("formattedAddress") or prop.get("address") or address,
+                "appraised_value": appraised_value,
+                "building_area": building_area,
+                "lot_size": float(prop.get("lotSize") or 0),
+                "year_built": prop.get("yearBuilt"),
+                "property_type": prop.get("propertyType") or prop.get("useCode") or "Commercial",
+                "last_sale_price": float(prop.get("lastSalePrice") or 0),
+                "last_sale_date": prop.get("lastSaleDate") or prop.get("saleDate"),
+                "mortgageHistory": prop.get("mortgageHistory", []),
+                "_raw": prop,
+            }
+            logger.info(f"RealEstateAPI: Normalized detail → appraised=${normalized['appraised_value']:,.0f}, area={normalized['building_area']} sqft")
+            return normalized
         except Exception as e:
             logger.error(f"RealEstateAPI Detail Request Failed: {e}")
             return None
+

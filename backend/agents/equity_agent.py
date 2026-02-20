@@ -3,6 +3,7 @@ import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from typing import List, Dict
 import logging
+from backend.agents.sales_agent import SalesAgent
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,6 @@ class EquityAgent:
         """
         try:
             logger.info(f"EquityAgent: Initiating Sales Analysis for {subject_property.get('address', 'Unknown')}...")
-            from backend.agents.sales_agent import SalesAgent
             agent = SalesAgent()
             comps = agent.find_sales_comps(subject_property)
             logger.info(f"EquityAgent: Sales Analysis complete. Found {len(comps)} comps.")

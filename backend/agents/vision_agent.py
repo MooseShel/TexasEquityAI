@@ -288,45 +288,54 @@ class VisionAgent:
                         response_format={"type": "json_object"}
                     )
                     content = response.choices[0].message.content
-                    
-                    try:
-                        data = json.loads(content)
-                        if isinstance(data, dict):
-                            if "issues" in data: return data["issues"]
-                            for key, value in data.items():
-                                if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
-                                    return value
-                            return [] 
-                        elif isinstance(data, list):
-                            return data
-                    except json.JSONDecodeError:
-                        return self._parse_json_response(content)
-                        
+
+                    # Guard: model may return None content on refusal or API error
+                    if content is None:
+                        logger.warning("OpenAI Vision returned None content — falling back to Gemini.")
+                    else:
+                        try:
+                            data = json.loads(content)
+                            if isinstance(data, dict):
+                                if "issues" in data: return data["issues"]
+                                for key, value in data.items():
+                                    if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
+                                        return value
+                                return []
+                            elif isinstance(data, list):
+                                return data
+                        except json.JSONDecodeError:
+                            return self._parse_json_response(content)
+
             except Exception as e:
                 logger.warning(f"OpenAI Vision failed: {e}. Falling back to Gemini...")
 
-        # 2. Try Gemini - SECONDARY (with retry for 429s)
+        # 2. Try Gemini - SECONDARY (with retry for transient 429s only)
         if self.gemini_client:
             import time
-            retries = [15, 30]  # Backoff delays in seconds
+            retries = [15, 30]  # Backoff delays for transient rate limits
             for attempt in range(len(retries) + 1):
                 try:
                     logger.info(f"Attempting Vision analysis with Gemini (attempt {attempt + 1})...")
                     imgs = [Image.open(p) for p in image_paths_existing]
                     if imgs:
                         response = self.gemini_client.models.generate_content(
-                            model='gemini-2.0-flash', 
+                            model='gemini-2.0-flash',
                             contents=[prompt] + imgs
                         )
                         return self._parse_json_response(response.text)
                 except Exception as e:
                     error_str = str(e)
-                    if '429' in error_str and attempt < len(retries):
+                    is_quota_exhausted = 'RESOURCE_EXHAUSTED' in error_str or 'quota' in error_str.lower()
+                    if '429' in error_str and attempt < len(retries) and not is_quota_exhausted:
+                        # Transient rate limit — worth a retry
                         delay = retries[attempt]
                         logger.warning(f"Gemini 429 rate limit — retrying in {delay}s (attempt {attempt + 1})...")
                         time.sleep(delay)
                     else:
-                        logger.error(f"Gemini Vision failed: {e}. Falling back to Grok...")
+                        if is_quota_exhausted:
+                            logger.error(f"Gemini quota exhausted (RESOURCE_EXHAUSTED) — skipping retries, falling back to Grok.")
+                        else:
+                            logger.error(f"Gemini Vision failed: {e}. Falling back to Grok...")
                         break
 
         # 3. Try xAI (Grok-2) - TERTIARY

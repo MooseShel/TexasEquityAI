@@ -1,6 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
-from datetime import date
+from typing import Optional
 
 class SalesComparable(BaseModel):
     address: str
@@ -12,3 +11,4 @@ class SalesComparable(BaseModel):
     source: str = "RentCast"
     dist_from_subject: Optional[float] = None
     similarity_score: Optional[float] = None
+    property_type: Optional[str] = None   # e.g. "Single Family", "Commercial", "Condo"

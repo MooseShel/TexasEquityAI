@@ -349,7 +349,7 @@ class NarrativeAgent:
             except Exception as e:
                 logger.warning(f"xAI Fallback failed: {e}. Falling back to Gemini...")
         
-        # Fallback to Gemini (with retry for 429s)
+        # Fallback to Gemini (with retry for transient 429s only)
         if self.gemini_client:
             import time
             retries = [15, 30]
@@ -357,20 +357,25 @@ class NarrativeAgent:
                 try:
                     logger.info(f"Attempting narrative generation with Gemini (attempt {attempt + 1})...")
                     final_prompt = prompt.format(**inputs)
-                    
+
                     response = self.gemini_client.models.generate_content(
-                        model='gemini-2.0-flash', 
+                        model='gemini-2.0-flash',
                         contents=final_prompt
                     )
                     return clean_text(response.text)
                 except Exception as e:
                     error_str = str(e)
-                    if '429' in error_str and attempt < len(retries):
+                    is_quota_exhausted = 'RESOURCE_EXHAUSTED' in error_str or 'quota' in error_str.lower()
+                    if '429' in error_str and attempt < len(retries) and not is_quota_exhausted:
+                        # Transient rate limit — worth retrying
                         delay = retries[attempt]
                         logger.warning(f"Gemini 429 rate limit — retrying in {delay}s (attempt {attempt + 1})...")
                         time.sleep(delay)
                     else:
-                        logger.error(f"Gemini Fallback failed: {e}")
+                        if is_quota_exhausted:
+                            logger.error("Gemini quota exhausted (RESOURCE_EXHAUSTED) — skipping retries.")
+                        else:
+                            logger.error(f"Gemini Fallback failed: {e}")
                         return f"Error: All LLM providers (OpenAI, xAI, Gemini) failed to generate narrative. Last error: {e}"
 
         return "Error: No viable LLM available for generation."

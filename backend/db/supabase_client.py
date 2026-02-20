@@ -15,10 +15,18 @@ class SupabaseService:
     def __init__(self):
         self.url = os.getenv("SUPABASE_URL")
         self.key = os.getenv("SUPABASE_KEY")
+        if not self.url:
+            logger.error("SUPABASE_URL is not set — all database operations will be skipped. Set it in .env.")
+        if not self.key:
+            logger.error("SUPABASE_KEY is not set — all database operations will be skipped. Set it in .env.")
         if self.url and self.key:
-            self.client: Client = create_client(self.url, self.key)
+            try:
+                self.client: Client = create_client(self.url, self.key)
+                logger.info("Supabase client initialized successfully.")
+            except Exception as e:
+                logger.error(f"Supabase client initialization failed: {e}. Database operations will be disabled.")
+                self.client = None
         else:
-            logger.warning("Supabase URL or Key not found. Database operations will be disabled.")
             self.client = None
 
     async def get_property_by_account(self, account_number: str):
@@ -123,7 +131,6 @@ class SupabaseService:
             logger.warning(f"get_neighbors_from_db failed: {e}")
             return []
 
-# Singleton instance
     async def search_address_globally(self, address_query: str, limit: int = 5) -> list:
         """
         Search for properties by address across ALL districts.

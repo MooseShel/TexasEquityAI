@@ -29,6 +29,7 @@ from backend.db.supabase_client import supabase_service
 from backend.services.hcad_form_service import HCADFormService
 from backend.agents.fema_agent import FEMAAgent
 from backend.agents.permit_agent import PermitAgent
+from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
 
 
 
@@ -49,6 +50,7 @@ pdf_service = PDFService()
 form_service = HCADFormService()
 fema_agent = FEMAAgent()
 permit_agent = PermitAgent()
+commercial_agent = CommercialEnrichmentAgent()
 
 
 
@@ -74,6 +76,24 @@ async def get_full_protest(
     if sys.platform == 'win32' and not isinstance(loop, asyncio.WindowsProactorEventLoopPolicy):
          # We can't actually change the running loop here, but we can log it.
          pass
+
+    def _is_ghost_record(p: dict) -> bool:
+        """
+        Returns True if a DB/scraper record contains known placeholder values
+        and should NOT be trusted as real data. Triggers re-scrape or enrichment.
+        Ghost signatures: appraised_value in (0, 450000) AND building_area in (0, 2500)
+        AND no year_built AND no neighborhood_code.
+        """
+        if not p:
+            return True
+        val  = float(p.get('appraised_value') or 0)
+        area = float(p.get('building_area') or 0)
+        has_real_value = val not in (0.0, 450000.0)
+        has_real_area  = area not in (0.0, 2500.0)
+        has_year       = bool(p.get('year_built'))
+        has_nbhd       = bool(p.get('neighborhood_code'))
+        # Trust only if at least one real field is present
+        return not (has_real_value or has_real_area or has_year or has_nbhd)
             
     async def protest_generator():
         print("DEBUG: protest_generator STARTED!")
@@ -90,10 +110,25 @@ async def get_full_protest(
                 logger.info(f"Input '{account_number}' detected as address. Attempting resolution...")
                 resolved = await bridge.resolve_address(account_number)
                 if resolved:
-                    current_account = resolved.get('account_number')
-                    rentcast_fallback_data = resolved
-                    logger.info(f"Resolved address to account: {current_account}")
-                    
+                    resolved_account = resolved.get('account_number')
+                    resolved_ptype   = (resolved.get('rentcast_data') or {}).get('propertyType', '')
+                    is_residential_resolve = resolved_ptype in ('Single Family', 'Condo', 'Townhouse', 'Residential')
+
+                    # Only switch current_account if we got a real assessorID back
+                    # (commercial properties often have assessorID=None in RentCast)
+                    if resolved_account:
+                        current_account = resolved_account
+                        logger.info(f"Resolved address to account: {current_account}")
+                    else:
+                        logger.info(f"RentCast resolve returned no assessorID — keeping original input as account key.")
+
+                    # Only use as fallback data if it's NOT a confirmed residential with no assessorID
+                    # (would wrongly block the commercial gate)
+                    if resolved_account or not is_residential_resolve:
+                        rentcast_fallback_data = resolved
+                    else:
+                        logger.info(f"Skipping rentcast_fallback_data: residential propertyType='{resolved_ptype}' but no assessorID — likely wrong match.")
+
                     # Infer district from resolved address to ensure correct connector usage
                     if not current_district:
                         res_addr = resolved.get('address', '').lower()
@@ -159,10 +194,12 @@ async def get_full_protest(
             connector = DistrictConnectorFactory.get_connector(current_district, current_account)
             original_address = account_number if any(c.isalpha() for c in account_number) else None
 
-            # Use cached data directly if it has real content — skip scraper entirely
+            # Use cached data directly if it has REAL content — skip scraper entirely
+            # Ghost/placeholder records (appraised=450k, area=2500, no year/nbhd) are rejected
             if (cached_property
                     and cached_property.get('address')
                     and cached_property.get('appraised_value')
+                    and not _is_ghost_record(cached_property)
                     and not manual_value and not manual_address):
                 logger.info(f"DB-first: Using Supabase cached record for {current_account} — skipping scraper.")
                 property_details = cached_property
@@ -174,8 +211,8 @@ async def get_full_protest(
                     logger.error(f"Scraper failed for {current_account}: {e}")
                     property_details = None
 
-            # Fallback: If scraper failed but we had a partial DB record, use it better than nothing
-            if not property_details and cached_property:
+            # Fallback: If scraper failed but we had a REAL (non-ghost) partial DB record, use it
+            if not property_details and cached_property and not _is_ghost_record(cached_property):
                 logger.warning(f"Scraper failed/returned empty, falling back to cached DB record for {current_account}.")
                 property_details = cached_property
 
@@ -200,19 +237,45 @@ async def get_full_protest(
                     }
                     district_city = district_map.get(current_district, "Houston, TX")
 
-                    if cached_property:
+                    if cached_property and not _is_ghost_record(cached_property):
                         # FIX: Check if cache has the wrong city (legacy "Houston" for non-Harris)
                         cached_addr = cached_property.get('address', '')
                         if current_district and current_district != "HCAD" and "Houston" in cached_addr and district_city not in cached_addr:
                              logger.info(f"Correcting cached address city for {current_district}: {cached_addr}")
                              cached_property['address'] = cached_addr.replace("Houston, TX", district_city)
-                             # Also update the db immediately? proper upsert later handles it.
                         property_details = cached_property
                     else:
-                        # Scraper returned no data — don't fabricate values, surface an error
-                        logger.error(f"Scraper returned no property details for account {current_account}.")
-                        yield json.dumps({"error": f"Could not retrieve property details for account '{current_account}' from the appraisal district portal. Please verify the account number or use the Manual Override fields to enter values directly."}) + "\n"
-                        return
+                        # Scraper returned nothing — check if this is a commercial property
+                        # before giving up, using RentCast propertyType as a fast gate
+                        lookup_addr = original_address or account_number
+                        yield json.dumps({"status": "🏢 Property Type Check: Querying RentCast to detect property type..."}) + "\n"
+                        prop_type = await bridge.detect_property_type(lookup_addr)
+                        logger.info(f"Detected propertyType='{prop_type}' for '{lookup_addr}'")
+
+                        is_confirmed_residential = prop_type in ("Single Family", "Condo", "Townhouse", "Residential")
+
+                        # SOFT GATE: Always attempt API enrichment regardless of propertyType.
+                        # RentCast can misclassify commercial corridors as residential.
+                        # Only hard-fail if enrichment also comes back empty AND type is confirmed residential.
+                        yield json.dumps({"status": "🏢 Commercial Enrichment: Querying RealEstateAPI + RentCast for commercial property data..."}) + "\n"
+                        enriched = await commercial_agent.enrich_property(lookup_addr)
+                        if enriched and (enriched.get('appraised_value', 0) > 0 or enriched.get('building_area', 0) > 0):
+                            property_details = {
+                                "account_number": current_account,
+                                "district": current_district or "HCAD",
+                                "property_type": "commercial",
+                                **enriched
+                            }
+                            logger.info(f"Commercial enrichment succeeded: appraised=${property_details.get('appraised_value',0):,.0f}, area={property_details.get('building_area',0)} sqft")
+                        elif is_confirmed_residential:
+                            # Enrichment failed AND RentCast confirmed residential — genuine miss
+                            logger.error(f"Confirmed Residential miss for account {current_account} — district scraper returned nothing and enrichment failed.")
+                            yield json.dumps({"error": f"Could not retrieve property details for account '{current_account}' from the appraisal district portal. Please verify the account number or use the Manual Override fields to enter values directly."}) + "\n"
+                            return
+                        else:
+                            logger.error(f"Commercial enrichment returned no usable data for '{lookup_addr}'.")
+                            yield json.dumps({"error": f"Could not retrieve property data for '{lookup_addr}'. This appears to be a commercial or non-standard property not accessible via public appraisal records or our API partners. Try the Manual Override fields to enter values directly."}) + "\n"
+                            return
             
             # AGGRESSIVE CLEANING
             raw_addr = property_details.get('address', '')
@@ -224,6 +287,34 @@ async def get_full_protest(
             if manual_address: property_details['address'] = manual_address
             if manual_value: property_details['appraised_value'] = manual_value
             if manual_area: property_details['building_area'] = manual_area
+
+            # POST-LOAD GHOST CHECK: if property_details has placeholder/zero values
+            # (scraper returned a stub OR DB ghost slipped through), trigger commercial enrichment.
+            if _is_ghost_record(property_details) and not manual_value:
+                lookup_addr = (
+                    property_details.get('address')
+                    or original_address
+                    or account_number
+                )
+                yield json.dumps({"status": "🏢 Property Type Check: Detected stub data — querying RentCast for property type..."}) + "\n"
+                prop_type = await bridge.detect_property_type(lookup_addr)
+                logger.info(f"Post-load ghost check: propertyType='{prop_type}' for '{lookup_addr}'")
+
+                is_confirmed_residential = prop_type in ("Single Family", "Condo", "Townhouse", "Residential")
+
+                if not is_confirmed_residential:
+                    yield json.dumps({"status": "🏢 Commercial Enrichment: Fetching real data from RealEstateAPI + RentCast..."}) + "\n"
+                    enriched = await commercial_agent.enrich_property(lookup_addr)
+                    if enriched and (enriched.get('appraised_value', 0) > 0 or enriched.get('building_area', 0) > 0):
+                        property_details = {
+                            **property_details,       # keep account_number, district, etc.
+                            **enriched,               # overwrite with real values
+                            "property_type": "commercial",
+                        }
+                        logger.info(f"Post-load enrichment OK: appraised=${property_details.get('appraised_value',0):,.0f}, area={property_details.get('building_area',0)} sqft")
+                    else:
+                        logger.warning(f"Post-load commercial enrichment returned no data for '{lookup_addr}'.")
+                        # Don't abort — continue with whatever we have (manual override might save it)
 
             # Update cache
             if property_details and is_real_address(property_details.get('address')):
@@ -372,12 +463,29 @@ async def get_full_protest(
                 
                 logger.info(f"Final discovery pool size: {len(real_neighborhood)}")
                 
-                # Fallback if discovery completely fails
+                # Fallback if discovery completely fails — for commercial, use sales comps as equity pool
                 if not real_neighborhood:
-                    friendly_error = "Could not find sufficient data for equity analysis. Please try again later or verify the address."
-                    logger.warning("Live discovery found no usable neighbors. Returning error to user.")
-                    yield json.dumps({"error": friendly_error}) + "\n"
-                    return # Stop execution gracefully
+                    if str(property_details.get('property_type', '')).lower() == 'commercial':
+                        logger.info("Commercial property: no district neighbors found. Building equity pool from sales comps...")
+                        yield json.dumps({"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}) + "\n"
+                        real_neighborhood = commercial_agent.get_equity_comp_pool(
+                            property_details.get('address', account_number), property_details
+                        )
+                        if real_neighborhood:
+                            equity_results['note'] = (
+                                "Equity analysis is based on recent sales comparables "
+                                "(commercial property — no district neighbor records available)."
+                            )
+                            logger.info(f"Commercial equity pool: {len(real_neighborhood)} comps available.")
+                        else:
+                            # No comps either — skip equity, continue to vision/narrative
+                            logger.warning("Commercial equity pool empty. Skipping equity analysis.")
+                            equity_results['error'] = "No comparable sales found for equity analysis."
+                    else:
+                        friendly_error = "Could not find sufficient data for equity analysis. Please try again later or verify the address."
+                        logger.warning("Live discovery found no usable neighbors. Returning error to user.")
+                        yield json.dumps({"error": friendly_error}) + "\n"
+                        return # Stop execution gracefully
 
                 equity_results['justified_value_floor'] = equity_engine.find_equity_5(property_details, real_neighborhood).get('justified_value_floor', 0)
                 # Merge full equity results safely
@@ -423,7 +531,7 @@ async def get_full_protest(
             # Vision Analysis
             # Use the cleaned search_address for vision acquisition
             image_paths = await vision_agent.get_street_view_images(search_address)
-            vision_detections = await vision_agent.analyze_property_condition(image_paths)
+            vision_detections = await vision_agent.analyze_property_condition(image_paths, property_details)
             
             # Combine external obsolescence from FEMA into narrative context
             if flood_data and flood_data.get('is_high_risk'):
@@ -479,8 +587,38 @@ async def get_full_protest(
                         "narrative": narrative,
                         "pdf_url": form_path
                     }
-                    await supabase_service.save_protest(protest_record)
-            except: pass
+                    saved_protest = await supabase_service.save_protest(protest_record)
+                    
+                    if saved_protest:
+                        logger.info(f"✅ Saved protest record ID: {saved_protest.get('id')}")
+                        
+                        # Save the comps used for this protest
+                        # real_neighborhood contains the final used comps (whether neighbors or sales)
+                        if real_neighborhood:
+                            try:
+                                logger.info(f"Saving {len(real_neighborhood)} equity comps to DB...")
+                                # Sanitize comps to remove _raw fields that cause Supabase insert errors
+                                clean_comps = []
+                                for c in real_neighborhood:
+                                    # Create a clean copy with only primitive types + no large blobs
+                                    clean = {
+                                        k: v for k, v in c.items() 
+                                        if k not in ('_raw', 'raw', 'geometry', 'similarity_rationale') 
+                                        and not isinstance(v, (dict, list)) # flat structure only
+                                    }
+                                    # Ensure essential fields are present
+                                    if 'account_number' in clean:
+                                        clean_comps.append(clean)
+                                
+                                await supabase_service.save_equity_comps(saved_protest['id'], clean_comps) 
+                                logger.info(f"✅ Saved {len(clean_comps)} equity comps.")
+                            except Exception as e:
+                                logger.error(f"Failed to save equity comps: {e}")
+                    else:
+                        logger.warning("Failed to save protest record (no ID returned).")
+
+            except Exception as e:
+                logger.error(f"❌ DB Save Failed: {e}")
 
             # Final Payload
             yield json.dumps({"data": {
