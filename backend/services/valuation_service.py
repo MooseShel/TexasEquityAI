@@ -107,9 +107,9 @@ class ValuationService:
         comp_year = self._parse_year(comp.get('year_built'))
 
         if subj_year and comp_year:
-            year_diff = subj_year - comp_year
-            age_adj_pct = year_diff * 0.01  # 1% per year
-            adjustments["age"] = round(comp_value * age_adj_pct)
+            # We use effective age / depreciation (Marshall & Swift) instead of linear age adjustment
+            # to avoid double counting.
+            adjustments["age"] = 0
 
         # --- 4. Remodel Adjustment ---
         subj_remodel = self._parse_year(subject.get('year_remodeled') or subject.get('year_built'))

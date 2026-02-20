@@ -768,70 +768,44 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
     if not account_number:
         st.error("Please enter an account number or address.")
     else:
-        with st.status("🏗️ Building your Protest Packet...", expanded=True) as status:
-            # ── Live Log Panel ───────────────────────────────────────────
-            st.markdown("**📋 Live Agent Activity**")
-            log_placeholder = st.empty()   # will hold the scrollable code block
-            st.divider()
+            with st.status("🏗️ Building your Protest Packet...", expanded=True) as status:
+                final_data = None
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
 
-            final_data = None
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+                async def main_loop():
+                    data = None
+                    async for chunk in protest_generator_local(
+                        account_number, manual_address=m_address or None,
+                        manual_value=m_value if m_value > 0 else None,
+                        manual_area=m_area if m_area > 0 else None, district=district_code,
+                        force_fresh_comps=force_fresh_comps
+                    ):
+                        if "status" in chunk:
+                            st.write(chunk["status"])
+                        if "warning" in chunk: st.warning(chunk["warning"], icon="⚠️")
+                        if "error" in chunk:
+                            st.error(chunk["error"])
+                            status.update(label="❌ Generation Failed", state="error", expanded=True)
+                            return None
+                        if "data" in chunk:
+                            data = chunk["data"]
+                    return data
 
-            # Install log capture for this run
-            log_capture = StreamlitLogCapture()
-            logging.getLogger().addHandler(log_capture)
+                try:
+                    final_data = loop.run_until_complete(main_loop())
+                except Exception as e:
+                    st.error(f"Generation Loop Failed: {e}")
+                
+                if final_data:
+                    status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
 
-            async def main_loop():
-                data = None
-                async for chunk in protest_generator_local(
-                    account_number, manual_address=m_address or None,
-                    manual_value=m_value if m_value > 0 else None,
-                    manual_area=m_area if m_area > 0 else None, district=district_code,
-                    force_fresh_comps=force_fresh_comps
-                ):
-                    if "status" in chunk:
-                        st.write(chunk["status"])
-                        log_capture.flush_display(log_placeholder)  # refresh log after each status
-                    if "warning" in chunk: st.warning(chunk["warning"], icon="⚠️")
-                    if "error" in chunk:
-                        log_capture.flush_display(log_placeholder)
-                        st.error(chunk["error"])
-                        status.update(label="❌ Generation Failed", state="error", expanded=True)
-                        return None
-                    if "data" in chunk:
-                        data = chunk["data"]
-                return data
-
-            try:
-                final_data = loop.run_until_complete(main_loop())
-            finally:
-                # Remove handler so it doesn't stay attached across reruns
-                logging.getLogger().removeHandler(log_capture)
-
-            # Collapse log panel into expander after run
-            log_placeholder.empty()
-            if log_capture.lines:
-                with st.expander(f"📋 Analysis Log ({len(log_capture.lines)} events)", expanded=False):
-                    st.code("\n".join(log_capture.lines), language=None)
-            st.divider()
-
+            # Check logic outside the status container (Dedent to 8 spaces)
             if final_data:
-                status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
                 data = final_data
                 
-                # --- Prominent Download Button at Top ---
-                pdf_path = data.get('combined_pdf_path', '')
-                if pdf_path and os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        st.download_button(
-                            "📥 DOWNLOAD COMPLETE PROTEST PACKET (8-PAGE PDF)",
-                            f,
-                            file_name=f"ProtestPacket_{data['property'].get('account_number', 'unknown')}.pdf",
-                            mime="application/pdf",
-                            type="primary",
-                            use_container_width=True
-                        )
+                # Top-level button removed as per user request (moved back to Narrative tab)
+                
                 st.divider()
                 
                 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏠 Property", "⚖️ Equity", "💰 Sales Comps", "📸 Vision", "📄 Protest", "⚙️ Data"])
@@ -1349,4 +1323,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 mime="application/pdf",
                                 type="primary"
                             )
+                    else:
+                        st.warning(f"⚠️ Protest PDF not found. (Path: {pdf_path or 'None'})")
+                        st.caption("Please check the logs or try regenerating the packet.")
                 with tab6: st.json(data)

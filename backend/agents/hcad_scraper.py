@@ -271,21 +271,41 @@ class HCADScraper(AppraisalDistrictConnector):
 
                 # Owner Name, Mailing Address, Legal Description
                 try:
-                    owner_info = await page.locator("#OwnerInfoComponent").inner_text()
-                    lines = [l.strip() for l in owner_info.split('\n') if l.strip()]
-                    # Owner name is typically the first non-account, non-address line
-                    for line in lines:
-                        if 'Owner' in line and ':' in line:
-                            details['owner_name'] = line.split(':', 1)[1].strip()
-                            break
-                    # Try broader extraction from all text
-                    if not details.get('owner_name') and len(lines) >= 2:
-                        # First line after header is usually owner
+                    # Robust Owner Name Extraction for New Portal
+                    owner_found = False
+                    
+                    # Strategy 1: Look for table row with "Owner"
+                    # New portal often has <th>Owner Name</th><td>NAME</td>
+                    owner_row = page.locator("tr").filter(has_text=re.compile(r"Owner Name|Owner:", re.IGNORECASE)).first
+                    if await owner_row.count() > 0:
+                        val_cell = owner_row.locator("td").first
+                        if await val_cell.count() > 0:
+                            details['owner_name'] = (await val_cell.inner_text()).strip()
+                            owner_found = True
+                    
+                    # Strategy 2: Look for specific Owner info container classes
+                    if not owner_found:
+                         owner_el = page.locator(".owner-name, td[data-label='Owner Name']").first
+                         if await owner_el.count() > 0:
+                             details['owner_name'] = (await owner_el.inner_text()).strip()
+                             owner_found = True
+
+                    # Strategy 3: Parsing the text block (Fallback)
+                    if not owner_found:
+                        owner_info = await page.locator("#OwnerInfoComponent").inner_text()
+                        lines = [l.strip() for l in owner_info.split('\n') if l.strip()]
                         for line in lines:
-                            if not line.startswith('Account') and not any(c.isdigit() for c in line[:3]):
-                                details['owner_name'] = line
+                            if 'Owner' in line and ':' in line:
+                                details['owner_name'] = line.split(':', 1)[1].strip()
                                 break
-                except: pass
+                        # If still not found, try the first non-numeric line (often name)
+                        if not details.get('owner_name') and len(lines) >= 2:
+                            for line in lines:
+                                if not line.startswith('Account') and not any(c.isdigit() for c in line[:3]):
+                                    details['owner_name'] = line
+                                    break
+                except Exception as e:
+                    logger.warning(f"Owner info extraction error: {e}")
 
                 try:
                     owner_box = await page.evaluate("""() => {
@@ -356,6 +376,21 @@ class HCADScraper(AppraisalDistrictConnector):
                     details['neighborhood_code'] = await page.locator("#AdditionalInfoComponent table tbody tr td").nth(1).inner_text()
                     details['neighborhood_code'] = details['neighborhood_code'].strip()
                 except: pass
+
+                # Property Type / State Class
+                try:
+                    # Try to find "State Class" or "Land Use"
+                    state_class_row = page.locator("tr", has_text=re.compile(r"State Class|Land Use", re.IGNORECASE)).first
+                    if await state_class_row.count() > 0:
+                        # Value is usually the last cell
+                        details['property_type'] = (await state_class_row.locator("td").last.inner_text()).strip()
+                    else:
+                        # Fallback: Check for generic type in header
+                        header_text = await page.locator(".card-header").first.inner_text()
+                        if "Commercial" in header_text: details['property_type'] = "Commercial"
+                        elif "Residential" in header_text: details['property_type'] = "Residential"
+                except: 
+                    details['property_type'] = "Unknown"
 
                 # Valuation logic
                 async def extract_vals():

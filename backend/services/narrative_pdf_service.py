@@ -604,6 +604,18 @@ class PDFService:
             for page_idx, page_comps in enumerate(comp_pages):
                 pdf.add_page()
                 self._draw_header(pdf, property_data, "RESIDENTIAL EQUITY COMP GRID")
+                
+                # Methodology Methodology
+                pdf.set_font("Arial", 'I', 8)
+                pdf.set_text_color(100, 100, 100)
+                methodology_text = (
+                    "Adjustments are calculated using standard appraisal methods: "
+                    "Depreciation based on Marshall & Swift residential cost tables. "
+                    "Size adjustments applied at 50% of base rate (diminishing returns)."
+                )
+                pdf.multi_cell(0, 4, clean_text(methodology_text), align='L')
+                pdf.set_text_color(0, 0, 0)
+                pdf.ln(2)
 
                 n_comps = len(page_comps)
                 # Column widths: Factor col + Subject col + N comp cols
@@ -1192,30 +1204,54 @@ class PDFService:
             # Comp images (2 per row)
             comp_entries = [(k, v) for k, v in comp_images.items()
                           if k not in ('subject', 'subject_condition') and not k.endswith('_condition')]
+            # Start position for comps - ensure clean start
+            pdf.ln(5)
+            
             for ci, (comp_key, img_path) in enumerate(comp_entries[:6]):
                 if not os.path.exists(img_path):
                     continue
-                if ci > 0 and ci % 2 == 0:
-                    pdf.ln(3)
-                if pdf.get_y() > 230:
-                    pdf.add_page()
-                    self._draw_header(pdf, property_data, "AI PROPERTY CONDITION COMPARISON (cont.)")
-
-                condition_key = f"{comp_key}_condition"
-                condition_text = comp_images.get(condition_key, 'Condition not assessed')
-
-                x_offset = 10 if ci % 2 == 0 else 105
+                
+                # Grid layout constants
+                col = ci % 2
+                row_height = 85  # Total height reserved for each entry
+                
+                # If starting a new row (col 0)
+                if col == 0:
+                    # If not the very first item, move down
+                    if ci > 0: 
+                        pdf.set_y(pdf.get_y() + row_height)
+                    
+                    # Check for page break
+                    if pdf.get_y() + row_height > 260:
+                        pdf.add_page()
+                        self._draw_header(pdf, property_data, "AI PROPERTY CONDITION COMPARISON (cont.)")
+                        pdf.set_y(35)
+                
+                # Calculate X and Y
+                x_offset = 15 if col == 0 else 115
+                current_y = pdf.get_y()
+                
+                # 1. Header Box
                 pdf.set_fill_color(240, 240, 245)
                 pdf.set_font("Arial", 'B', 7)
-                pdf.set_x(x_offset)
-                pdf.cell(90, 6, clean_text(f"COMP {chr(65 + ci)}: {comp_key}")[:45], fill=True)
-                pdf.ln()
+                pdf.set_xy(x_offset, current_y)
+                pdf.cell(85, 6, clean_text(f"COMP {chr(65 + ci)}: {comp_key}")[:45], fill=True)
+                
+                # 2. Image
                 try:
-                    pdf.image(img_path, x=x_offset, y=pdf.get_y(), w=85, h=50)
+                    # Place image below header
+                    pdf.image(img_path, x=x_offset, y=current_y + 7, w=85, h=50)
                 except: pass
-                pdf.set_xy(x_offset, pdf.get_y() + 52)
-                pdf.set_font("Arial", '', 6)
-                pdf.multi_cell(90, 4, clean_text(f"AI: {condition_text}")[:120])
+                
+                # 3. Condition Text
+                text_y = current_y + 58
+                pdf.set_xy(x_offset, text_y)
+                pdf.set_font("Arial", '', 7)
+                # Multi-cell with height check? Just limit length for now
+                pdf.multi_cell(85, 3.5, clean_text(f"AI Assessment: {condition_text}")[:250])
+                
+            # Reset Y for next section (ensure safely below last row)
+            pdf.set_y(pdf.get_y() + 20)
         elif image_paths and len(image_paths) > 0:
             # Fallback: just show subject images without comp comparison
             pass
