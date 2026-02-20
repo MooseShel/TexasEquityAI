@@ -12,7 +12,7 @@ class FEMAAgent:
     """
     def __init__(self):
         # FEMA NFHL ArcGIS REST Identify endpoint
-        self.url = "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/identify"
+        self.url = "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/identify"
 
     async def get_flood_zone(self, lat: float, lng: float) -> Optional[Dict]:
         """
