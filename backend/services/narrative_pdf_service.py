@@ -1892,12 +1892,8 @@ class PDFService:
 
         # AI-generated narrative (if provided)
         if narrative and len(narrative) > 50:
-            pdf.ln(3)
-            pdf.set_draw_color(30, 41, 59)
-            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            pdf.ln(3)
-            pdf.set_font("Arial", 'B', 10)
-            pdf.cell(0, 7, "SUPPORTING ANALYSIS", ln=True)
+            pdf.add_page()
+            self._draw_header(pdf, property_data, "SUPPORTING ANALYSIS")
             pdf.set_font("Arial", '', 9)
             pdf.multi_cell(0, 5, clean_text(narrative))
 
