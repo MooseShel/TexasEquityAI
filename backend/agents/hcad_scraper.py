@@ -307,31 +307,28 @@ class HCADScraper(AppraisalDistrictConnector):
                 except Exception as e:
                     logger.warning(f"Owner info extraction error: {e}")
 
+                # Robust Owner Name & Address Extraction
                 try:
-                    owner_box = await page.evaluate("""() => {
-                        const comp = document.getElementById('OwnerInfoComponent');
-                        if (!comp) return {};
-                        const text = comp.innerText;
-                        const result = {};
+                    # Strategy 1: Table header adjacency (common in HCAD standard view)
+                    owner_th = page.locator("th", has_text=re.compile(r"^Owner Name", re.IGNORECASE))
+                    if await owner_th.count() > 0:
+                        details['owner_name'] = (await owner_th.locator("xpath=following-sibling::td").first.inner_text()).strip()
+                    
+                    addr_th = page.locator("th", has_text=re.compile(r"Mailing Address", re.IGNORECASE))
+                    if await addr_th.count() > 0:
+                        details['mailing_address'] = (await addr_th.locator("xpath=following-sibling::td").first.inner_text()).strip()
                         
-                        // Owner Name
-                        const ownerMatch = text.match(/Owner\\s*(?:Name)?\\s*[:\\-]?\\s*([^\\n]+)/i);
-                        if (ownerMatch) result.owner_name = ownerMatch[1].trim();
-                        
-                        // Mailing Address
-                        const mailMatch = text.match(/Mailing\\s*(?:Address)?\\s*[:\\-]?\\s*([^\\n]+)/i);
-                        if (mailMatch) result.mailing_address = mailMatch[1].trim();
-                        
-                        // Legal Description
-                        const legalMatch = text.match(/Legal\\s*(?:Description)?\\s*[:\\-]?\\s*([^\\n]+)/i);
-                        if (legalMatch) result.legal_description = legalMatch[1].trim();
-                        
-                        return result;
-                    }""")
-                    if owner_box.get('owner_name'): details['owner_name'] = owner_box['owner_name']
-                    if owner_box.get('mailing_address'): details['mailing_address'] = owner_box['mailing_address']
-                    if owner_box.get('legal_description'): details['legal_description'] = owner_box['legal_description']
-                except: pass
+                    # Strategy 2: Label finding in cards (new portal style)
+                    if not details.get('owner_name'):
+                        card_text = await page.locator("#OwnerInfoComponent").inner_text()
+                        for line in card_text.split('\n'):
+                            if "Owner Name:" in line:
+                                details['owner_name'] = line.split("Owner Name:")[1].strip()
+                            if "Mailing Address:" in line:
+                                details['mailing_address'] = line.split("Mailing Address:")[1].strip()
+
+                except Exception as e:
+                    logger.warning(f"Owner extraction fallback failed: {e}")
 
                 # Area - Multi-label robust extraction
                 area_found = 0

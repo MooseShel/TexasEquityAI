@@ -272,7 +272,15 @@ class PDFService:
             if fill:
                 pdf.set_fill_color(245, 245, 250)
             cell_align = 'L' if is_first else align
-            pdf.cell(widths[i], 7, clean_text(str(v)[:28]), 1, 0, cell_align, fill)
+            
+            # Less aggressive truncation
+            raw_text = clean_text(str(v))
+            if len(raw_text) > 45:
+                text_val = raw_text[:42] + "..."
+            else:
+                text_val = raw_text
+                
+            pdf.cell(widths[i], 7, text_val, 1, 0, cell_align, fill)
         pdf.ln()
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1679,12 +1687,46 @@ class PDFService:
                 pdf.ln(5)
                 pdf.set_font("Arial", 'B', 10)
                 pdf.cell(0, 8, "Photographic Evidence", ln=True)
-                for img_path in image_paths[:4]:
-                    if os.path.exists(img_path):
-                        try:
-                            pdf.image(img_path, x=10, w=90)
-                            pdf.ln(3)
-                        except: pass
+                
+                # Grid settings
+                margin = 10
+                page_width = 190 # 210 - margins
+                col_width = (page_width - 5) / 2
+                
+                start_y = pdf.get_y()
+                current_y = start_y
+                max_h_row = 0
+                
+                valid_imgs = [p for p in image_paths if p and os.path.exists(p)][:4]
+                
+                for i, img_path in enumerate(valid_imgs):
+                    col = i % 2
+                    
+                    # If start of new row (and not first image), advance Y
+                    if col == 0 and i > 0:
+                        current_y += max_h_row + 5
+                        max_h_row = 0
+                        # Page break check
+                        if current_y > 250:
+                            pdf.add_page()
+                            current_y = 20
+                    
+                    x_pos = margin + (col * (col_width + 5))
+                    
+                    try:
+                        # Place image
+                        pdf.image(img_path, x=x_pos, y=current_y, w=col_width)
+                        # Assume approx height for layout (4:3 aspect is typical, but let's estimate)
+                        # We use a fixed height placeholder for layout logic if we can't get actual h
+                        # But FPDF usually preserves aspect. 
+                        # We'll assume a standard aspect ratio of 0.75 (4:3) for spacing
+                        est_h = col_width * 0.75 
+                        if max_h_row < est_h: max_h_row = est_h
+                    except Exception as e:
+                        logger.warning(f"Failed to place image {img_path}: {e}")
+                
+                # Move cursor past the grid
+                pdf.set_y(current_y + max_h_row + 10)
 
         # ══════════════════════════════════════════════════════════════════════════
         # ██  FORMAL PROTEST NARRATIVE (Texas Tax Code Legal Form)
