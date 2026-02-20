@@ -529,19 +529,25 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         market_value = property_details.get('appraised_value', 0)
         prop_address = property_details.get('address', '')
         if is_real_address(prop_address):
-            try:
-                # Pass resolved_data so get_last_sale_price reads the cached payload
-                # instead of making a second identical RentCast /v1/properties call
-                market_data = await agents["bridge"].get_last_sale_price(
-                    prop_address, resolved_data=rentcast_fallback_data
-                )
-                if market_data and market_data.get('sale_price'):
-                    market_value = market_data['sale_price']
-                if not market_value:
-                    market_value = await agents["bridge"].get_estimated_market_value(
-                        property_details.get('appraised_value', 0), prop_address
+            # Cache-first: check for cached market data
+            cached_market = await supabase_service.get_cached_market(current_account)
+            if cached_market:
+                market_value = cached_market.get('market_value', market_value)
+                logger.info(f"Using cached market value: ${market_value:,.0f}")
+            else:
+                try:
+                    market_data = await agents["bridge"].get_last_sale_price(
+                        prop_address, resolved_data=rentcast_fallback_data
                     )
-            except: pass
+                    if market_data and market_data.get('sale_price'):
+                        market_value = market_data['sale_price']
+                    if not market_value:
+                        market_value = await agents["bridge"].get_estimated_market_value(
+                            property_details.get('appraised_value', 0), prop_address
+                        )
+                    # Save to cache
+                    await supabase_service.save_cached_market(current_account, {'market_value': market_value})
+                except: pass
         subject_permits = await agents["permit_agent"].get_property_permits(prop_address)
         permit_summary = agents["permit_agent"].analyze_permits(subject_permits)
         property_details['permit_summary'] = permit_summary
@@ -708,14 +714,33 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             
             # Sales Comparison Analysis (independent data source)
             try:
-                yield {"status": "💰 Sales Specialist: Searching for recent comparable sales..."}
-                sales_results = agents["equity_engine"].get_sales_analysis(property_details)
-                if sales_results:
-                    equity_results['sales_comps'] = sales_results.get('sales_comps', [])
-                    equity_results['sales_count'] = sales_results.get('sales_count', 0)
-                    count = equity_results['sales_count']
-                    yield {"status": f"💰 Sales Specialist: Found {count} comparable{'s' if count != 1 else ''}."}
-                    logger.info(f"Sales Analysis: Found {count} comps.")
+                cached_sales = await supabase_service.get_cached_sales(current_account)
+                if cached_sales:
+                    yield {"status": "💰 Sales Specialist: Using cached sales comparables..."}
+                    equity_results['sales_comps'] = cached_sales
+                    equity_results['sales_count'] = len(cached_sales)
+                    count = len(cached_sales)
+                    yield {"status": f"💰 Sales Specialist: {count} cached comparable{'s' if count != 1 else ''}."}
+                    logger.info(f"Sales Analysis: Using {count} cached comps.")
+                else:
+                    yield {"status": "💰 Sales Specialist: Searching for recent comparable sales..."}
+                    sales_results = agents["equity_engine"].get_sales_analysis(property_details)
+                    if sales_results:
+                        equity_results['sales_comps'] = sales_results.get('sales_comps', [])
+                        equity_results['sales_count'] = sales_results.get('sales_count', 0)
+                        count = equity_results['sales_count']
+                        yield {"status": f"💰 Sales Specialist: Found {count} comparable{'s' if count != 1 else ''}."}
+                        logger.info(f"Sales Analysis: Found {count} comps.")
+                        # Save to cache (serialize SalesComparable objects)
+                        raw_sales = sales_results.get('sales_comps', [])
+                        serializable = []
+                        for sc in raw_sales:
+                            if hasattr(sc, '__dict__'):
+                                serializable.append({k: v for k, v in sc.__dict__.items() if not k.startswith('_')})
+                            elif isinstance(sc, dict):
+                                serializable.append(sc)
+                        if serializable:
+                            await supabase_service.save_cached_sales(current_account, serializable)
             except Exception as sales_err:
                 logger.error(f"Sales Analysis Error: {sales_err}")
             
@@ -730,10 +755,35 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         flood_data = None
         coords = agents["vision_agent"]._geocode_address(search_address)
         if coords:
-            flood_data = await agents["fema_agent"].get_flood_zone(coords['lat'], coords['lng'])
+            # Cache-first: FEMA flood zone
+            cached_flood = await supabase_service.get_cached_flood(current_account)
+            if cached_flood:
+                flood_data = cached_flood
+                logger.info(f"Using cached flood zone: {flood_data.get('zone', 'N/A')}")
+            else:
+                flood_data = await agents["fema_agent"].get_flood_zone(coords['lat'], coords['lng'])
+                if flood_data:
+                    await supabase_service.save_cached_flood(current_account, flood_data)
             if flood_data: property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
-        image_paths = await agents["vision_agent"].get_street_view_images(search_address)
-        vision_detections = await agents["vision_agent"].analyze_property_condition(image_paths, property_details)
+
+        # Cache-first: Vision analysis
+        cached_vision = await supabase_service.get_cached_vision(current_account)
+        if cached_vision and cached_vision.get('detections') is not None:
+            logger.info(f"Using cached vision analysis for {current_account}")
+            yield {"status": "📸 Vision Agent: Using cached property condition analysis..."}
+            vision_detections = cached_vision.get('detections')
+            image_paths = cached_vision.get('image_paths', [])
+        else:
+            image_paths = await agents["vision_agent"].get_street_view_images(search_address)
+            vision_detections = await agents["vision_agent"].analyze_property_condition(image_paths, property_details)
+            # Save to cache
+            try:
+                await supabase_service.save_cached_vision(current_account, {
+                    'detections': vision_detections,
+                    'image_paths': image_paths,
+                })
+            except Exception as vc_err:
+                logger.warning(f"Vision cache save failed: {vc_err}")
         image_path = image_paths[0] if image_paths else "mock_street_view.jpg"
         # Annotate all images with bounding boxes
         annotated_paths = []

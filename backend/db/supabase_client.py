@@ -191,6 +191,80 @@ class SupabaseService:
         except Exception as e:
             logger.warning(f"search_address_globally failed: {e}")
             return []
+    # ── Generic field-level cache helpers ──────────────────────────────────
+    #   These read/write JSON blobs + timestamps on the `properties` table.
+    #   No schema migration needed — Supabase JSONB columns auto-create on upsert.
+
+    async def _get_cached_field(self, account_number: str, data_col: str, ts_col: str, ttl_days: int):
+        """Return cached JSON from `data_col` if `ts_col` is within TTL, else None."""
+        if not self.client:
+            return None
+        try:
+            response = self.client.table("properties") \
+                .select(f"{data_col}, {ts_col}") \
+                .eq("account_number", account_number) \
+                .execute()
+            if not response.data:
+                return None
+            row = response.data[0]
+            data = row.get(data_col)
+            ts = row.get(ts_col)
+            if not data or not ts:
+                return None
+            scraped_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            age_days = (datetime.now(timezone.utc) - scraped_dt).days
+            if age_days > ttl_days:
+                logger.info(f"Cache stale for {account_number}.{data_col} ({age_days}d > {ttl_days}d TTL)")
+                return None
+            logger.info(f"Cache HIT for {account_number}.{data_col} (age: {age_days}d)")
+            if isinstance(data, str):
+                data = json.loads(data)
+            return data
+        except Exception as e:
+            logger.warning(f"_get_cached_field({data_col}) failed: {e}")
+            return None
+
+    async def _save_cached_field(self, account_number: str, data_col: str, ts_col: str, value):
+        """Save a JSON blob + current timestamp to the properties table."""
+        if not self.client:
+            return
+        try:
+            self.client.table("properties").upsert({
+                "account_number": account_number,
+                data_col: json.dumps(value) if isinstance(value, (dict, list)) else value,
+                ts_col: datetime.now(timezone.utc).isoformat(),
+            }, on_conflict="account_number").execute()
+            logger.info(f"Cache SAVED for {account_number}.{data_col}")
+        except Exception as e:
+            logger.warning(f"_save_cached_field({data_col}) failed: {e}")
+
+    # ── Sales Comp Cache (30-day TTL) ─────────────────────────────────────
+    async def get_cached_sales(self, account_number: str):
+        return await self._get_cached_field(account_number, "sales_cache", "sales_fetched_at", 30)
+
+    async def save_cached_sales(self, account_number: str, sales_data: list):
+        await self._save_cached_field(account_number, "sales_cache", "sales_fetched_at", sales_data)
+
+    # ── FEMA Flood Zone Cache (365-day TTL) ───────────────────────────────
+    async def get_cached_flood(self, account_number: str):
+        return await self._get_cached_field(account_number, "flood_cache", "flood_fetched_at", 365)
+
+    async def save_cached_flood(self, account_number: str, flood_data: dict):
+        await self._save_cached_field(account_number, "flood_cache", "flood_fetched_at", flood_data)
+
+    # ── Vision Analysis Cache (90-day TTL) ────────────────────────────────
+    async def get_cached_vision(self, account_number: str):
+        return await self._get_cached_field(account_number, "vision_cache", "vision_fetched_at", 90)
+
+    async def save_cached_vision(self, account_number: str, vision_data):
+        await self._save_cached_field(account_number, "vision_cache", "vision_fetched_at", vision_data)
+
+    # ── Market Value Cache (30-day TTL) ───────────────────────────────────
+    async def get_cached_market(self, account_number: str):
+        return await self._get_cached_field(account_number, "market_cache", "market_fetched_at", 30)
+
+    async def save_cached_market(self, account_number: str, market_data: dict):
+        await self._save_cached_field(account_number, "market_cache", "market_fetched_at", market_data)
 
 # Singleton instance
 supabase_service = SupabaseService()
