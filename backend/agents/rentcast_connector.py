@@ -124,9 +124,8 @@ class RentCastConnector:
             for prop in raw_props:
                 try:
                     ptype = prop.get("propertyType", "")
-                    # Skip residential types for commercial queries
-                    if _is_residential_type(ptype):
-                        continue
+                    # Note: type filtering is handled by sales_agent._filter_comps_by_type
+                    # (soft filter — keeps comps as fallback if all would be removed)
 
                     price = prop.get("lastSalePrice") or prop.get("price") or 0
                     sqft  = prop.get("squareFootage") or prop.get("buildingSize") or 0
