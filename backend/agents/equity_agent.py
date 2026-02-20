@@ -18,8 +18,8 @@ class EquityAgent:
         Selection: Sort neighbors by 'Assessed Value per SqFt' ascending. Select the top 5 (The 'Equity 5').
         Calculation: Calculate the median of the Equity 5 to determine the 'Justified Value Floor.'
         """
-        subj_val = subject_property.get('appraised_value', 0)
-        subj_area = subject_property.get('building_area', 0)
+        subj_val = subject_property.get('appraised_value', 0) or 0
+        subj_area = subject_property.get('building_area', 0) or 0
         
         # If area is 0, we can't perform meaningful SQFT-based analysis
         if not subj_area or subj_area == 0:
