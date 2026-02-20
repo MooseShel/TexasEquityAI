@@ -590,6 +590,10 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
 
             is_commercial_prop = _detect_commercial(property_details)
 
+            # Ensure property_type is set so downstream agents (SalesAgent) classify correctly
+            if is_commercial_prop and not property_details.get('property_type'):
+                property_details['property_type'] = 'commercial'
+
             # ── Commercial properties: use API-based comp pool directly ───────
             if is_commercial_prop:
                 try:
