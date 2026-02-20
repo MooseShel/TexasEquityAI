@@ -1,0 +1,45 @@
+# Core framework
+streamlit>=1.24.0
+fastapi
+uvicorn
+
+# Data & ML
+pandas
+numpy
+scikit-learn
+
+# Google AI
+google-genai
+
+# LangChain
+langchain
+langchain-openai
+langchain-core
+langchain-community
+
+# OpenAI / xAI
+openai
+
+# PDF generation
+fpdf2
+
+# Web scraping
+playwright
+playwright-stealth
+
+# HTTP clients
+requests
+httpx
+
+# Database
+supabase
+
+# Image processing
+pillow
+
+# Geo / QR
+qrcode[pil]
+pydeck
+
+# Utilities
+python-dotenv

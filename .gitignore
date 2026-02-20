@@ -10,9 +10,10 @@ outputs/
 # Debug Artifacts
 *.html
 *.png
-*.txt
 *.json
 *.log
+# Allow requirements.txt explicitly
+!requirements.txt
 debug/
 
 # Large Binary Files
