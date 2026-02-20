@@ -3,6 +3,8 @@ import requests
 import logging
 from typing import Optional, Dict
 
+from backend.utils.address_utils import normalize_address_for_search, fuzzy_best_match
+
 logger = logging.getLogger(__name__)
 
 class RentCastAgent:
@@ -148,3 +150,90 @@ class NonDisclosureBridge:
 
     async def get_estimated_market_value(self, appraised_value: float, address: str) -> float:
         return appraised_value
+
+    async def resolve_account_id(self, raw_address: str, district: str = None) -> Optional[Dict]:
+        """
+        ID-first resolution chain: resolves a street address to an appraisal district
+        account number BEFORE any Playwright scraping is attempted.
+
+        Chain order:
+          [1] Supabase DB  — normalized ILIKE search (free, instant)
+          [2] RentCast     — returns assessorID for residential properties
+          [3] RealEstateAPI — checks raw payload for assessorID (good for commercial)
+
+        Returns a dict:
+          {
+            "account_number": str,
+            "district":       str | None,   # inferred from ID format or district arg
+            "source":         str,           # "DB" | "RentCast" | "RealEstateAPI"
+            "rentcast_data":  dict | None,   # cached RentCast payload for downstream reuse
+            "confidence":     float,         # 1.0 for exact matches, <1.0 for fuzzy DB hits
+          }
+        Returns None if all layers fail (caller should fall through to scraper with normalized addr).
+        """
+        # Lazy imports to avoid circular-import issues at module load time
+        from backend.db.supabase_client import supabase_service
+        from backend.agents.realestate_api_connector import RealEstateAPIConnector
+        from backend.agents.district_factory import DistrictConnectorFactory
+
+        normalized = normalize_address_for_search(raw_address)
+        logger.info(f"resolve_account_id: raw='{raw_address}' → normalized='{normalized}'")
+
+        # ── Layer 1: Supabase DB ──────────────────────────────────────────────
+        try:
+            candidates = await supabase_service.search_address_globally(normalized)
+            if not candidates:
+                # retry with original in case DB stored un-normalized form
+                candidates = await supabase_service.search_address_globally(raw_address)
+            if candidates:
+                best = fuzzy_best_match(normalized, candidates, key='address')
+                if best and best.get('account_number'):
+                    acc = best['account_number']
+                    dist = best.get('district') or district or DistrictConnectorFactory.detect_district_from_account(acc)
+                    logger.info(f"resolve_account_id [DB]: resolved '{raw_address}' → '{acc}' (district={dist})")
+                    return {
+                        "account_number": acc,
+                        "district":       dist,
+                        "source":         "DB",
+                        "rentcast_data":  None,
+                        "confidence":     1.0 if len(candidates) == 1 else 0.85,
+                    }
+        except Exception as e:
+            logger.warning(f"resolve_account_id: DB layer failed ({e}) — continuing")
+
+        # ── Layer 2: RentCast ─────────────────────────────────────────────────
+        try:
+            resolved = await self.rentcast.resolve_address(normalized or raw_address)
+            if resolved and resolved.get('account_number'):
+                acc = resolved['account_number']
+                dist = district or DistrictConnectorFactory.detect_district_from_account(acc)
+                logger.info(f"resolve_account_id [RentCast]: resolved '{raw_address}' → '{acc}' (district={dist})")
+                return {
+                    "account_number": acc,
+                    "district":       dist,
+                    "source":         "RentCast",
+                    "rentcast_data":  resolved,   # full payload — reused downstream
+                    "confidence":     1.0,
+                }
+        except Exception as e:
+            logger.warning(f"resolve_account_id: RentCast layer failed ({e}) — continuing")
+
+        # ── Layer 3: RealEstateAPI ────────────────────────────────────────────
+        try:
+            reapi = RealEstateAPIConnector()
+            acc = reapi.resolve_to_account_id(normalized or raw_address)
+            if acc:
+                dist = district or DistrictConnectorFactory.detect_district_from_account(acc)
+                logger.info(f"resolve_account_id [RealEstateAPI]: resolved '{raw_address}' → '{acc}' (district={dist})")
+                return {
+                    "account_number": acc,
+                    "district":       dist,
+                    "source":         "RealEstateAPI",
+                    "rentcast_data":  None,
+                    "confidence":     1.0,
+                }
+        except Exception as e:
+            logger.warning(f"resolve_account_id: RealEstateAPI layer failed ({e}) — continuing")
+
+        logger.info(f"resolve_account_id: all layers exhausted for '{raw_address}' — caller should scrape with normalized address: '{normalized}'")
+        return None

@@ -365,63 +365,45 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         current_account = account_number
         current_district = district
         rentcast_fallback_data = None
-        if any(c.isalpha() for c in account_number) and " " in account_number:
-            resolved = await agents["bridge"].resolve_address(account_number)
+
+        is_address_input = any(c.isalpha() for c in account_number) and " " in account_number
+        if is_address_input:
+            # ── ID-First Resolution Chain ─────────────────────────────────────
+            # Try to get an account ID from DB → RentCast → RealEstateAPI
+            # before touching any scraper. Once we have an ID, scraping is
+            # deterministic and immune to address abbreviation variations.
+            resolved = await agents["bridge"].resolve_account_id(account_number, district)
             if resolved:
-                resolved_account = resolved.get('account_number')
-                resolved_ptype   = (resolved.get('rentcast_data') or {}).get('propertyType', '')
-                is_residential_resolve = resolved_ptype in ('Single Family', 'Condo', 'Townhouse', 'Residential')
-                # Only switch current_account if we got a real assessorID back
-                # (commercial properties often have assessorID=None in RentCast)
-                if resolved_account:
-                    current_account = resolved_account
-                else:
-                    logger.info("RentCast resolve returned no assessorID — keeping original input as account key.")
-                # Only use as fallback data if it's NOT a confirmed residential with no assessorID
-                if resolved_account or not is_residential_resolve:
-                    rentcast_fallback_data = resolved
-                else:
-                    logger.info(f"Skipping rentcast_fallback_data: residential type='{resolved_ptype}' but no assessorID — likely wrong match.")
-                if not current_district:
-                    res_addr = resolved.get('address', '').lower()
-                    if "dallas" in res_addr: current_district = "DCAD"
-                    elif "austin" in res_addr: current_district = "TCAD"
-                    elif "fort worth" in res_addr: current_district = "TAD"
-                    elif "plano" in res_addr: current_district = "CCAD"
-                    elif "houston" in res_addr: current_district = "HCAD"
+                current_account   = resolved["account_number"]
+                current_district  = resolved.get("district") or current_district
+                rentcast_fallback_data = resolved.get("rentcast_data")
+                source = resolved.get("source", "?")
+                conf   = resolved.get("confidence", 1.0)
+                yield {"status": f"✅ Resolver [{source}]: Found account ID {current_account} (confidence {conf:.0%})"}
+                logger.info(f"ID resolved via {source}: {account_number!r} → {current_account}")
+            else:
+                # All layers exhausted — fall through to scraper with a normalized address
+                from backend.utils.address_utils import normalize_address_for_search
+                normalized_input = normalize_address_for_search(account_number)
+                if normalized_input and normalized_input != account_number:
+                    current_account = normalized_input
+                    logger.info(f"Resolver: no ID found, using normalized address for scraper: '{normalized_input}'")
+
+        # Account-number format detection (always run to confirm district)
         detected_district = DistrictConnectorFactory.detect_district_from_account(current_account)
         if detected_district and detected_district != current_district:
             current_district = detected_district
 
-        # 0c. Global DB Lookup (Layer 2)
-        # Check if account exists in another district
-        try:
-            db_record = await supabase_service.get_property_by_account(current_account)
-            if db_record and db_record.get('district'):
-                db_dist = db_record.get('district')
-                if current_district and db_dist != current_district:
-                    current_district = db_dist
-                    # yield {"warning": f"📍 Auto-corrected district to **{db_dist}** (found in database)."}
-        except Exception: pass
-
-        # 0d. Global Address Lookup (Layer 2.5)
-        # If input is address-like and we haven't found a definitive district match yet
-        if any(c.isalpha() for c in current_account) and not detected_district:
+        # DB district cross-check for already-known account numbers
+        if not is_address_input:
             try:
-                candidates = await supabase_service.search_address_globally(current_account)
-                if candidates:
-                    best = candidates[0]
-                    if best.get('district') and best.get('account_number'):
-                        new_dist = best['district']
-                        new_acc = best['account_number']
-                        
-                        if new_dist != current_district:
-                            current_district = new_dist
-                            # Warning for the user
-                            yield {"warning": f"📍 Ambiguous address found in **{new_dist}**. Switched search to {new_dist} (Account #{new_acc})."}
-                        
-                        current_account = new_acc
-            except Exception: pass
+                db_record = await supabase_service.get_property_by_account(current_account)
+                if db_record and db_record.get('district'):
+                    db_dist = db_record.get('district')
+                    if current_district and db_dist != current_district:
+                        current_district = db_dist
+            except Exception:
+                pass
 
         yield {"status": f"⛏️ Data Mining Agent: Scraping {current_district or 'District'} records..."}
         cached_property = await supabase_service.get_property_by_account(current_account)

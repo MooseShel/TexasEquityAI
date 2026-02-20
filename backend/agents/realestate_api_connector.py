@@ -216,3 +216,34 @@ class RealEstateAPIConnector:
             logger.error(f"RealEstateAPI Detail Request Failed: {e}")
             return None
 
+    def resolve_to_account_id(self, address: str) -> Optional[str]:
+        """
+        Attempts to resolve a street address to an appraisal district account ID.
+        Calls /PropertyDetail and inspects the raw payload for any assessor/parcel ID field.
+        Returns the first non-empty ID string found, or None.
+
+        Common raw field names across different data providers:
+          assessorID, parcelNumber, apn, apnFormatted, taxParcelId,
+          parcelId, taxAccountNumber, taxAssessorId
+        """
+        detail = self.get_property_detail(address)
+        if not detail:
+            return None
+        raw = detail.get('_raw', {})
+        if not raw:
+            return None
+
+        # Try a prioritised list of field names that carry the assessor/parcel ID
+        ID_FIELDS = [
+            'assessorID', 'assessorId', 'parcelNumber', 'apn', 'apnFormatted',
+            'taxParcelId', 'parcelId', 'taxAccountNumber', 'taxAssessorId',
+        ]
+        for field in ID_FIELDS:
+            val = raw.get(field)
+            if val and str(val).strip():
+                account_id = str(val).strip()
+                logger.info(f"RealEstateAPI resolved '{address}' → account_id='{account_id}' (field: {field})")
+                return account_id
+
+        logger.info(f"RealEstateAPI: no assessorID field found for '{address}'. Keys: {list(raw.keys())[:15]}")
+        return None

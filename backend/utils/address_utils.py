@@ -1,5 +1,6 @@
 import re
 import logging
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -74,3 +75,80 @@ def normalize_address(address: str, district: str = "HCAD") -> str:
         cleaned = cleaned.replace(double_pattern, f", {target_city}")
         
     return cleaned
+
+
+# ── Directional and suffix expansion maps ──────────────────────────────────
+_DIR_ABBR = {
+    r'\bN\b': 'North', r'\bS\b': 'South', r'\bE\b': 'East', r'\bW\b': 'West',
+    r'\bNE\b': 'Northeast', r'\bNW\b': 'Northwest',
+    r'\bSE\b': 'Southeast', r'\bSW\b': 'Southwest',
+}
+_SUFFIX_ABBR = {
+    r'\bSt\.?\b': 'Street', r'\bAve\.?\b': 'Avenue', r'\bBlvd\.?\b': 'Boulevard',
+    r'\bDr\.?\b': 'Drive', r'\bLn\.?\b': 'Lane', r'\bRd\.?\b': 'Road',
+    r'\bCt\.?\b': 'Court', r'\bPl\.?\b': 'Place', r'\bPkwy\.?\b': 'Parkway',
+    r'\bFwy\.?\b': 'Freeway', r'\bHwy\.?\b': 'Highway', r'\bCir\.?\b': 'Circle',
+    r'\bTrl\.?\b': 'Trail', r'\bSq\.?\b': 'Square',
+}
+# Strip unit/suite/apt suffixes (e.g. "# 5", "Suite 100", "Apt B", "Ste 3")
+_UNIT_PATTERN = re.compile(
+    r'\s*[,]?\s*(#|Suite|Ste|Apt|Apartment|Unit|Floor|Fl|Bldg|Building)\s*[\w-]*',
+    re.IGNORECASE
+)
+
+
+def normalize_address_for_search(raw: str) -> str:
+    """
+    Normalizes a raw user-typed address for consistent API lookup:
+    1. Strip unit/suite/apt suffixes
+    2. Expand directional abbreviations (N → North, S → South, etc.)
+    3. Expand street-type abbreviations (St → Street, Ave → Avenue, etc.)
+    4. Collapse whitespace
+
+    Used BEFORE sending to Supabase, RentCast, or RealEstateAPI so all
+    three layers compare against the same normalized string.
+    """
+    if not raw:
+        return ''
+    s = raw.strip()
+
+    # 1. Strip unit suffixes — must come first before we touch the street name
+    s = _UNIT_PATTERN.sub('', s).strip().rstrip(',')
+
+    # Split at comma to expand only the street part (preserve city/state/zip)
+    parts = s.split(',', 1)
+    street = parts[0].strip()
+    rest = parts[1].strip() if len(parts) > 1 else ''
+
+    # 2. Expand directional abbreviations on the street part
+    for pattern, replacement in _DIR_ABBR.items():
+        street = re.sub(pattern, replacement, street, flags=re.IGNORECASE)
+
+    # 3. Expand street-type abbreviations
+    for pattern, replacement in _SUFFIX_ABBR.items():
+        street = re.sub(pattern, replacement, street, flags=re.IGNORECASE)
+
+    # 4. Reassemble and collapse whitespace
+    normalized = f"{street}, {rest}".strip(', ') if rest else street
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    return normalized
+
+
+def fuzzy_best_match(query: str, candidates: list, key: str = 'address') -> dict | None:
+    """
+    Given a list of candidate dicts (each with a `key` field), returns the
+    one whose address best fuzzy-matches `query` (using SequenceMatcher).
+    Returns None if candidates is empty.
+    """
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    query_norm = normalize_address_for_search(query).lower()
+    best = max(
+        candidates,
+        key=lambda c: SequenceMatcher(
+            None, query_norm, normalize_address_for_search(c.get(key, '')).lower()
+        ).ratio()
+    )
+    return best
