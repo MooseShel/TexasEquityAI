@@ -721,6 +721,8 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             
             property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
         except Exception as e:
+            import traceback
+            logger.error(f"Equity analysis failed: {e}\n{traceback.format_exc()}")
             equity_results = {"error": str(e)}
 
         yield {"status": "📸 Vision Agent: Analyzing property condition..."}
