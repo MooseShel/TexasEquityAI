@@ -330,6 +330,36 @@ class HCADScraper(AppraisalDistrictConnector):
                 except Exception as e:
                     logger.warning(f"Owner extraction fallback failed: {e}")
 
+                # Last resort: HCAD legacy API (returns JSON with real owner data)
+                if not details.get('owner_name') or details.get('owner_name', '').lower() in ('on file', ''):
+                    try:
+                        import httpx
+                        acct_clean = details.get('account_number', account_number).replace('-', '').replace(' ', '')
+                        api_url = f"https://hcad.org/api/hcad/appraisalData/{acct_clean}"
+                        async with httpx.AsyncClient(timeout=8) as client:
+                            resp = await client.get(api_url, headers={"Accept": "application/json"})
+                            if resp.status_code == 200:
+                                api_data = resp.json()
+                                # Try top-level keys
+                                real_owner = (
+                                    api_data.get('ownerName') or
+                                    api_data.get('owner_name') or
+                                    api_data.get('OwnerName') or
+                                    (api_data.get('owner', {}) or {}).get('name')
+                                )
+                                real_addr = (
+                                    api_data.get('mailingAddress') or
+                                    api_data.get('mailing_address') or
+                                    api_data.get('MailingAddress')
+                                )
+                                if real_owner and real_owner.lower() not in ('on file', ''):
+                                    details['owner_name'] = real_owner.strip()
+                                    logger.info(f"Got owner name from HCAD API: {real_owner}")
+                                if real_addr and real_addr.lower() not in ('on file', ''):
+                                    details['mailing_address'] = real_addr.strip()
+                    except Exception as e:
+                        logger.debug(f"HCAD API owner lookup failed: {e}")
+
                 # Area - Multi-label robust extraction
                 area_found = 0
                 area_labels = ["Living Area", "Gross Area", "Net Area", "Main Area", "SQ FT"]

@@ -137,6 +137,8 @@ class PDFService:
         pdf.set_font("Arial", '', 9)
         pdf.cell(0, 5, clean_text(f"Property: {property_data.get('address')}  |  Account: {property_data.get('account_number')}"), ln=True)
         pdf.set_text_color(0, 0, 0)
+        # Reset fill color so the dark header doesn't bleed into subsequent cells
+        pdf.set_fill_color(255, 255, 255)
         pdf.set_y(30)
 
 
@@ -181,8 +183,9 @@ class PDFService:
 
         # Section 1: The AI Squad
         pdf.set_fill_color(240, 245, 255)
-        pdf.rect(10, pdf.get_y(), 190, 65, 'F')
-        pdf.set_y(pdf.get_y() + 5)
+        section_start_y = pdf.get_y()
+        pdf.rect(10, section_start_y, 190, 75, 'F')  # Taller box to prevent text overflow
+        pdf.set_y(section_start_y + 5)
         
         pdf.set_font("Arial", 'B', 12)
         pdf.set_text_color(30, 41, 59)
@@ -376,8 +379,13 @@ class PDFService:
         pdf.cell(0, 7, "  Owner and Subject Property Information", ln=True, fill=True)
         pdf.set_font("Arial", '', 8)
 
-        owner_name = property_data.get('owner_name', 'On File')
+        owner_name = property_data.get('owner_name', '')
+        # HCAD hides owner names on portal — show account-based fallback if not available
+        if not owner_name or owner_name.strip().lower() in ('on file', ''):
+            owner_name = f"Account: {property_data.get('account_number', 'See Records')}"
         mailing_addr = property_data.get('mailing_address', '')
+        if not mailing_addr or mailing_addr.strip().lower() in ('on file', ''):
+            mailing_addr = "See HCAD Records"
         legal_desc = property_data.get('legal_description', '')
         land_use_code = property_data.get('land_use_code', '1001')
         land_use_desc = property_data.get('land_use_desc', 'Residential Single Family')
@@ -1216,57 +1224,54 @@ class PDFService:
             # Comp images (2 per row)
             comp_entries = [(k, v) for k, v in comp_images.items()
                           if k not in ('subject', 'subject_condition') and not k.endswith('_condition')]
-            # Start position for comps - ensure clean start
+            # Start position for comps - ensure clean start after subject
             pdf.ln(5)
-            
+            row_height = 80  # Header(6) + image(50) + text(~22) + margin(2)
+            row_start_y = pdf.get_y()  # Anchor for current row
+
             for ci, (comp_key, img_path) in enumerate(comp_entries[:6]):
                 if not os.path.exists(img_path):
                     continue
-                
+
                 # Extract condition text
                 condition_text = comp_images.get(f"{comp_key}_condition", "Condition assessment unavailable.")
-                
-                # Grid layout constants
+
                 col = ci % 2
-                row_height = 85  # Total height reserved for each entry
-                
-                # If starting a new row (col 0)
+
+                # At the start of each new row (left column), anchor the row Y
                 if col == 0:
-                    # If not the very first item, move down
-                    if ci > 0: 
-                        pdf.set_y(pdf.get_y() + row_height)
-                    
-                    # Check for page break
-                    if pdf.get_y() + row_height > 260:
+                    if ci > 0:
+                        row_start_y = row_start_y + row_height
+                    # Page break check
+                    if row_start_y + row_height > 260:
                         pdf.add_page()
                         self._draw_header(pdf, property_data, "AI PROPERTY CONDITION COMPARISON (cont.)")
-                        pdf.set_y(35)
-                
-                # Calculate X and Y
-                x_offset = 15 if col == 0 else 115
-                current_y = pdf.get_y()
-                
+                        row_start_y = 35
+
+                # X position based on column; Y always equals row_start_y
+                x_offset = 15 if col == 0 else 110
+                current_y = row_start_y
+
                 # 1. Header Box
-                pdf.set_fill_color(240, 240, 245)
+                pdf.set_fill_color(220, 225, 235)
                 pdf.set_font("Arial", 'B', 7)
                 pdf.set_xy(x_offset, current_y)
-                pdf.cell(85, 6, clean_text(f"COMP {chr(65 + ci)}: {comp_key}")[:45], fill=True)
-                
-                # 2. Image
+                pdf.cell(90, 6, clean_text(f"COMP {chr(65 + ci)}: {comp_key}")[:50], fill=True)
+                pdf.set_fill_color(255, 255, 255)  # Reset after fill
+
+                # 2. Image — placed at fixed offset below header
                 try:
-                    # Place image below header
-                    pdf.image(img_path, x=x_offset, y=current_y + 7, w=85, h=50)
-                except: pass
-                
-                # 3. Condition Text
-                text_y = current_y + 58
-                pdf.set_xy(x_offset, text_y)
-                pdf.set_font("Arial", '', 7)
-                # Multi-cell with height check? Just limit length for now
-                pdf.multi_cell(85, 3.5, clean_text(f"AI Assessment: {condition_text}")[:250])
-                
-            # Reset Y for next section (ensure safely below last row)
-            pdf.set_y(pdf.get_y() + 20)
+                    pdf.image(img_path, x=x_offset, y=current_y + 7, w=90, h=50)
+                except:
+                    pass
+
+                # 3. Condition text — placed at fixed offset below image
+                pdf.set_xy(x_offset, current_y + 58)
+                pdf.set_font("Arial", '', 6.5)
+                pdf.multi_cell(90, 3.5, clean_text(f"AI Assessment: {condition_text}")[:220])
+
+            # Move past the last row
+            pdf.set_y(row_start_y + row_height + 5)
         elif image_paths and len(image_paths) > 0:
             # Fallback: just show subject images without comp comparison
             pass
@@ -1477,9 +1482,10 @@ class PDFService:
                 ]
 
                 box_w = 42
+                box_row_y = pdf.get_y()  # Anchor Y BEFORE the loop to prevent staircase
                 for i, (label, val, color) in enumerate(metrics):
                     x = 15 + i * (box_w + 4)
-                    y = pdf.get_y()
+                    y = box_row_y  # All boxes start at the same Y
                     pdf.set_fill_color(*color)
                     pdf.rect(x, y, box_w, 22, 'F')
                     pdf.set_text_color(255, 255, 255)
@@ -1491,7 +1497,8 @@ class PDFService:
                     pdf.cell(box_w - 4, 10, str(val), align='C')
 
                 pdf.set_text_color(0, 0, 0)
-                pdf.set_y(pdf.get_y() + 28)
+                pdf.set_fill_color(255, 255, 255)
+                pdf.set_y(box_row_y + 28)
 
                 # Sales detail table
                 pdf.set_font("Arial", 'B', 9)
