@@ -37,6 +37,10 @@ ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS sqft NUMERIC;
 ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS year_built INT;
 ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS grade TEXT;
 ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS cdu TEXT;
+ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS adjustments JSONB;
+ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS neighborhood_code TEXT;
+ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS building_area NUMERIC;
+ALTER TABLE public.equity_comparables ADD COLUMN IF NOT EXISTS appraised_value NUMERIC;
 
 -- 5. Indexes
 CREATE INDEX IF NOT EXISTS idx_protests_account ON public.protests (account_number);

@@ -63,9 +63,28 @@ class SupabaseService:
 
     async def save_equity_comps(self, protest_id: str, comps: list):
         if not self.client: return None
+        # Whitelist of known columns on equity_comparables — prevents PGRST204 on unknown fields
+        KNOWN_COLS = {
+            'protest_id', 'account_number', 'address', 'owner_name',
+            'distance', 'similarity', 'appraised_val', 'market_val',
+            'sqft', 'year_built', 'grade', 'cdu', 'adjustments',
+            'neighborhood_code', 'building_area', 'appraised_value',
+        }
         for comp in comps:
             comp['protest_id'] = protest_id
-            self.client.table("equity_comparables").insert(comp).execute()
+            # Strip keys not in the DB schema
+            clean_comp = {}
+            for k, v in comp.items():
+                if k in KNOWN_COLS:
+                    # Serialize dict/list values to JSON string for JSONB or TEXT columns
+                    if isinstance(v, (dict, list)):
+                        clean_comp[k] = json.dumps(v)
+                    else:
+                        clean_comp[k] = v
+            try:
+                self.client.table("equity_comparables").insert(clean_comp).execute()
+            except Exception as e:
+                logger.error(f"Failed to insert equity comp: {e}")
 
     async def get_cached_comps(self, account_number: str, ttl_days: int = COMP_CACHE_TTL_DAYS):
         """
