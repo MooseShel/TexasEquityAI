@@ -441,7 +441,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 # Read propertyType from the cached payload — avoids a second RentCast API call
                 ptype = (rentcast_fallback_data.get('rentcast_data') or {}).get('propertyType', '')
                 logger.info(f"RentCast cached propertyType='{ptype}' for '{current_account}'")
-                if ptype and ptype not in ('Single Family', 'Condo', 'Townhouse', 'Residential'):
+                if ptype and ptype not in ('Single Family', 'Condo', 'Townhouse', 'Manufactured', 'Multi-Family'):
                     is_likely_commercial = True
                     ptype_source = f"RentCast_Cached({ptype})"
                 # If ptype IS residential, we are confirmed residential — no extra call needed
@@ -453,7 +453,7 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 try:
                     ptype = await agents["bridge"].detect_property_type(current_account)
                     logger.info(f"detect_property_type returned '{ptype}' for '{current_account}'")
-                    is_confirmed_residential = ptype in ('Single Family', 'Condo', 'Townhouse', 'Residential')
+                    is_confirmed_residential = ptype in ('Single Family', 'Condo', 'Townhouse', 'Manufactured', 'Multi-Family')
                     # None means RentCast doesn't know → treat as potential commercial
                     if not is_confirmed_residential:
                         is_likely_commercial = True

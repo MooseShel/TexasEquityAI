@@ -7,15 +7,17 @@ from backend.models.sales_comp import SalesComparable
 
 logger = logging.getLogger(__name__)
 
-# Types that are clearly residential — excluded from commercial comp pools
-_RESIDENTIAL_TYPES = {"single family", "condo", "townhouse", "multifamily", "residential"}
+# Official RentCast property types (lowercased for comparison):
+# Residential: Single Family, Condo, Townhouse, Manufactured, Multi-Family
+# Commercial:  Apartment (5+ units), Land
+_RESIDENTIAL_TYPES = {"single family", "condo", "townhouse", "manufactured", "multi-family", "multifamily"}
 # Types that are clearly non-residential — excluded from residential comp pools
-_NON_RESIDENTIAL_TYPES = {"commercial", "office", "retail", "industrial", "mixed use", "land", "vacant"}
+_NON_RESIDENTIAL_TYPES = {"commercial", "office", "retail", "industrial", "mixed use", "land", "vacant", "apartment"}
 
 
 def _classify_subject(subject_property: Dict) -> str:
     """Return 'Commercial' or 'Residential' for the subject property."""
-    NON_RESIDENTIAL = ('commercial', 'office', 'retail', 'industrial', 'mixed_use', 'land', 'vacant')
+    NON_RESIDENTIAL = ('commercial', 'office', 'retail', 'industrial', 'mixed_use', 'land', 'vacant', 'apartment')
     pt_field = str(subject_property.get('property_type', '')).lower()
     legal_desc = str(subject_property.get('legal_description', '')).lower()
     if pt_field in NON_RESIDENTIAL or \
