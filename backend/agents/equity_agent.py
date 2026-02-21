@@ -135,6 +135,22 @@ class EquityAgent:
                 logger.warning(f"Adjustment calc failed for comp {comp.get('account_number')}: {e}")
                 comp['adjustments'] = {}
         
+        # Phase 3: Deed / Sale Recency Enrichment
+        # last_sale_date comes from the DB query (properties.last_sale_date)
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")  # 24 months
+        recently_sold_count = 0
+        for comp in equity_5_list:
+            sale_date = comp.get('last_sale_date')
+            if sale_date:
+                comp['recently_sold'] = str(sale_date) >= cutoff
+                if comp['recently_sold']:
+                    recently_sold_count += 1
+            else:
+                comp['recently_sold'] = False
+        if recently_sold_count:
+            logger.info(f"EquityAgent: {recently_sold_count}/{len(equity_5_list)} comps have recent deed transfers (< 24mo)")
+
         # New Justified Value Floor = Median of adjusted total values
         if adj_values:
             adj_values.sort()

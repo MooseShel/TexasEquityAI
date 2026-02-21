@@ -30,6 +30,7 @@ from backend.services.hcad_form_service import HCADFormService
 from backend.agents.fema_agent import FEMAAgent
 from backend.agents.permit_agent import PermitAgent
 from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+from backend.agents.anomaly_detector import AnomalyDetectorAgent
 
 
 
@@ -51,6 +52,7 @@ form_service = HCADFormService()
 fema_agent = FEMAAgent()
 permit_agent = PermitAgent()
 commercial_agent = CommercialEnrichmentAgent()
+anomaly_agent = AnomalyDetectorAgent()
 
 
 
@@ -516,6 +518,46 @@ async def get_full_protest(
                 if "sales_comps" not in equity_results:
                     equity_results["error"] = "Could not perform live equity analysis"
 
+            # ── 4c. Anomaly Detection: Score subject against neighborhood ─────
+            try:
+                nbhd_for_anomaly = property_details.get('neighborhood_code')
+                dist_for_anomaly = property_details.get('district', current_district or 'HCAD')
+                if nbhd_for_anomaly:
+                    yield json.dumps({"status": "📊 Anomaly Detector: Scoring property against neighborhood..."}) + "\n"
+                    anomaly_score = await anomaly_agent.score_property(
+                        current_account, nbhd_for_anomaly, dist_for_anomaly
+                    )
+                    if anomaly_score and not anomaly_score.get('error'):
+                        equity_results['anomaly_score'] = anomaly_score
+                        property_details['anomaly_score'] = anomaly_score
+                        z = anomaly_score.get('z_score', 0)
+                        pctile = anomaly_score.get('percentile', 0)
+                        logger.info(f"AnomalyDetector: Subject Z={z}, percentile={pctile}")
+                        if z > 1.5:
+                            yield json.dumps({"status": f"📊 Anomaly Detected: Property is at the {pctile:.0f}th percentile in its neighborhood (Z={z:.1f})"}) + "\n"
+            except Exception as e:
+                logger.warning(f"Anomaly detection failed (non-fatal): {e}")
+
+            # ── 4d. Geo-Intelligence: Distance + External Obsolescence ────────
+            try:
+                from backend.services.geo_intelligence_service import (
+                    enrich_comps_with_distance, check_external_obsolescence, geocode
+                )
+                prop_address_geo = property_details.get('address', '')
+                if equity_results.get('equity_5') and prop_address_geo:
+                    yield json.dumps({"status": "🌐 Geo-Intelligence: Computing distances and checking surroundings..."}) + "\n"
+                    subj_coords = geocode(prop_address_geo)
+                    enrich_comps_with_distance(prop_address_geo, equity_results['equity_5'], subj_coords)
+                    # External obsolescence check
+                    if subj_coords:
+                        obs_result = check_external_obsolescence(subj_coords['lat'], subj_coords['lng'])
+                        if obs_result.get('factors'):
+                            equity_results['external_obsolescence'] = obs_result
+                            property_details['external_obsolescence'] = obs_result
+                            yield json.dumps({"status": f"🌐 Geo-Intelligence: Found {len(obs_result['factors'])} external obsolescence factor(s)"}) + "\n"
+            except Exception as geo_err:
+                logger.warning(f"Geo-intelligence failed (non-fatal): {geo_err}")
+
             # 5. Vision & Location Analysis (Flood Zones)
             search_address = property_details.get('address', '')
             district_key = property_details.get('district', 'HCAD')
@@ -577,7 +619,41 @@ async def get_full_protest(
             if vision_detections and image_path != "mock_street_view.jpg":
                 image_path = vision_agent.draw_detections(image_path, vision_detections)
 
-            yield json.dumps({"status": "✍️ Legal Narrator: Synthesizing evidence into formal narrative..."}) + "\n"
+            # ── 5b. Condition Delta: Compare subject vs comp conditions ────────
+            try:
+                from backend.services.condition_delta_service import enrich_comps_with_condition
+                if equity_results.get('equity_5') and image_path != "mock_street_view.jpg":
+                    yield json.dumps({"status": "📸 Condition Delta: Comparing property condition against comps..."}) + "\n"
+                    # Pass vision detections for subject score extraction
+                    property_details['vision_detections'] = vision_detections
+                    delta_result = await enrich_comps_with_condition(
+                        property_details, equity_results['equity_5'],
+                        vision_agent, subject_image_path=image_path
+                    )
+                    if delta_result:
+                        equity_results['condition_delta'] = delta_result
+                        delta_val = delta_result.get('condition_delta', 0)
+                        if delta_val < -1:
+                            yield json.dumps({"status": f"📸 Condition Delta: Subject is in worse condition than comps (Δ={delta_val:.1f})"}) + "\n"
+            except Exception as cd_err:
+                logger.warning(f"Condition delta failed (non-fatal): {cd_err}")
+
+            yield json.dumps({"status": "\u2728 Savings Estimator: Computing predicted savings range..."}) + "\n"
+
+            # 5c. Predictive Savings Estimation
+            try:
+                from backend.services.savings_estimator import SavingsEstimator
+                estimator = SavingsEstimator(tax_rate=0.025)
+                savings_prediction = estimator.estimate(property_details, equity_results)
+                equity_results['savings_prediction'] = savings_prediction
+                if savings_prediction.get('signal_count', 0) > 0:
+                    prob = savings_prediction.get('protest_success_probability', 0)
+                    exp_save = savings_prediction['estimated_savings']['expected']
+                    yield json.dumps({"status": f"\u2728 Protest Strength: {savings_prediction['protest_strength']} ({prob:.0%}) — Expected savings: ${exp_save:,}/yr"}) + "\n"
+            except Exception as se_err:
+                logger.warning(f"Savings estimator failed (non-fatal): {se_err}")
+
+            yield json.dumps({"status": "\u270d\ufe0f Legal Narrator: Synthesizing evidence into formal narrative..."}) + "\n"
             
             # 6. Narrative & PDF
             narrative = narrative_agent.generate_protest_narrative(property_details, equity_results, vision_detections, market_value)
@@ -595,10 +671,15 @@ async def get_full_protest(
             try:
                 prop_record = await supabase_service.get_property_by_account(current_account)
                 if prop_record and "justified_value_floor" in equity_results:
+                    # Use savings estimator if available, else simple formula
+                    sp = equity_results.get('savings_prediction', {})
+                    potential_savings = sp.get('estimated_savings', {}).get('expected', 0) if sp else 0
+                    if not potential_savings:
+                        potential_savings = (property_details.get('appraised_value', 0) - equity_results['justified_value_floor']) * 0.025
                     protest_record = {
                         "property_id": prop_record['id'],
                         "justified_value": equity_results['justified_value_floor'],
-                        "potential_savings": (property_details.get('appraised_value', 0) - equity_results['justified_value_floor']) * 0.025,
+                        "potential_savings": potential_savings,
                         "narrative": narrative,
                         "pdf_url": form_path
                     }

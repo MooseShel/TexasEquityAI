@@ -149,7 +149,7 @@ class SupabaseService:
             max_area = int(building_area * (1 + tolerance))
             response = (
                 self.client.table("properties")
-                .select("account_number,address,appraised_value,market_value,building_area,land_area,year_built,neighborhood_code,district,building_grade,building_quality,valuation_history,land_breakdown")
+                .select("account_number,address,appraised_value,market_value,building_area,land_area,year_built,neighborhood_code,district,building_grade,building_quality,valuation_history,land_breakdown,last_sale_date,deed_count")
                 .eq("neighborhood_code", neighborhood_code)
                 .eq("district", district)
                 .neq("account_number", account_number)
@@ -265,6 +265,47 @@ class SupabaseService:
 
     async def save_cached_market(self, account_number: str, market_data: dict):
         await self._save_cached_field(account_number, "market_cache", "market_fetched_at", market_data)
+
+    # ── Deed Data Queries ─────────────────────────────────────────────────
+    async def get_deed_history(self, account_number: str) -> list:
+        """Returns all deed records for an account, most recent first."""
+        if not self.client:
+            return []
+        try:
+            response = self.client.table("property_deeds") \
+                .select("acct, date_of_sale, clerk_year, clerk_id, deed_id") \
+                .eq("acct", account_number) \
+                .order("date_of_sale", desc=True) \
+                .execute()
+            return response.data or []
+        except Exception as e:
+            logger.warning(f"get_deed_history failed for {account_number}: {e}")
+            return []
+
+    async def get_last_sale_date(self, account_number: str) -> str:
+        """
+        Returns the most recent sale date for an account.
+        First checks properties.last_sale_date (fast), falls back to property_deeds query.
+        """
+        if not self.client:
+            return None
+        try:
+            # Fast path: check materialized column
+            response = self.client.table("properties") \
+                .select("last_sale_date") \
+                .eq("account_number", account_number) \
+                .execute()
+            if response.data and response.data[0].get("last_sale_date"):
+                return response.data[0]["last_sale_date"]
+
+            # Slow path: query deed records directly
+            deeds = await self.get_deed_history(account_number)
+            if deeds:
+                return deeds[0].get("date_of_sale")
+            return None
+        except Exception as e:
+            logger.warning(f"get_last_sale_date failed for {account_number}: {e}")
+            return None
 
 # Singleton instance
 supabase_service = SupabaseService()

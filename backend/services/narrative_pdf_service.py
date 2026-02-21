@@ -354,7 +354,47 @@ class PDFService:
         pdf.set_font("Arial", 'B', 10)
         pdf.cell(0, 6, "CONFIDENTIAL EVIDENCE SUMMARY", ln=True, align='C')
         pdf.cell(0, 6, "Prepared for Appraisal Review Board", ln=True, align='C')
+
+        # Anomaly Detection Badge (if scoring data is available)
+        anomaly = property_data.get('anomaly_score', {}) or (equity_data.get('anomaly_score', {}) if isinstance(equity_data, dict) else {})
+        if anomaly and anomaly.get('z_score', 0) > 1.0:
+            z = anomaly.get('z_score', 0)
+            pctile = anomaly.get('percentile', 0)
+            if z > 1.5:
+                pdf.set_fill_color(220, 50, 50)  # Red for strong anomaly
+            else:
+                pdf.set_fill_color(230, 160, 50)  # Orange for elevated
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Arial", 'B', 9)
+            badge_text = f"STATISTICAL ANOMALY: Assessed at the {pctile:.0f}th percentile in neighborhood (Z-Score: {z:.1f})"
+            pdf.cell(0, 7, clean_text(badge_text), ln=True, align='C', fill=True)
+            pdf.set_text_color(255, 255, 255)
+
         pdf.set_text_color(0, 0, 0)
+
+        # Savings Prediction Card (if estimator data available)
+        savings_pred = equity_data.get('savings_prediction', {}) if isinstance(equity_data, dict) else {}
+        if savings_pred and savings_pred.get('signal_count', 0) > 0:
+            pdf.ln(2)
+            prob = savings_pred.get('protest_success_probability', 0)
+            strength = savings_pred.get('protest_strength', '')
+            est_savings = savings_pred.get('estimated_savings', {})
+
+            # Probability badge
+            if prob >= 0.70:
+                pdf.set_fill_color(40, 160, 70)  # Green
+            elif prob >= 0.40:
+                pdf.set_fill_color(220, 160, 40)  # Yellow
+            else:
+                pdf.set_fill_color(200, 80, 80)  # Red
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Arial", 'B', 9)
+            pdf.cell(0, 7, clean_text(
+                f"PROTEST VIABILITY: {strength.upper()} ({prob:.0%}) | "
+                f"Expected Savings: ${est_savings.get('expected', 0):,}/yr | "
+                f"Range: ${est_savings.get('conservative', 0):,}-${est_savings.get('best_case', 0):,}/yr"
+            ), ln=True, align='C', fill=True)
+            pdf.set_text_color(0, 0, 0)
 
         # ── PAGE 1B: OUR UNIQUE AI APPROACH (METHODOLOGY) ────────────────────
         self._generate_methodology_page(pdf, property_data)
@@ -623,6 +663,21 @@ class PDFService:
             "Market Sales Comparables (TC 41.43(b)(3)), and Physical Condition (TC 23.01), "
             f"we propose the above opinion of value for tax year {property_data.get('tax_year', '2025')}."
         ))
+
+        # Condition Delta callout (if subject is in worse shape than comps)
+        cond_delta = equity_data.get('condition_delta', {}) if isinstance(equity_data, dict) else {}
+        if cond_delta and cond_delta.get('condition_delta', 0) < -1:
+            delta_val = cond_delta['condition_delta']
+            subj_cond = cond_delta.get('subject_condition_score', 0)
+            avg_comp_cond = cond_delta.get('avg_comp_condition_score', 0)
+            dep_pct = cond_delta.get('depreciation_adjustment_pct', 0)
+            pdf.ln(3)
+            pdf.set_fill_color(255, 240, 220)
+            pdf.set_font("Arial", 'B', 8)
+            pdf.cell(0, 7, clean_text(
+                f"  Condition Delta: Subject ({subj_cond}/10) vs Comps ({avg_comp_cond:.1f}/10) = {delta_val:+.1f} | "
+                f"Supports additional {dep_pct:.1f}% depreciation adjustment (TC 23.01)"
+            ), ln=True, fill=True)
 
 
 
@@ -1811,8 +1866,58 @@ class PDFService:
                                 [self._fmt(c.get('appraised_value', 0)) for c in page_comps])
                 self._table_row(pdf, col_w, ["Total SQFT", f"{subj_area:,.0f} SF"] + 
                                 [f"{c.get('building_area', 0):,.0f} SF" for c in page_comps])
-                self._table_row(pdf, col_w, ["Market Price/SQFT", self._pps(appraised, subj_area)] + 
+                self._table_row(pdf, col_w, ["Market Price/SQFT", self._pps(appraised, subj_area)] +
                                 [self._pps(c.get('appraised_value', 0), c.get('building_area', 1)) for c in page_comps])
+
+                # Last Sale date row — shows deed transfer dates with ★ for recent sales
+                subj_sale = property_data.get('last_sale_date', '')
+                sale_vals = []
+                for c in page_comps:
+                    sd = c.get('last_sale_date', '')
+                    if sd:
+                        label = str(sd)[:10]
+                        if c.get('recently_sold'):
+                            label = f"★ {label}"
+                        sale_vals.append(label)
+                    else:
+                        sale_vals.append("N/A")
+                self._table_row(pdf, col_w, ["Last Sale", str(subj_sale)[:10] if subj_sale else "N/A"] + sale_vals)
+
+                # Condition Score row — from condition delta scoring
+                score_map = {10: 'Excellent', 8: 'Very Good', 7: 'Good', 6: 'Average', 5: 'Fair', 4: 'Below Avg', 3: 'Poor'}
+                cond_delta = equity_data.get('condition_delta', {}) if isinstance(equity_data, dict) else {}
+                subj_cond_score = cond_delta.get('subject_condition_score')
+                if subj_cond_score:
+                    subj_cond_label = f"{score_map.get(subj_cond_score, '')} ({subj_cond_score})"
+                    cond_vals = []
+                    for c in page_comps:
+                        cs = c.get('condition_score')
+                        if cs:
+                            cond_vals.append(f"{score_map.get(cs, '')} ({cs})")
+                        else:
+                            cond_vals.append("N/A")
+                    self._table_row(pdf, col_w, ["Condition", subj_cond_label] + cond_vals)
+
+                # Distance row — from geo-intelligence service
+                has_distances = any(c.get('distance_mi') is not None for c in page_comps)
+                if has_distances:
+                    dist_vals = []
+                    for c in page_comps:
+                        d = c.get('distance_mi')
+                        if d is not None:
+                            dist_vals.append(f"{d:.2f} mi")
+                        else:
+                            dist_vals.append("N/A")
+                    self._table_row(pdf, col_w, ["Distance", "—"] + dist_vals)
+
+                # External obsolescence callout
+                ext_obs = equity_data.get('external_obsolescence', {}) if isinstance(equity_data, dict) else {}
+                if ext_obs and ext_obs.get('factors'):
+                    pdf.ln(2)
+                    pdf.set_fill_color(255, 235, 235)
+                    pdf.set_font("Arial", 'B', 7)
+                    for factor in ext_obs['factors'][:3]:
+                        pdf.cell(0, 5, clean_text(f"  ⚠ {factor['description']} (-{factor['impact_pct']:.1f}%)"), ln=True, fill=True)
 
                 pdf.ln(2)
 

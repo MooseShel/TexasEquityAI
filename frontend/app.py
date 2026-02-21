@@ -40,6 +40,7 @@ from backend.services.hcad_form_service import HCADFormService
 from backend.agents.fema_agent import FEMAAgent
 from backend.agents.permit_agent import PermitAgent
 from backend.utils.address_utils import normalize_address, is_real_address
+from backend.agents.anomaly_detector import AnomalyDetectorAgent
 
 st.set_page_config(page_title="Texas Equity AI", layout="wide")
 
@@ -49,60 +50,136 @@ query_params = st.query_params
 url_account = query_params.get("account")
 
 if url_account:
-    st.info(f"📂 Loading Digital Evidence for Account: {url_account}")
+    # ── MOBILE-FIRST REPORT VIEWER ───────────────────────────────────
+    # This renders when accessed via QR code: ?account=XXXXXXXX
+    st.markdown("""
+    <style>
+    .report-hero { 
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        color: white; padding: 1.5rem; border-radius: 12px; margin-bottom: 1rem;
+    }
+    .report-hero h1 { color: white; font-size: 1.5rem; margin: 0; }
+    .report-hero p { color: #94a3b8; margin: 0.25rem 0; }
+    .metric-card {
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+        padding: 1rem; text-align: center;
+    }
+    .metric-card .value { font-size: 1.5rem; font-weight: 700; color: #1e293b; }
+    .metric-card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; }
+    .badge-strong { background: #22c55e; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
+    .badge-moderate { background: #eab308; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
+    .badge-weak { background: #ef4444; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
+    </style>
+    """, unsafe_allow_html=True)
+
     try:
-        # Run async fetch in sync context
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+        # Fetch property from DB
+        prop = loop.run_until_complete(supabase_service.get_property_by_account(url_account))
         saved_protest = loop.run_until_complete(supabase_service.get_latest_protest(url_account))
+
+        # Quick anomaly check
+        anomaly_data = None
+        try:
+            nbhd = prop.get('neighborhood_code', '') if prop else ''
+            if nbhd:
+                anomaly_data = loop.run_until_complete(
+                    agents["anomaly_agent"].score_property(url_account, nbhd, 'HCAD')
+                )
+        except Exception:
+            pass
         loop.close()
 
-        if saved_protest:
-            st.success("✅ Digital Evidence retrieved successfully.")
-            
-            # Unpack data
-            p_data = saved_protest.get("property_data", {})
-            e_data = saved_protest.get("equity_data", {})
-            v_data = saved_protest.get("vision_data", [])
-            narrative_text = saved_protest.get("narrative", "")
-            
-            st.title(f"Property Tax Evidence: {p_data.get('address', url_account)}")
-            st.markdown(f"**Account Number**: {p_data.get('account_number', url_account)}")
-            
-            # Reuse the displaying logic? It's complex to extract.
-            # We'll create a simplified read-only view here.
-            
-            tab_overview, tab_equity, tab_vision, tab_narrative = st.tabs(["Overview", "Fair Equity", "Property Condition", "Legal Argument"])
-            
-            with tab_overview:
-                st.subheader("Property Details")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Appraised Value", f"${p_data.get('appraised_value', 0):,.0f}")
-                c2.metric("Market Value", f"${p_data.get('market_value', 0):,.0f}")
-                c3.metric("Year Built", p_data.get('year_built', 'N/A'))
-                
-            with tab_equity:
-                st.subheader("Equity Analysis")
-                if e_data and 'equity_5' in e_data:
-                    st.dataframe(pd.DataFrame(e_data['equity_5']))
-                else:
-                    st.write("No equity data available.")
-
-            with tab_vision:
-                st.subheader("Visual Condition Analysis")
-                for detection in v_data:
-                    st.write(f"- {detection.get('label', 'Issue')}: {detection.get('description', '')}")
-            
-            with tab_narrative:
-                st.subheader("Protest Narrative")
-                st.markdown(narrative_text)
-            
-            # Stop execution so we don't show the generating form
+        if not prop:
+            st.warning(f"No property found for account {url_account}.")
+            st.info("This property may not be in our database yet. Use the main dashboard to generate a protest report first.")
             st.stop()
-        else:
-            st.warning("No generated report found for this account. Please generate one below.")
+
+        address = prop.get('address', f'Account {url_account}')
+        appraised = float(prop.get('appraised_value', 0) or 0)
+        market = float(prop.get('market_value', 0) or 0)
+        area = float(prop.get('building_area', 0) or 0)
+        year_built = prop.get('year_built', 'N/A')
+        nbhd_code = prop.get('neighborhood_code', 'N/A')
+
+        # ── Hero Card ─────────────────────────────────────────────────
+        st.markdown(f"""
+        <div class="report-hero">
+            <h1>📋 Property Tax Evidence Report</h1>
+            <p><strong>{address}</strong></p>
+            <p>Account: {url_account} | Neighborhood: {nbhd_code} | Built: {year_built}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Key Metrics ───────────────────────────────────────────────
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Appraised Value", f"${appraised:,.0f}")
+        c2.metric("Market Value", f"${market:,.0f}")
+        c3.metric("Building Area", f"{area:,.0f} ft²")
+        pps = appraised / area if area > 0 else 0
+        c4.metric("$/ft²", f"${pps:,.0f}")
+
+        # ── Protest Summary ───────────────────────────────────────────
+        if saved_protest:
+            justified = float(saved_protest.get('justified_value', 0) or 0)
+            savings = float(saved_protest.get('potential_savings', 0) or 0)
+            reduction = appraised - justified if justified > 0 else 0
+            reduction_pct = (reduction / appraised * 100) if appraised > 0 and reduction > 0 else 0
+
+            st.divider()
+            st.subheader("💰 Savings Analysis")
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Justified Value", f"${justified:,.0f}", delta=f"-${reduction:,.0f}", delta_color="inverse")
+            s2.metric("Reduction", f"{reduction_pct:.1f}%")
+            s3.metric("Est. Tax Savings", f"${savings:,.0f}/yr")
+
+        # ── Anomaly Score ─────────────────────────────────────────────
+        if anomaly_data and not anomaly_data.get('error'):
+            z = anomaly_data.get('z_score', 0)
+            pctile = anomaly_data.get('percentile', 0)
+            st.divider()
+            st.subheader("📊 Neighborhood Analysis")
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Z-Score", f"{z:.2f}")
+            a2.metric("Percentile", f"{pctile:.0f}th")
+            badge_class = "badge-strong" if z > 1.5 else ("badge-moderate" if z > 1.0 else "badge-weak")
+            flag = "OVER-ASSESSED" if z > 1.5 else ("ELEVATED" if z > 1.0 else "NORMAL")
+            a3.markdown(f'<span class="{badge_class}">{flag}</span>', unsafe_allow_html=True)
+
+            nbhd_stats = anomaly_data.get('neighborhood_stats', {})
+            if nbhd_stats:
+                st.caption(
+                    f"Neighborhood {nbhd_code}: "
+                    f"Median $/ft² = ${nbhd_stats.get('median_pps', anomaly_data.get('neighborhood_median_pps', 0)):,.0f} | "
+                    f"Your $/ft² = ${pps:,.0f} | "
+                    f"Properties analyzed: {nbhd_stats.get('property_count', 'N/A')}"
+                )
+
+        # ── Protest Narrative ─────────────────────────────────────────
+        if saved_protest and saved_protest.get('narrative'):
+            st.divider()
+            with st.expander("📜 Full Protest Narrative", expanded=False):
+                st.markdown(saved_protest['narrative'])
+
+        # ── Actions ───────────────────────────────────────────────────
+        st.divider()
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.link_button("🏠 Go to Full Dashboard", f"/?account=")
+        with col_b:
+            if saved_protest and saved_protest.get('pdf_url'):
+                st.info("📄 PDF report available — check your email or the dashboard.")
+
+        st.caption("Generated by Texas Equity AI • texasequityai.streamlit.app")
+
     except Exception as e:
         st.error(f"Failed to load report: {e}")
+        import traceback
+        logger.error(f"Report viewer error: {traceback.format_exc()}")
+
+    st.stop()
 
 
 # ── Live Agent Log Capture ─────────────────────────────────────────────────
@@ -245,7 +322,8 @@ def get_agents():
         "pdf_service": PDFService(),
         "form_service": HCADFormService(),
         "fema_agent": FEMAAgent(),
-        "permit_agent": PermitAgent()
+        "permit_agent": PermitAgent(),
+        "anomaly_agent": AnomalyDetectorAgent(),
     }
 
 agents = get_agents()
@@ -345,8 +423,178 @@ force_fresh_comps = st.sidebar.checkbox(
     help="Bypass cached comparable properties and re-scrape live data. Use when comps feel outdated (cache TTL: 30 days)."
 )
 
+# ── Neighborhood Anomaly Scanner ────────────────────────────────────
+st.sidebar.divider()
+with st.sidebar.expander("🔍 Neighborhood Anomaly Scan", expanded=False):
+    st.caption("Find over-assessed properties in a neighborhood")
+    scan_nbhd = st.text_input("Neighborhood Code", placeholder="e.g. 2604.71", key="scan_nbhd_input")
+    scan_district = st.selectbox("District", ["HCAD", "TAD", "CCAD", "DCAD", "TCAD"], key="scan_district")
+    scan_btn = st.button("📊 Run Scan", key="scan_anomaly_btn")
+    if scan_btn and scan_nbhd:
+        with st.spinner("Scanning neighborhood..."):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(agents["anomaly_agent"].scan_neighborhood(scan_nbhd, scan_district))
+            loop.close()
+        if result.get('error'):
+            st.warning(result['error'])
+        else:
+            # Persist results in session state
+            st.session_state['scan_results'] = result
+            st.session_state['scan_nbhd_code'] = scan_nbhd
+            st.session_state['scan_district_code'] = scan_district
+            stats = result.get('stats', {})
+            flagged = result.get('flagged', [])
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Analyzed", stats.get('property_count', 0))
+            col2.metric("Median $/ft²", f"${stats.get('median_pps', 0):,.0f}")
+            col3.metric("🚨 Flagged", len(flagged))
+            if flagged:
+                st.success(f"Found {len(flagged)} over-assessed properties. See main area for details.")
+    elif 'scan_results' in st.session_state:
+        r = st.session_state['scan_results']
+        stats = r.get('stats', {})
+        flagged = r.get('flagged', [])
+        st.info(f"Last scan: {st.session_state.get('scan_nbhd_code', '')} — {len(flagged)} flagged")
+
+# ── Assessment Watch List ────────────────────────────────────────────
+st.sidebar.divider()
+with st.sidebar.expander("🔔 Assessment Monitor", expanded=False):
+    st.caption("Track properties for annual assessment changes")
+
+    # Initialize monitor
+    from backend.services.assessment_monitor import AssessmentMonitor
+    monitor = AssessmentMonitor()
+
+    # Add property to watch
+    watch_acct = st.text_input("Account to watch", placeholder="e.g. 0660460360030", key="watch_acct_input")
+    watch_threshold = st.slider("Alert threshold (%)", 1, 25, 5, key="watch_threshold")
+    if st.button("➕ Add to Watch List", key="add_watch_btn"):
+        if watch_acct:
+            with st.spinner("Adding..."):
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(monitor.add_watch(watch_acct, district_code, watch_threshold))
+                loop.close()
+            if result.get('error'):
+                st.warning(result['error'])
+            else:
+                change = result.get('change_pct', 0)
+                st.success(f"Added! YoY change: {change:+.1f}%")
+
+    # Show watch list
+    loop2 = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop2)
+    watches = loop2.run_until_complete(monitor.get_watch_list())
+    loop2.close()
+
+    if watches:
+        st.markdown(f"**Watching {len(watches)} properties:**")
+        alerts = [w for w in watches if w.get('alert_triggered')]
+        if alerts:
+            st.error(f"🚨 {len(alerts)} alert(s)!")
+
+        for w in watches[:10]:
+            acct = w.get('account_number', '')
+            addr = (w.get('address', '') or '')[:25]
+            change = w.get('change_pct')
+            triggered = w.get('alert_triggered', False)
+
+            if change is not None:
+                color = "🔴" if change > 0 and triggered else ("🟢" if change <= 0 else "🟡")
+                st.markdown(f"{color} **{acct}** {addr} → {change:+.1f}%")
+            else:
+                st.markdown(f"⚪ **{acct}** {addr}")
+
+        if st.button("🔄 Refresh All", key="refresh_watches"):
+            with st.spinner("Refreshing..."):
+                loop3 = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop3)
+                refresh_result = loop3.run_until_complete(monitor.refresh_all())
+                loop3.close()
+            st.success(f"Checked {refresh_result['checked']}, {refresh_result['alerts']} alerts")
+            st.rerun()
+    else:
+        st.info("No properties being monitored yet.")
+
+# ── Pitch Deck Generator ────────────────────────────────────────────
+st.sidebar.divider()
+with st.sidebar.expander("📑 Pitch Deck Generator", expanded=False):
+    from backend.feature_registry import get_live_count
+    feat_count = get_live_count()
+    st.caption(f"Generate investor/customer PDF ({feat_count} features)")
+    if st.button("📄 Generate Pitch Deck", key="gen_pitch_deck"):
+        with st.spinner("Generating pitch deck..."):
+            import subprocess, sys
+            result = subprocess.run(
+                [sys.executable, "-X", "utf8", "scripts/generate_pitch_deck.py"],
+                capture_output=True, text=True, cwd="."
+            )
+        if result.returncode == 0:
+            pdf_path = "outputs/Texas_Equity_AI_Pitch_Deck.pdf"
+            if os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                st.download_button(
+                    "⬇️ Download Pitch Deck",
+                    data=pdf_bytes,
+                    file_name="Texas_Equity_AI_Pitch_Deck.pdf",
+                    mime="application/pdf",
+                    key="download_pitch_deck"
+                )
+                st.success(f"Generated! {feat_count} features included.")
+        else:
+            st.error(f"Generation failed: {result.stderr[:200]}")
+
 # Main Content
 st.title("Property Tax Protest Dashboard")
+
+# ── Neighborhood Scan Results Panel ──────────────────────────────────
+if 'scan_results' in st.session_state:
+    scan_r = st.session_state['scan_results']
+    scan_stats = scan_r.get('stats', {})
+    scan_flagged = scan_r.get('flagged', [])
+    nbhd_code = st.session_state.get('scan_nbhd_code', '')
+    scan_dist = st.session_state.get('scan_district_code', '')
+
+    with st.expander(f"🔍 Scan Results: Neighborhood {nbhd_code} ({scan_dist}) — {len(scan_flagged)} flagged", expanded=True):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Properties", scan_stats.get('property_count', 0))
+        c2.metric("Median $/ft²", f"${scan_stats.get('median_pps', 0):,.0f}")
+        c3.metric("Std Dev", f"${scan_stats.get('std_pps', 0):,.0f}")
+        c4.metric("Flagged", len(scan_flagged), delta=f"{len(scan_flagged)} over-assessed", delta_color="inverse")
+
+        if scan_flagged:
+            df = pd.DataFrame(scan_flagged)
+            display_cols = ['account_number', 'address', 'pps', 'z_score', 'percentile', 'estimated_over_assessment']
+            available_cols = [c for c in display_cols if c in df.columns]
+            if available_cols:
+                display_df = df[available_cols].copy()
+                if 'pps' in display_df.columns:
+                    display_df['pps'] = display_df['pps'].apply(lambda x: f"${x:,.0f}")
+                if 'z_score' in display_df.columns:
+                    display_df['z_score'] = display_df['z_score'].apply(lambda x: f"{x:.2f}")
+                if 'percentile' in display_df.columns:
+                    display_df['percentile'] = display_df['percentile'].apply(lambda x: f"{x:.0f}th")
+                if 'estimated_over_assessment' in display_df.columns:
+                    display_df['estimated_over_assessment'] = display_df['estimated_over_assessment'].apply(lambda x: f"${x:,.0f}")
+                display_df.columns = [c.replace('_', ' ').title() for c in display_df.columns]
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            st.caption("💡 Click a 'Generate Protest' button below, or copy an account number into the input field above.")
+            cols = st.columns(min(len(scan_flagged), 4))
+            for i, prop in enumerate(scan_flagged[:8]):
+                with cols[i % 4]:
+                    acct = prop.get('account_number', '')
+                    addr = prop.get('address', '')[:30]
+                    over_amt = prop.get('estimated_over_assessment', 0)
+                    if st.button(f"📋 {acct}", key=f"protest_scan_{i}", help=f"{addr} — Over-assessed by ${over_amt:,.0f}"):
+                        st.session_state['account_input'] = acct
+                        st.rerun()
+
+        if st.button("❌ Clear Scan Results", key="clear_scan"):
+            del st.session_state['scan_results']
+            st.rerun()
 
 account_placeholder = "e.g. 0660460360030 (13 digits)"
 if district_code == "TAD": account_placeholder = "e.g. 04657837 (8 digits)"
@@ -750,6 +998,47 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 logger.error(f"Sales Analysis Error: {sales_err}")
             
             property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
+
+            # ── Anomaly Detection: Score subject against neighborhood ────────
+            try:
+                nbhd_for_anomaly = property_details.get('neighborhood_code')
+                dist_for_anomaly = property_details.get('district', 'HCAD')
+                if nbhd_for_anomaly:
+                    yield {"status": "📊 Anomaly Detector: Scoring property against neighborhood..."}
+                    anomaly_score = await agents["anomaly_agent"].score_property(
+                        current_account, nbhd_for_anomaly, dist_for_anomaly
+                    )
+                    if anomaly_score and not anomaly_score.get('error'):
+                        equity_results['anomaly_score'] = anomaly_score
+                        property_details['anomaly_score'] = anomaly_score
+                        z = anomaly_score.get('z_score', 0)
+                        pctile = anomaly_score.get('percentile', 0)
+                        if z > 1.5:
+                            yield {"status": f"🚨 Anomaly Detected: Property at {pctile:.0f}th percentile (Z={z:.1f})"}
+                        elif z > 1.0:
+                            yield {"status": f"📊 Elevated Assessment: Property at {pctile:.0f}th percentile (Z={z:.1f})"}
+            except Exception as anomaly_err:
+                logger.warning(f"Anomaly detection failed (non-fatal): {anomaly_err}")
+
+            # ── Geo-Intelligence: Distance + External Obsolescence ────────
+            try:
+                from backend.services.geo_intelligence_service import (
+                    enrich_comps_with_distance, check_external_obsolescence, geocode
+                )
+                prop_address_geo = property_details.get('address', '')
+                equity_comps_geo = equity_results.get('equity_5', []) if isinstance(equity_results, dict) else []
+                if equity_comps_geo and prop_address_geo:
+                    yield {"status": "🌐 Geo-Intelligence: Computing distances..."}
+                    subj_coords = geocode(prop_address_geo)
+                    enrich_comps_with_distance(prop_address_geo, equity_comps_geo, subj_coords)
+                    if subj_coords:
+                        obs_result = check_external_obsolescence(subj_coords['lat'], subj_coords['lng'])
+                        if obs_result.get('factors'):
+                            equity_results['external_obsolescence'] = obs_result
+                            property_details['external_obsolescence'] = obs_result
+            except Exception as geo_err:
+                logger.warning(f"Geo-intelligence failed (non-fatal): {geo_err}")
+
         except Exception as e:
             import traceback
             logger.error(f"Equity analysis failed: {e}\n{traceback.format_exc()}")
@@ -819,6 +1108,39 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             except Exception as e:
                 logger.warning(f"Comp photo comparison failed (non-fatal): {e}")
                 comp_images = None
+
+        # ── Condition Delta Scoring ────────────────────────────────────────
+        try:
+            from backend.services.condition_delta_service import enrich_comps_with_condition
+            equity_comps_cd = equity_results.get('equity_5', []) if isinstance(equity_results, dict) else []
+            if equity_comps_cd and image_path and image_path != "mock_street_view.jpg":
+                yield {"status": "📸 Condition Delta: Scoring subject vs comp conditions..."}
+                property_details['vision_detections'] = vision_detections
+                delta_result = await enrich_comps_with_condition(
+                    property_details, equity_comps_cd,
+                    agents["vision_agent"], subject_image_path=image_path
+                )
+                if delta_result:
+                    equity_results['condition_delta'] = delta_result
+                    delta_val = delta_result.get('condition_delta', 0)
+                    if delta_val < -1:
+                        yield {"status": f"📸 Condition Delta: Subject in worse condition (Δ={delta_val:.1f})"}
+        except Exception as cd_err:
+            logger.warning(f"Condition delta failed (non-fatal): {cd_err}")
+
+        # ── Predictive Savings Estimation ─────────────────────────────────
+        try:
+            from backend.services.savings_estimator import SavingsEstimator
+            estimator = SavingsEstimator(tax_rate=0.025)
+            savings_prediction = estimator.estimate(property_details, equity_results)
+            if isinstance(equity_results, dict):
+                equity_results['savings_prediction'] = savings_prediction
+            if savings_prediction.get('signal_count', 0) > 0:
+                prob = savings_prediction.get('protest_success_probability', 0)
+                exp_save = savings_prediction['estimated_savings']['expected']
+                yield {"status": f"✨ Protest Strength: {savings_prediction['protest_strength']} ({prob:.0%}) — Expected savings: ${exp_save:,}/yr"}
+        except Exception as se_err:
+            logger.warning(f"Savings estimator failed (non-fatal): {se_err}")
 
         yield {"status": "✍️ Legal Narrator: Evaluating protest viability..."}
 

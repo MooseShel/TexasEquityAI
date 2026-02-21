@@ -1,0 +1,291 @@
+# Texas Equity AI — Strategic Brainstorm & Feature Roadmap
+
+## 1. Current Feature Inventory
+
+| Category | Feature | What It Does | Status |
+|----------|---------|-------------|--------|
+| **Data Acquisition** | Multi-District Connectors | HCAD, TAD, CCAD, DCAD, TCAD | ✅ |
+| | Bulk Data Import | 600K+ HCAD records w/ `state_class` | ✅ (running now) |
+| | HCAD Live Scraper | Playwright browser automation | ✅ |
+| | NonDisclosureBridge | RentCast + RealEstateAPI fallback | ✅ |
+| | Commercial Enrichment | Multi-source fallback for commercial | ✅ |
+| **AI Analysis** | KNN Equity Engine | sklearn NearestNeighbors → Equity 5 | ✅ |
+| | Vision Agent | Street View 3-angle + Gemini/GPT-4o/Grok defect detection | ✅ |
+| | Property Type Resolver | 4-layer classification chain | ✅ |
+| | Narrative Agent | AI-written protest narrative (Gemini → OpenAI fallback) | ✅ |
+| | Valuation Service | Professional adjustment grid (area, age, condition) | ✅ |
+| **Report** | PDF Evidence Packet | 1,900-line comprehensive PDF (legal narrative, charts, maps, QR) | ✅ |
+| | HCAD Form 41.44 | Auto-filled protest form | ✅ |
+| **Enrichment** | FEMA Flood Zones | External obsolescence deduction | ✅ |
+| | Permit Cross-Reference | Subject + comp renovation flags | ✅ |
+| | Sales Comps | RentCast + RealEstateAPI hybrid | ✅ |
+| | Cost Approach | Marshall & Swift replacement cost | ✅ |
+| | Market Analysis | Neighborhood median $/sqft, sale-to-assessed ratio | ✅ |
+| | Vision Comp Grid | Side-by-side AI photo comparison | ✅ |
+| | Win Probability | AI confidence/strength score | ✅ |
+| | Trend & Forecast | 4-year valuation trend | ✅ |
+
+---
+
+## 2. Competitive Landscape
+
+| Competitor | Model | Strengths | Weaknesses |
+|-----------|-------|-----------|-----------|
+| **Ownwell** ($50M Series B) | Full-service, contingency fee (25-35%) | 1M+ appeals, 86% win rate, nationwide | Opaque AI, no user transparency on *how* reduction is found |
+| **PropertyTax.io** | Full-service, evidence portal | End-to-end management, hearing attendance | Black-box analysis — homeowner has zero visibility |
+| **Texas Tax Protest** | Full-service, big data | 10+ years in TX market | Legacy tech, no vision/condition analysis |
+| **ProtestPro** | Launching May 2026 | New entrant, Collin County focus | Unproven |
+| **Rainbolt & Co** | Service firm + proprietary platform | Trained on resolved hearings data | Houston-only, service model only |
+| **Smart Appeal AI** | DIY report generator | Low cost | Shallow analysis, no local data depth |
+| **AppealEdge** | Comp finder | Quick comparable search | No evidence packet, no AI condition analysis |
+
+### Where We Already Win
+
+> [!IMPORTANT]
+> **Texas Equity AI is the ONLY product that combines ALL of these in one tool:**
+> 1. Multi-angle **computer vision** property condition analysis with defect mapping
+> 2. **KNN machine learning** for scientifically selecting equity comparables
+> 3. **Professional adjustment grid** matching ARB hearing format
+> 4. **Comp-vs-comp photo comparison** with AI condition notes
+> 5. **Legal narrative** citing specific Texas Tax Code sections
+> 6. **Multi-district** support (5 counties and growing)
+
+---
+
+## 3. The Data Quality Cornerstone 🏗️
+
+Data quality is our moat. Here's an honest assessment and improvement roadmap:
+
+### Current Data Issues
+
+| Issue | Impact | Priority |
+|-------|--------|----------|
+| RentCast AVM values ≠ actual sales prices | Weakens sales comp arguments | 🔴 Critical |
+| Missing `year_built` in some bulk records | KNN loses a feature dimension | 🟡 Medium |
+| Zero-area properties slip through to comps | Bad equity calculations | 🟡 Medium |
+| No historical valuation data per-property | Can't show multi-year trend from *actual* records | 🟡 Medium |
+| Stale neighbor cache (no TTL/refresh) | Outdated comp pools | 🟠 High |
+
+### Data Quality Improvements
+
+#### 3A. Actual Sales Data Pipeline 🔴
+**The Problem**: Texas is a non-disclosure state — we rely on RentCast AVMs (estimates), not real transaction prices. Ownwell claims "proprietary data."
+
+**The Solution — Build a Multi-Source Sales Intelligence Layer:**
+1. **HCAD Deed Records** — HCAD publishes `real_acct.txt` but also `deeds.txt` with recorded sale prices from deed filings → **Free, bulk, authoritative**
+2. **County Clerk Deed Records** — Harris County Clerk has a public document search → scrape deed transfer amounts
+3. **Zillow/Redfin Sold Listings** — Public "recently sold" pages have *actual* closing prices
+4. **RealEstateAPI ATTOM** — Already integrated; mine `lastSalePrice` + `lastSaleDate` fields more aggressively
+
+> [!TIP]
+> **Feasibility**: High — HCAD deed files are downloadable alongside real_acct.txt. This single addition would give us **actual sale prices for ~60-70% of properties** in Harris County.
+
+#### 3B. Historical Valuation Timeline 🟡
+Import prior-year HCAD bulk data (2020-2024) to build per-property valuation history directly from assessment records, not scraped HTML.
+
+#### 3C. Data Freshness & Validation Engine 🟠
+- Add `last_updated` timestamp to all cached records
+- Background job to refresh records older than 90 days
+- Data confidence score per-property (how many sources confirmed each field)
+
+---
+
+## 4. 🌟 WOW Factor Features — AI/ML Innovations
+
+### Tier 1 — Game Changers (High Impact, Buildable)
+
+---
+
+#### 🧠 4.1 AI Neighborhood Anomaly Detector
+**What**: ML model that scans entire neighborhoods to flag statistical outliers — properties assessed significantly higher than their physical peers.
+
+**How**:
+- Train a lightweight anomaly detection model (Isolation Forest or DBSCAN) on the 600K+ HCAD records
+- Features: `value_per_sqft`, `building_area`, `year_built`, `state_class`, `neighborhood_code`
+- Automatically flag the top 5% most over-assessed properties per neighborhood
+- Present to user: *"Your property is assessed 23% higher than the neighborhood median for properties of similar size and age"*
+
+**Why It's a WOW**: No competitor does proactive anomaly detection. Homeowners currently have to *guess* they're overtaxed. We can **tell them**.
+
+**Feasibility**: ⭐⭐⭐⭐⭐ — We already have the data in Supabase and sklearn imported. Could build in 1-2 days.
+
+---
+
+#### 📸 4.2 AI Condition Delta Score (Subject vs. Comps)
+**What**: Quantified condition comparison between subject and each comparable, not just text — a numeric **Condition Delta** from the Vision Agent.
+
+**How**:
+- Run vision analysis on both subject AND each equity comp
+- Score each property 1-100 on: Roof, Foundation, Exterior, Landscaping
+- Calculate delta: *"Subject scores 62/100 vs. Comp #3 at 89/100 → Comp is in SUPERIOR condition, $14,200 adjustment warranted"*
+- Display as a visual radar chart in the PDF
+
+**Why It's a WOW**: ARB panels respond to visual, quantified evidence. No competitor produces condition *scores* with photo proof.
+
+**Feasibility**: ⭐⭐⭐⭐ — Vision Agent already runs on comps; need to standardize scoring output + add radar chart to PDF.
+
+---
+
+#### 🗺️ 4.3 Geo-Intelligence Layer (Locational Obsolescence Engine)
+**What**: Automatically detect property-specific locational disadvantages that reduce value but aren't captured in simple equity analysis.
+
+**AI/ML Detections**:
+| Factor | Data Source | Detection Method |
+|--------|-----------|-----------------|
+| High-voltage power lines within 500ft | OpenStreetMap / aerial imagery | Geospatial buffer query + Vision AI |
+| Adjacent to major highway (noise) | OSM road classification | Distance calculation from property centroid |
+| Near industrial/commercial zoning | County zoning shapefiles | GIS overlay |
+| Flood plain (already have) | FEMA NFHL | ✅ Done |
+| Railroad proximity | OSM railway data | Buffer distance |
+| Cell towers within 1,000ft | FCC antenna database | Radius search |
+| Registered sex offenders nearby | Public registry | API query |
+
+**Why It's a WOW**: This is the "Google Maps intelligence" layer. Show it as a heatmap on the property page — *"3 negative locational factors detected within 0.25 miles."*
+
+**Feasibility**: ⭐⭐⭐⭐ — OSM data is free. Most of this is geospatial math + one Vision AI call on aerial/satellite imagery.
+
+---
+
+#### 🤖 4.4 AI Hearing Coach ("Your Personal ARB Advisor")
+**What**: An interactive AI chatbot trained specifically on Texas property tax law, ARB procedures, and our report data. The homeowner can ask questions like:
+- *"What should I say if the appraiser brings up my renovations?"*
+- *"How do I respond to the argument that my comps are too far away?"*
+- *"What's the strongest point in my report?"*
+
+**How**:
+- RAG (Retrieval-Augmented Generation) over:
+  - Texas Tax Code Sections 23, 41, 42
+  - The user's specific generated report data
+  - A knowledge base of common ARB hearing scenarios + winning strategies
+- Exposed as a chat widget in the Streamlit app
+
+**Why It's a WOW**: Ownwell sends someone to the hearing *for you*. We **empower** the homeowner to win *themselves* — with a personal AI coach that knows their exact case.
+
+**Feasibility**: ⭐⭐⭐⭐ — LangChain RAG is well-established. We have the Gemini/OpenAI keys. Main work is building the knowledge base.
+
+---
+
+### Tier 2 — Strong Differentiators
+
+---
+
+#### 📊 4.5 Predictive Tax Savings Estimator
+**What**: ML model that predicts *how much savings you'll actually get* based on historical protest outcomes for similar properties.
+
+**How**:
+- Collect historical protest outcome data (HCAD publishes hearing results)
+- Train a regression model on: property type, neighborhood, initial vs. final value, year
+- Show: *"Properties like yours in this neighborhood typically achieve a 12-18% reduction at ARB."*
+
+**Feasibility**: ⭐⭐⭐ — Depends on getting historical hearing outcome data. HCAD may publish this.
+
+---
+
+#### 🏘️ 4.6 "One-Click Neighborhood Scan"
+**What**: Enter a street name or neighborhood code → instantly analyze ALL properties, rank by over-assessment severity, generate a batch report.
+
+**Use Case**:
+- Property tax consultants managing 50+ clients on the same block
+- HOA boards that want to protest for the whole subdivision
+- Real estate agents advising buyers about tax exposure
+
+**How**: Already have the bulk data. Build a batch processing endpoint + summary dashboard.
+
+**Feasibility**: ⭐⭐⭐⭐⭐ — Mostly UI/UX work on top of existing capabilities.
+
+---
+
+#### 📱 4.7 Mobile-First Report Viewer
+**What**: QR code on the PDF (already done!) links to a rich, interactive web report — not just a static page but an *interactive dashboard* with:
+- Zoomable comp map
+- Expandable photo comparisons
+- Shareable link for attorneys/consultants
+
+**Feasibility**: ⭐⭐⭐⭐ — Would need a lightweight web viewer, but we have all the data.
+
+---
+
+#### 🔔 4.8 Annual Assessment Monitor & Alert System
+**What**: Users register their property → we auto-check when new assessment values are published → send an alert: *"Your 2027 assessment increased 14%. Based on our analysis, you have a strong case for protest."*
+
+**How**:
+- Background cron job compares Supabase records against new HCAD bulk data each year
+- Email/SMS notification when assessment change exceeds a threshold
+- One-click "Generate My Protest Report" from the alert
+
+**Why It Matters**: Creates recurring engagement. Moves from one-time tool to **annual subscription** model.
+
+**Feasibility**: ⭐⭐⭐⭐ — Simple data comparison + notification service (SendGrid/Twilio).
+
+---
+
+### Tier 3 — Future Vision
+
+---
+
+#### 🛰️ 4.9 Satellite/Aerial Change Detection
+**What**: Compare aerial imagery year-over-year to detect:
+- New construction not yet reflected in assessment
+- Demolitions or damage
+- Pool additions, lot changes
+
+**How**: Google Earth Engine + Vision AI temporal comparison.
+
+**Feasibility**: ⭐⭐ — Complex but powerful. Long-term roadmap.
+
+---
+
+#### 🏦 4.10 Integration with Tax Lending / Payment Plans
+**What**: Partner with property tax lenders to offer "protest + financing" — if protest fails, offer a payment plan.
+
+**Feasibility**: ⭐⭐ — Business development, not just engineering.
+
+---
+
+## 5. Immediate Action Items (What to Build Next)
+
+Based on impact vs. effort, here's the recommended priority:
+
+| Priority | Feature | Effort | Impact | Why Now |
+|----------|---------|--------|--------|---------|
+| 🥇 1 | **HCAD Deed Data Import** (actual sales) | 2-3 days | 🔴 Critical | Transforms data quality overnight |
+| 🥈 2 | **Neighborhood Anomaly Detector** | 1-2 days | 🟠 High | Leverages bulk data we're importing right now |
+| 🥉 3 | **AI Condition Delta Score** | 2-3 days | 🟠 High | Vision Agent already does the hard part |
+| 4 | **Geo-Intelligence Layer** (locational) | 3-5 days | 🟡 Medium | Free data sources, big visual wow |
+| 5 | **AI Hearing Coach** (RAG chatbot) | 3-5 days | 🟡 Medium | Unique differentiator, no competitor has it |
+| 6 | **One-Click Neighborhood Scan** | 2-3 days | 🟡 Medium | B2B killer feature for consultants |
+| 7 | **Annual Assessment Monitor** | 2-3 days | 🟡 Medium | Revenue/subscription model enabler |
+
+---
+
+## 6. Our Unfair Advantages Summary
+
+```mermaid
+mindmap
+  root((Texas Equity AI))
+    Data Depth
+      600K+ HCAD bulk records
+      5 County connectors
+      Multi-source property type detection
+      Actual deed sale prices (planned)
+    AI/ML Engine
+      KNN equity comp selection
+      Anomaly detection (planned)
+      Predictive savings model (planned)
+    Computer Vision
+      3-angle Street View acquisition
+      Multi-LLM defect detection
+      Comp-vs-comp photo comparison
+      Condition delta scoring (planned)
+    Legal Intelligence
+      Texas Tax Code legal narrative
+      Form 41.44 auto-fill
+      AI Hearing Coach (planned)
+    Professional Output
+      ARB-format evidence packet
+      Professional adjustment grid
+      QR-linked digital evidence
+```
+
+> [!CAUTION]
+> **Key Risk**: Ownwell has $50M+ in funding and 1M+ customers. We compete on **transparency** (the homeowner sees exactly what we found and why), **depth** (AI vision + ML analysis + legal narrative), and **independence** (no contingency fees — the savings are 100% the homeowner's).
