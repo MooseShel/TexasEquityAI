@@ -81,21 +81,24 @@ async def get_full_protest(
 
     def _is_ghost_record(p: dict) -> bool:
         """
-        Returns True if a DB/scraper record contains known placeholder values
-        and should NOT be trusted as real data. Triggers re-scrape or enrichment.
-        Ghost signatures: appraised_value in (0, 450000) AND building_area in (0, 2500)
-        AND no year_built AND no neighborhood_code.
+        Returns True if a DB/scraper record contains known placeholder values or is an empty stub.
+        Ghost conditions:
+        1. Exact hardcoded mock: appraised=450000, area=2500, no year, no nbhd
+        2. Empty stub: appraised <= 1 and area <= 1 (scraper crashed but returned dict)
         """
         if not p:
             return True
         val  = float(p.get('appraised_value') or 0)
         area = float(p.get('building_area') or 0)
-        has_real_value = val not in (0.0, 450000.0)
-        has_real_area  = area not in (0.0, 2500.0)
         has_year       = bool(p.get('year_built'))
         has_nbhd       = bool(p.get('neighborhood_code'))
-        # Trust only if at least one real field is present
-        return not (has_real_value or has_real_area or has_year or has_nbhd)
+        
+        # 1. Check for explicit mock fallback
+        is_mock = (val == 450000.0 and area == 2500.0 and not has_year and not has_nbhd)
+        # 2. Check for empty stub
+        is_stub = (val <= 1.0 and area <= 1.0)
+        
+        return is_mock or is_stub
             
     async def protest_generator():
         print("DEBUG: protest_generator STARTED!")
@@ -187,97 +190,126 @@ async def get_full_protest(
                     logger.warning(f"Global Address Lookup failed: {e}")
 
 
-            yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping HCAD records and history..."}) + "\n"
-            
-            # 1. Cache & Scrape — DB-first for ALL districts
-            cached_property = await supabase_service.get_property_by_account(current_account)
-
-            # Use Factory to get the correct connector
-            connector = DistrictConnectorFactory.get_connector(current_district, current_account)
+            # 0e. Early Property Type Detection
+            yield json.dumps({"status": "🏢 Profiling property type..."}) + "\n"
+            from backend.agents.property_type_resolver import resolve_property_type
             original_address = account_number if any(c.isalpha() for c in account_number) else None
-
-            # Use cached data directly if it has REAL content — skip scraper entirely
-            # Ghost/placeholder records (appraised=450k, area=2500, no year/nbhd) are rejected
-            if (cached_property
-                    and cached_property.get('address')
-                    and cached_property.get('appraised_value')
-                    and not _is_ghost_record(cached_property)
-                    and not manual_value and not manual_address):
-                logger.info(f"DB-first: Using Supabase cached record for {current_account} — skipping scraper.")
-                property_details = cached_property
-            else:
-                # Scrape if cache was insufficient
-                try:
-                    property_details = await connector.get_property_details(current_account, address=original_address)
-                except Exception as e:
-                    logger.error(f"Scraper failed for {current_account}: {e}")
-                    property_details = None
-
-            # Fallback: If scraper failed but we had a REAL (non-ghost) partial DB record, use it
-            if not property_details and cached_property and not _is_ghost_record(cached_property):
-                logger.warning(f"Scraper failed/returned empty, falling back to cached DB record for {current_account}.")
-                property_details = cached_property
-
-            # CRITICAL: Update current_account if the scraper found the real numeric account
-            if property_details and property_details.get('account_number'):
-                scraped_acc = property_details.get('account_number')
-                if scraped_acc != current_account:
-                    logger.info(f"Updating account alias: {current_account} -> {scraped_acc}")
-                    current_account = scraped_acc
-
-            if not property_details:
-                if rentcast_fallback_data:
-                     property_details = rentcast_fallback_data
-                else:
-                    # District-aware City Mapping
-                    district_map = {
-                        "HCAD": "Houston, TX",
-                        "TCAD": "Austin, TX",
-                        "DCAD": "Dallas, TX",
-                        "CCAD": "Plano, TX",
-                        "TAD": "Fort Worth, TX"
+            lookup_addr = original_address or account_number
+            ptype, ptype_source = await resolve_property_type(current_account, lookup_addr, current_district or "HCAD")
+            logger.info(f"Early Type Detection: '{ptype}' via {ptype_source}")
+            
+            # --- COMMERCIAL FAST PATH ---
+            # If we explicitly know it's commercial, bypass the district scraper entirely and go to enrichment.
+            fast_commercial_property = None
+            if ptype == "Commercial" and not manual_value and not manual_address:
+                yield json.dumps({"status": "🏢 Commercial Fast Path: Bypassing district scraper..."}) + "\n"
+                enriched = await commercial_agent.enrich_property(lookup_addr)
+                if enriched and (enriched.get('appraised_value', 0) > 0 or enriched.get('building_area', 0) > 0):
+                    fast_commercial_property = {
+                        "account_number": current_account,
+                        "district": current_district or "HCAD",
+                        "property_type": "commercial",
+                        "ptype_source": ptype_source,
+                        **enriched
                     }
-                    district_city = district_map.get(current_district, "Houston, TX")
+                    logger.info(f"Fast Path successful: appraised=${fast_commercial_property.get('appraised_value',0):,.0f}, area={fast_commercial_property.get('building_area',0)} sqft")
+            
+            if fast_commercial_property:
+                property_details = fast_commercial_property
+                # Skip scraper block
+                # Log to the user that we are using the enrichment API instead of the district site
+                yield json.dumps({"status": "⛏️ Data Mining Agent: Retrieving commercial details from national databases..."}) + "\n"
+                
+                # Still need some empty assignment for the below block to not break
+                connector = DistrictConnectorFactory.get_connector(current_district or "HCAD", current_account)
+                original_address = lookup_addr
+            else:
+                yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping district records and history..."}) + "\n"
+                
+                # 1. Cache & Scrape — DB-first for ALL districts
+                cached_property = await supabase_service.get_property_by_account(current_account)
 
-                    if cached_property and not _is_ghost_record(cached_property):
-                        # FIX: Check if cache has the wrong city (legacy "Houston" for non-Harris)
-                        cached_addr = cached_property.get('address', '')
-                        if current_district and current_district != "HCAD" and "Houston" in cached_addr and district_city not in cached_addr:
-                             logger.info(f"Correcting cached address city for {current_district}: {cached_addr}")
-                             cached_property['address'] = cached_addr.replace("Houston, TX", district_city)
-                        property_details = cached_property
+                # Use Factory to get the correct connector
+                connector = DistrictConnectorFactory.get_connector(current_district, current_account)
+                original_address = account_number if any(c.isalpha() for c in account_number) else None
+                
+                # Use cached data directly if it has REAL content — skip scraper entirely
+                # Ghost/placeholder records (appraised=450k, area=2500, no year/nbhd) are rejected
+                if (cached_property
+                        and cached_property.get('address')
+                        and cached_property.get('appraised_value')
+                        and not _is_ghost_record(cached_property)
+                        and not manual_value and not manual_address):
+                    logger.info(f"DB-first: Using Supabase cached record for {current_account} — skipping scraper.")
+                    property_details = cached_property
+                else:
+                    # Scrape if cache was insufficient
+                    try:
+                        property_details = await connector.get_property_details(current_account, address=original_address)
+                    except Exception as e:
+                        logger.error(f"Scraper failed for {current_account}: {e}")
+                        property_details = None
+
+                # Fallback: If scraper failed but we had a REAL (non-ghost) partial DB record, use it
+                if not property_details and cached_property and not _is_ghost_record(cached_property):
+                    logger.warning(f"Scraper failed/returned empty, falling back to cached DB record for {current_account}.")
+                    property_details = cached_property
+
+                # CRITICAL: Update current_account if the scraper found the real numeric account
+                if property_details and property_details.get('account_number'):
+                    scraped_acc = property_details.get('account_number')
+                    if scraped_acc != current_account:
+                        logger.info(f"Updating account alias: {current_account} -> {scraped_acc}")
+                        current_account = scraped_acc
+
+                if not property_details:
+                    if rentcast_fallback_data:
+                         property_details = rentcast_fallback_data
                     else:
-                        # Scraper returned nothing — check if this is a commercial property
-                        # before giving up, using RentCast propertyType as a fast gate
-                        lookup_addr = original_address or account_number
-                        yield json.dumps({"status": "🏢 Property Type Check: Querying RentCast to detect property type..."}) + "\n"
-                        prop_type = await bridge.detect_property_type(lookup_addr)
-                        logger.info(f"Detected propertyType='{prop_type}' for '{lookup_addr}'")
+                        # District-aware City Mapping
+                        district_map = {
+                            "HCAD": "Houston, TX",
+                            "TCAD": "Austin, TX",
+                            "DCAD": "Dallas, TX",
+                            "CCAD": "Plano, TX",
+                            "TAD": "Fort Worth, TX"
+                        }
+                        district_city = district_map.get(current_district, "Houston, TX")
 
-                        is_confirmed_residential = prop_type in ("Single Family", "Condo", "Townhouse", "Residential")
-
-                        # SOFT GATE: Always attempt API enrichment regardless of propertyType.
-                        # RentCast can misclassify commercial corridors as residential.
-                        # Only hard-fail if enrichment also comes back empty AND type is confirmed residential.
-                        yield json.dumps({"status": "🏢 Commercial Enrichment: Querying RealEstateAPI + RentCast for commercial property data..."}) + "\n"
-                        enriched = await commercial_agent.enrich_property(lookup_addr)
-                        if enriched and (enriched.get('appraised_value', 0) > 0 or enriched.get('building_area', 0) > 0):
-                            property_details = {
-                                "account_number": current_account,
-                                "district": current_district or "HCAD",
-                                "property_type": "commercial",
-                                **enriched
-                            }
-                            logger.info(f"Commercial enrichment succeeded: appraised=${property_details.get('appraised_value',0):,.0f}, area={property_details.get('building_area',0)} sqft")
-                        elif is_confirmed_residential:
-                            # Enrichment failed AND RentCast confirmed residential — genuine miss
-                            logger.error(f"Confirmed Residential miss for account {current_account} — district scraper returned nothing and enrichment failed.")
-                            yield json.dumps({"error": f"Could not retrieve property details for account '{current_account}' from the appraisal district portal. Please verify the account number or use the Manual Override fields to enter values directly."}) + "\n"
-                            return
+                        if cached_property and not _is_ghost_record(cached_property):
+                            # FIX: Check if cache has the wrong city (legacy "Houston" for non-Harris)
+                            cached_addr = cached_property.get('address', '')
+                            if current_district and current_district != "HCAD" and "Houston" in cached_addr and district_city not in cached_addr:
+                                 logger.info(f"Correcting cached address city for {current_district}: {cached_addr}")
+                                 cached_property['address'] = cached_addr.replace("Houston, TX", district_city)
+                            property_details = cached_property
                         else:
-                            logger.error(f"Commercial enrichment returned no usable data for '{lookup_addr}'.")
-                            yield json.dumps({"error": f"Could not retrieve property data for '{lookup_addr}'. This appears to be a commercial or non-standard property not accessible via public appraisal records or our API partners. Try the Manual Override fields to enter values directly."}) + "\n"
-                            return
+                            # Scraper returned nothing — rely on the early property type to decide what to do
+                            lookup_addr = original_address or account_number
+                            
+                            is_confirmed_residential = ptype == "Residential"
+
+                            # SOFT GATE: Always attempt API enrichment regardless of propertyType.
+                            # Only hard-fail if enrichment also comes back empty AND type is confirmed residential.
+                            yield json.dumps({"status": "🏢 Commercial Enrichment: Querying RealEstateAPI + RentCast for fallback data..."}) + "\n"
+                            enriched = await commercial_agent.enrich_property(lookup_addr)
+                            if enriched and (enriched.get('appraised_value', 0) > 0 or enriched.get('building_area', 0) > 0):
+                                property_details = {
+                                    "account_number": current_account,
+                                    "district": current_district or "HCAD",
+                                    "property_type": "commercial",
+                                    **enriched
+                                }
+                                logger.info(f"Commercial enrichment fallback succeeded: appraised=${property_details.get('appraised_value',0):,.0f}, area={property_details.get('building_area',0)} sqft")
+                            elif is_confirmed_residential:
+                                # Enrichment failed AND confirmed residential — genuine miss
+                                logger.error(f"Confirmed Residential miss for account {current_account} — district scraper returned nothing and enrichment failed.")
+                                yield json.dumps({"error": f"Could not retrieve property details for account '{current_account}' from the appraisal district portal. Please verify the account number or use the Manual Override fields to enter values directly."}) + "\n"
+                                return
+                            else:
+                                logger.error(f"Commercial enrichment returned no usable data for '{lookup_addr}'.")
+                                yield json.dumps({"error": f"Could not retrieve property data for '{lookup_addr}'. This appears to be a commercial or non-standard property not accessible via public appraisal records or our API partners. Try the Manual Override fields to enter values directly."}) + "\n"
+                                return
             
             # AGGRESSIVE CLEANING
             raw_addr = property_details.get('address', '')
@@ -298,11 +330,8 @@ async def get_full_protest(
                     or original_address
                     or account_number
                 )
-                yield json.dumps({"status": "🏢 Property Type Check: Detected stub data — querying RentCast for property type..."}) + "\n"
-                prop_type = await bridge.detect_property_type(lookup_addr)
-                logger.info(f"Post-load ghost check: propertyType='{prop_type}' for '{lookup_addr}'")
-
-                is_confirmed_residential = prop_type in ("Single Family", "Condo", "Townhouse", "Residential")
+                
+                is_confirmed_residential = ptype == "Residential"
 
                 if not is_confirmed_residential:
                     yield json.dumps({"status": "🏢 Commercial Enrichment: Fetching real data from RealEstateAPI + RentCast..."}) + "\n"
