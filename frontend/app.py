@@ -1334,6 +1334,42 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         market = data['market_value']
                         st.metric("Appraised Value", f"${appraised:,.0f}")
                         st.metric("Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f}", delta_color="inverse")
+
+                        val_hist = data['property'].get('valuation_history')
+                        if val_hist:
+                            if isinstance(val_hist, str):
+                                import json
+                                try:
+                                    val_hist = json.loads(val_hist)
+                                except:
+                                    val_hist = None
+                            
+                            if val_hist and isinstance(val_hist, dict):
+                                st.divider()
+                                st.subheader("📈 Assessment History")
+                                hist_rows = []
+                                for year in sorted(val_hist.keys()):
+                                    a_val = val_hist[year].get("appraised", 0)
+                                    m_val = val_hist[year].get("market", 0)
+                                    if a_val > 0 or m_val > 0:
+                                        hist_rows.append({
+                                            "Year": str(year),
+                                            "Appraised": a_val,
+                                            "Market": m_val
+                                        })
+                                
+                                # Include current year's values 
+                                current_yr = "2025"
+                                if current_yr not in val_hist and appraised > 0:
+                                    hist_rows.append({
+                                        "Year": current_yr,
+                                        "Appraised": appraised,
+                                        "Market": market
+                                    })
+                                
+                                if hist_rows:
+                                    hist_df = pd.DataFrame(hist_rows).set_index("Year")
+                                    st.bar_chart(hist_df, y=["Appraised", "Market"])
                 with tab2:
                     st.subheader("Equity Analysis")
                     equity_has_data = data['equity'] and (
