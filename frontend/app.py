@@ -708,12 +708,6 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 is_likely_commercial = (resolved_type == "Commercial")
                 logger.info(f"PropertyTypeResolver: {resolved_type} ({resolved_source}) for '{current_account}'")
 
-            # Store classification in property_details for PDF/reporting
-            # (will be overwritten with 'commercial' below if commercial path runs)
-            if ptype != "Unknown":
-                property_details['property_type'] = ptype.lower()
-            property_details['ptype_source'] = ptype_source
-
             commercial_data = None
             if is_likely_commercial:
                 from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
@@ -748,6 +742,14 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
              else:
                 yield {"error": f"Could not retrieve property data for '{current_account}'. Please try the Manual Override fields."}
                 return
+
+        # Inject resolved property type if it wasn't already set by a specific scraper
+        ptype = locals().get('ptype', 'Unknown')
+        ptype_source = locals().get('ptype_source', 'Unknown')
+        if ptype != "Unknown" and 'property_type' not in property_details:
+            property_details['property_type'] = ptype.lower()
+        if ptype_source != "Unknown" and 'ptype_source' not in property_details:
+            property_details['ptype_source'] = ptype_source
 
         raw_addr = property_details.get('address', '')
         district_context = property_details.get('district', 'HCAD')
