@@ -137,11 +137,11 @@ class HCADScraper(AppraisalDistrictConnector):
         """Dedicated logic to wait for Cloudflare challenges to clear."""
         logger.info("Detecting security challenge (Cloudflare)...")
         try:
-            for i in range(30):
+            for i in range(45):
                 title = await page.title()
-                logger.info(f"Current Page title: '{title}' (Attempt {i+1}/30)")
+                logger.info(f"Current Page title: '{title}' (Attempt {i+1}/45)")
                 if "Just a moment" not in title and "Security" not in title:
-                    if await page.query_selector("input[placeholder*='Search like']") or \
+                    if await page.query_selector("input[type='search']") or \
                        await page.query_selector("text='Location'") or \
                        await page.query_selector("text='Account Number'"):
                         logger.info("Security challenge bypassed successfully.")
@@ -207,7 +207,7 @@ class HCADScraper(AppraisalDistrictConnector):
                     await asyncio.sleep(0.5)
 
                 # Step 3: Search
-                input_selector = "input[placeholder*='Search like']"
+                input_selector = "input[type='search']"
                 await page.fill(input_selector, "")
                 await page.type(input_selector, account_number, delay=80)
                 await page.keyboard.press("Enter")
@@ -227,6 +227,18 @@ class HCADScraper(AppraisalDistrictConnector):
                     # Detection level 2: Search results table found
                     if "table-hover" in content or "Account Number" in content:
                         try:
+                            # Fast fail check: If table contains only 7-digit accounts (Business Personal Property)
+                            # and no 13-digit accounts, we should return None immediately rather than polling until timeout
+                            has_real_property = await page.evaluate("""() => {
+                                const texts = Array.from(document.querySelectorAll('td')).map(td => td.innerText.trim());
+                                return texts.some(t => /^\\d{13}$/.test(t) || t.includes('13-digit'));
+                            }""")
+                            
+                            has_table_rows = await page.locator("tr").count() > 1
+                            if has_table_rows and not has_real_property and "Account Number" in content:
+                                logger.warning(f"Fast fail: Only personal property accounts found for '{account_number}' (no 13-digit accounts)")
+                                return None
+                            
                             if is_address:
                                 result_link = page.locator("tr.table-hover td a").first
                             else:
@@ -587,7 +599,7 @@ class HCADScraper(AppraisalDistrictConnector):
                 await page.goto(self.portal_url, wait_until="load", timeout=60000)
                 await self._bypass_security(page)
                 
-                input_selector = "input[placeholder*='Search like']"
+                input_selector = "input[type='search']"
                 await page.wait_for_selector(input_selector, timeout=30000)
                 await page.fill(input_selector, actual_search)
                 await page.keyboard.press("Enter")
