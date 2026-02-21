@@ -343,6 +343,10 @@ st.markdown("""
 if "district_selector" not in st.session_state:
     st.session_state.district_selector = "HCAD"
 
+if "generate_account" in st.query_params:
+    st.session_state["account_input"] = st.query_params["generate_account"]
+    del st.query_params["generate_account"]
+
 def auto_detect_district():
     if "account_input" not in st.session_state:
         return
@@ -566,8 +570,22 @@ if 'scan_results' in st.session_state:
 
         if scan_flagged:
             df = pd.DataFrame(scan_flagged)
-            display_cols = ['account_number', 'address', 'pps', 'z_score', 'percentile', 'estimated_over_assessment']
+
+            # Define helper to get official district valuation URL for the account
+            def get_district_url(dist, acct):
+                dist = dist.upper() if dist else "HCAD"
+                if dist == "TAD": return f"https://www.tad.org/property/{acct}"
+                if dist == "CCAD": return f"https://www.collincad.org/propertysearch?prop={acct}"
+                if dist == "DCAD": return f"https://www.dallascad.org/AcctDetailRes.aspx?ID={acct}"
+                if dist == "TCAD": return f"https://travis.prodigycad.com/property-detail/{acct}"
+                return f"https://search.hcad.org/Account/PropertyDetail?url_account={acct}"
+
+            df['Details'] = df['account_number'].apply(lambda x: get_district_url(scan_dist, x))
+            df['Action'] = df['account_number'].apply(lambda x: f"/?generate_account={x}")
+
+            display_cols = ['account_number', 'Details', 'address', 'pps', 'z_score', 'percentile', 'estimated_over_assessment', 'Action']
             available_cols = [c for c in display_cols if c in df.columns]
+
             if available_cols:
                 display_df = df[available_cols].copy()
                 if 'pps' in display_df.columns:
@@ -578,19 +596,20 @@ if 'scan_results' in st.session_state:
                     display_df['percentile'] = display_df['percentile'].apply(lambda x: f"{x:.0f}th")
                 if 'estimated_over_assessment' in display_df.columns:
                     display_df['estimated_over_assessment'] = display_df['estimated_over_assessment'].apply(lambda x: f"${x:,.0f}")
+                
                 display_df.columns = [c.replace('_', ' ').title() for c in display_df.columns]
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                
+                st.dataframe(
+                    display_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Details": st.column_config.LinkColumn("Details", display_text="View Source"),
+                        "Action": st.column_config.LinkColumn("Action", display_text="Generate Packet 🚀")
+                    }
+                )
 
-            st.caption("💡 Click a 'Generate Protest' button below, or copy an account number into the input field above.")
-            cols = st.columns(min(len(scan_flagged), 4))
-            for i, prop in enumerate(scan_flagged[:8]):
-                with cols[i % 4]:
-                    acct = prop.get('account_number', '')
-                    addr = prop.get('address', '')[:30]
-                    over_amt = prop.get('estimated_over_assessment', 0)
-                    if st.button(f"📋 {acct}", key=f"protest_scan_{i}", help=f"{addr} — Over-assessed by ${over_amt:,.0f}"):
-                        st.session_state['account_input'] = acct
-                        st.rerun()
+            st.caption("💡 Click 'Generate Packet 🚀' in the table to quickly start a protest for any flagged account.")
 
         if st.button("❌ Clear Scan Results", key="clear_scan"):
             del st.session_state['scan_results']
