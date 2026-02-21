@@ -777,28 +777,51 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 logger.warning(f"Supabase cache write failed (non-fatal): {e}")
 
 
-        market_value = property_details.get('appraised_value', 0)
-        prop_address = property_details.get('address', '')
-        if is_real_address(prop_address):
-            # Cache-first: check for cached market data
-            cached_market = await supabase_service.get_cached_market(current_account)
-            if cached_market:
-                market_value = cached_market.get('market_value', market_value)
-                logger.info(f"Using cached market value: ${market_value:,.0f}")
-            else:
-                try:
-                    market_data = await agents["bridge"].get_last_sale_price(
-                        prop_address, resolved_data=rentcast_fallback_data
-                    )
-                    if market_data and market_data.get('sale_price'):
-                        market_value = market_data['sale_price']
-                    if not market_value:
-                        market_value = await agents["bridge"].get_estimated_market_value(
-                            property_details.get('appraised_value', 0), prop_address
+        # ── Market Value Resolution ────────────────────────────────────────
+        # Priority: 1) DB market_value (HCAD authoritative), 2) Last sale price, 3) RentCast AVM
+        # Known bad values: $999,999 is a RentCast API cap, not a real estimate
+        SUSPICIOUS_VALUES = {999999, 9999999, 99999}  # API caps to reject
+
+        db_market = float(property_details.get('market_value', 0) or 0)
+        appraised_for_market = float(property_details.get('appraised_value', 0) or 0)
+
+        if db_market > 0 and int(db_market) not in SUSPICIOUS_VALUES:
+            # DB market value is authoritative (from HCAD bulk import)
+            market_value = db_market
+            logger.info(f"Using DB market value: ${market_value:,.0f}")
+        else:
+            # Fallback: try RentCast last sale or AVM
+            market_value = appraised_for_market  # default to appraised
+            prop_address = property_details.get('address', '')
+            if is_real_address(prop_address):
+                cached_market = await supabase_service.get_cached_market(current_account)
+                if cached_market:
+                    cached_val = cached_market.get('market_value', 0)
+                    if cached_val and int(cached_val) not in SUSPICIOUS_VALUES:
+                        market_value = cached_val
+                        logger.info(f"Using cached market value: ${market_value:,.0f}")
+                    else:
+                        logger.warning(f"Rejected cached market value ${cached_val:,.0f} (suspicious API cap)")
+                else:
+                    try:
+                        market_data = await agents["bridge"].get_last_sale_price(
+                            prop_address, resolved_data=rentcast_fallback_data
                         )
-                    # Save to cache
-                    await supabase_service.save_cached_market(current_account, {'market_value': market_value})
-                except: pass
+                        if market_data and market_data.get('sale_price'):
+                            sale_price = market_data['sale_price']
+                            if int(sale_price) not in SUSPICIOUS_VALUES:
+                                market_value = sale_price
+                        if market_value == appraised_for_market:
+                            avm_value = await agents["bridge"].get_estimated_market_value(
+                                appraised_for_market, prop_address
+                            )
+                            if avm_value and int(avm_value) not in SUSPICIOUS_VALUES:
+                                market_value = avm_value
+                        # Save to cache
+                        await supabase_service.save_cached_market(current_account, {'market_value': market_value})
+                    except: pass
+
+        prop_address = property_details.get('address', '')
         subject_permits = await agents["permit_agent"].get_property_permits(prop_address)
         permit_summary = agents["permit_agent"].analyze_permits(subject_permits)
         property_details['permit_summary'] = permit_summary
