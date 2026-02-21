@@ -708,6 +708,12 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 is_likely_commercial = (resolved_type == "Commercial")
                 logger.info(f"PropertyTypeResolver: {resolved_type} ({resolved_source}) for '{current_account}'")
 
+            # Store classification in property_details for PDF/reporting
+            # (will be overwritten with 'commercial' below if commercial path runs)
+            if ptype != "Unknown":
+                property_details['property_type'] = ptype.lower()
+            property_details['ptype_source'] = ptype_source
+
             commercial_data = None
             if is_likely_commercial:
                 from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent

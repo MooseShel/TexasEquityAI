@@ -282,6 +282,269 @@ class PDFService:
             pdf.cell(widths[i], 7, text_val, 1, 0, cell_align, fill)
         pdf.ln()
 
+    # ── NEIGHBORHOOD STATISTICAL ANALYSIS PAGE ─────────────────────────────
+    def _generate_neighborhood_stats_page(self, pdf, property_data, equity_data):
+        """Generates a full-page neighborhood statistical analysis with Z-score context."""
+        anomaly = property_data.get('anomaly_score', {}) or (
+            equity_data.get('anomaly_score', {}) if isinstance(equity_data, dict) else {}
+        )
+        if not anomaly or anomaly.get('error'):
+            return
+
+        pdf.add_page()
+        self._draw_header(pdf, property_data, "NEIGHBORHOOD STATISTICAL ANALYSIS")
+
+        z = anomaly.get('z_score', 0)
+        pctile = anomaly.get('percentile', 0)
+        median_pps = anomaly.get('neighborhood_median_pps', 0)
+        subject_pps = anomaly.get('subject_pps', 0)
+        std_pps = anomaly.get('neighborhood_std_pps', 0)
+        prop_count = anomaly.get('neighborhood_stats', {}).get('property_count', 0) or anomaly.get('property_count', 0)
+
+        # Legal basis callout
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 8, "Legal Basis: Texas Tax Code Section 41.43(b)(3) - Unequal Appraisal", ln=True)
+        pdf.set_font("Arial", '', 8)
+        pdf.multi_cell(0, 5, clean_text(
+            "The property owner contends the appraised value exceeds the median appraised value "
+            "of comparable properties in the same neighborhood. The statistical analysis below demonstrates "
+            "this property is assessed above fair and equitable levels relative to its peers."
+        ))
+        pdf.ln(3)
+
+        # Key metrics boxes
+        box_w = 45
+        box_h = 22
+        start_x = 15
+        boxes = [
+            ("Z-Score", f"{z:.2f}", (220, 50, 50) if z > 1.5 else (230, 160, 50) if z > 1.0 else (100, 160, 100)),
+            ("Percentile", f"{pctile:.0f}th", (220, 50, 50) if pctile > 85 else (230, 160, 50) if pctile > 75 else (100, 160, 100)),
+            ("Median $/ft\u00b2", f"${median_pps:,.0f}", (59, 130, 246)),
+            ("Your $/ft\u00b2", f"${subject_pps:,.0f}", (220, 50, 50) if subject_pps > median_pps else (100, 160, 100)),
+        ]
+        y_start = pdf.get_y()
+        for i, (label, value, color) in enumerate(boxes):
+            x = start_x + i * (box_w + 3)
+            pdf.set_fill_color(*color)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_xy(x, y_start)
+            pdf.set_font("Arial", 'B', 14)
+            pdf.cell(box_w, box_h - 6, value, 0, 0, 'C', True)
+            pdf.set_xy(x, y_start + box_h - 8)
+            pdf.set_font("Arial", '', 7)
+            pdf.cell(box_w, 6, label, 0, 0, 'C', True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_y(y_start + box_h + 5)
+
+        # Distribution visualization (simple bar chart)
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 8, clean_text(f"Price-Per-Square-Foot Distribution ({prop_count} properties)"), ln=True)
+
+        # Draw a visual distribution bar
+        if median_pps > 0 and subject_pps > 0 and std_pps > 0:
+            bar_x = 15
+            bar_w = 180
+            bar_h = 12
+            y = pdf.get_y()
+
+            # Background bar
+            pdf.set_fill_color(230, 235, 245)
+            pdf.rect(bar_x, y, bar_w, bar_h, 'F')
+
+            # Median marker (green)
+            median_pos = bar_w * 0.5  # median at center
+            pdf.set_fill_color(40, 160, 70)
+            pdf.rect(bar_x + median_pos - 1, y, 2, bar_h, 'F')
+
+            # ±1 std dev band
+            if std_pps > 0:
+                std_band = bar_w * 0.3  # approximate
+                pdf.set_fill_color(180, 200, 240)
+                pdf.rect(bar_x + median_pos - std_band / 2, y + 2, std_band, bar_h - 4, 'F')
+
+            # Subject marker (red triangle)
+            if median_pps > 0:
+                subj_offset = min(max((subject_pps - median_pps) / (3 * std_pps) if std_pps > 0 else 0, -0.45), 0.45)
+                subj_pos = bar_x + median_pos + subj_offset * bar_w
+                pdf.set_fill_color(220, 50, 50)
+                pdf.rect(subj_pos - 2, y, 4, bar_h, 'F')
+
+            # Labels
+            pdf.set_y(y + bar_h + 2)
+            pdf.set_font("Arial", '', 7)
+            pdf.set_x(bar_x + median_pos - 20)
+            pdf.cell(40, 4, clean_text(f"Median: ${median_pps:,.0f}/ft\u00b2"), 0, 0, 'C')
+            pdf.ln()
+
+        pdf.ln(5)
+
+        # Statistical summary table
+        pdf.set_font("Arial", 'B', 9)
+        pdf.cell(0, 7, "Statistical Summary", ln=True)
+        stat_w = [70, 50, 70]
+        stats_rows = [
+            ("Neighborhood Properties", f"{prop_count}", "Sample size for analysis"),
+            ("Median $/ft\u00b2", f"${median_pps:,.0f}", "50th percentile benchmark"),
+            ("Standard Deviation", f"${std_pps:,.0f}", "Measure of spread"),
+            ("Subject $/ft\u00b2", f"${subject_pps:,.0f}", f"Subject is at the {pctile:.0f}th percentile"),
+            ("Z-Score", f"{z:.2f}", f"{'ABOVE' if z > 1.0 else 'Within'} typical assessment range"),
+        ]
+        self._table_header(pdf, stat_w, ["Metric", "Value", "Interpretation"])
+        for row in stats_rows:
+            self._table_row(pdf, stat_w, list(row), bold_first=True)
+
+        pdf.ln(5)
+        pdf.set_font("Arial", 'I', 8)
+
+        if z > 1.5:
+            conclusion = (
+                f"CONCLUSION: This property's assessment of ${subject_pps:,.0f}/ft\u00b2 is {z:.1f} standard deviations "
+                f"above the neighborhood median of ${median_pps:,.0f}/ft\u00b2, placing it at the {pctile:.0f}th percentile. "
+                f"This represents a STATISTICALLY SIGNIFICANT over-assessment that violates the equal and uniform "
+                f"taxation requirement of TX Tax Code 41.43(b)(3)."
+            )
+        elif z > 1.0:
+            conclusion = (
+                f"CONCLUSION: This property's assessment of ${subject_pps:,.0f}/ft\u00b2 is {z:.1f} standard deviations "
+                f"above the neighborhood median of ${median_pps:,.0f}/ft\u00b2, placing it at the {pctile:.0f}th percentile. "
+                f"This elevated assessment warrants review under TX Tax Code 41.43(b)(3)."
+            )
+        else:
+            conclusion = (
+                f"CONCLUSION: This property's assessment of ${subject_pps:,.0f}/ft\u00b2 is within the typical range "
+                f"for the neighborhood (Z-Score: {z:.1f})."
+            )
+        pdf.multi_cell(0, 4, clean_text(conclusion))
+
+    # ── EVIDENCE SIGNAL BREAKDOWN PAGE ─────────────────────────────────────
+    def _generate_evidence_signals_page(self, pdf, property_data, equity_data):
+        """Generates a breakdown of all evidence signals supporting the protest."""
+        savings_pred = equity_data.get('savings_prediction', {}) if isinstance(equity_data, dict) else {}
+        if not savings_pred or savings_pred.get('signal_count', 0) == 0:
+            return
+
+        pdf.add_page()
+        self._draw_header(pdf, property_data, "PROTEST EVIDENCE BREAKDOWN")
+
+        signals = savings_pred.get('signals', [])
+        prob = savings_pred.get('protest_success_probability', 0)
+        strength = savings_pred.get('protest_strength', '')
+        est_savings = savings_pred.get('estimated_savings', {})
+
+        # Header summary
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(0, 8, clean_text(f"Protest Strength: {strength.upper()} ({prob:.0%} probability of success)"), ln=True)
+        pdf.set_font("Arial", '', 8)
+        pdf.multi_cell(0, 5, clean_text(
+            "The following evidence pillars independently support a reduction in the appraised value. "
+            "Each signal is derived from a distinct data source and legal basis under Texas Tax Code."
+        ))
+        pdf.ln(3)
+
+        # Signal bars
+        appraised = float(property_data.get('appraised_value', 0) or 0)
+        for i, sig in enumerate(signals):
+            signal_name = sig.get('signal', f'Signal {i+1}')
+            signal_val = float(sig.get('value', 0) or 0)
+            weight = float(sig.get('weight', 0) or 0)
+            detail = sig.get('detail', '')
+            reduction = max(0, appraised - signal_val) if signal_val > 0 and appraised > 0 else 0
+            reduction_pct = (reduction / appraised * 100) if appraised > 0 else 0
+
+            # Signal box
+            y_start = pdf.get_y()
+            pdf.set_fill_color(245, 248, 255)
+            pdf.rect(15, y_start, 180, 22, 'F')
+
+            # Signal name and weight
+            pdf.set_xy(18, y_start + 1)
+            pdf.set_font("Arial", 'B', 9)
+            pdf.cell(100, 6, clean_text(f"{i+1}. {signal_name}"), 0, 0, 'L')
+            pdf.set_font("Arial", '', 7)
+            pdf.cell(77, 6, clean_text(f"Weight: {weight:.0%} | {detail}"), 0, 1, 'R')
+
+            # Value bar
+            pdf.set_xy(18, y_start + 9)
+            bar_full_w = 120
+            bar_h = 7
+            pdf.set_fill_color(230, 235, 245)
+            pdf.rect(18, y_start + 9, bar_full_w, bar_h, 'F')
+            if signal_val > 0 and appraised > 0:
+                fill_pct = min(signal_val / appraised, 1.0)
+                color = (40, 160, 70) if fill_pct < 0.95 else (230, 160, 50) if fill_pct < 1.0 else (200, 80, 80)
+                pdf.set_fill_color(*color)
+                pdf.rect(18, y_start + 9, bar_full_w * fill_pct, bar_h, 'F')
+
+            pdf.set_xy(18 + bar_full_w + 3, y_start + 9)
+            pdf.set_font("Arial", 'B', 8)
+            pdf.cell(55, bar_h, clean_text(f"{self._fmt(signal_val)} (-{reduction_pct:.0f}%)"), 0, 0, 'L')
+
+            pdf.set_y(y_start + 25)
+
+        # Savings summary at bottom
+        pdf.ln(5)
+        pdf.set_fill_color(30, 41, 59)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Arial", 'B', 10)
+        conservative = est_savings.get('conservative', 0)
+        expected = est_savings.get('expected', 0)
+        best_case = est_savings.get('best_case', 0)
+        pdf.cell(0, 10, clean_text(
+            f"  ESTIMATED ANNUAL TAX SAVINGS: ${expected:,}/yr  |  Range: ${conservative:,} - ${best_case:,}/yr"
+        ), ln=True, fill=True)
+        pdf.set_text_color(0, 0, 0)
+
+    # ── EXTERNAL OBSOLESCENCE & GEO-INTELLIGENCE PAGE ──────────────────────
+    def _generate_external_obsolescence_page(self, pdf, property_data, equity_data):
+        """Generates external obsolescence evidence page from geo-intelligence data."""
+        ext_obs = equity_data.get('external_obsolescence', {}) if isinstance(equity_data, dict) else {}
+        if not ext_obs or not ext_obs.get('factors'):
+            return
+
+        pdf.add_page()
+        self._draw_header(pdf, property_data, "EXTERNAL OBSOLESCENCE ANALYSIS")
+
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 8, "Legal Basis: Texas Tax Code Section 23.01(b) - Physical Depreciation & Obsolescence", ln=True)
+        pdf.set_font("Arial", '', 8)
+        pdf.multi_cell(0, 5, clean_text(
+            "External obsolescence refers to factors outside the property that negatively impact its value. "
+            "Unlike physical depreciation, these factors cannot be corrected by the property owner. "
+            "The Texas Comptroller recognizes external obsolescence as a valid basis for value reduction."
+        ))
+        pdf.ln(5)
+
+        factors = ext_obs.get('factors', [])
+        total_impact = sum(f.get('impact_pct', 0) for f in factors)
+
+        # Factors table
+        col_w = [80, 30, 80]
+        self._table_header(pdf, col_w, ["External Factor", "Impact (%)", "Description"])
+        for factor in factors:
+            self._table_row(pdf, col_w, [
+                factor.get('type', 'Unknown'),
+                f"-{factor.get('impact_pct', 0):.1f}%",
+                clean_text(factor.get('description', ''))
+            ], bold_first=True)
+
+        # Total impact
+        pdf.set_fill_color(255, 230, 230)
+        pdf.set_font("Arial", 'B', 9)
+        pdf.cell(col_w[0], 8, "TOTAL EXTERNAL OBSOLESCENCE", 1, 0, 'L', True)
+        pdf.cell(col_w[1], 8, f"-{total_impact:.1f}%", 1, 0, 'C', True)
+        pdf.cell(col_w[2], 8, "Combined depreciation from external factors", 1, 1, 'L', True)
+
+        pdf.ln(5)
+        appraised = float(property_data.get('appraised_value', 0) or 0)
+        if appraised > 0 and total_impact > 0:
+            adj_value = appraised * (1 - total_impact / 100)
+            pdf.set_font("Arial", 'B', 9)
+            pdf.cell(0, 7, clean_text(
+                f"Applied to current appraisal of {self._fmt(appraised)}: "
+                f"External obsolescence suggests adjusted value of {self._fmt(adj_value)} "
+                f"(reduction of {self._fmt(appraised - adj_value)})"
+            ), ln=True)
+
     # ══════════════════════════════════════════════════════════════════════════
     # ██  MAIN PDF GENERATOR
     # ══════════════════════════════════════════════════════════════════════════
@@ -329,6 +592,13 @@ class PDFService:
         pdf.cell(0, 10, clean_text(f"SUBJECT: {property_data.get('address', 'Unknown')}"), ln=True, align='C')
         pdf.set_font("Arial", '', 14)
         pdf.cell(0, 10, f"Account Number: {property_data.get('account_number', 'N/A')}", ln=True, align='C')
+
+        # Property Type Classification
+        ptype_source = property_data.get('ptype_source', '')
+        ptype_label = property_data.get('property_type', '')
+        if ptype_label and ptype_label != 'Unknown':
+            pdf.set_font("Arial", '', 10)
+            pdf.cell(0, 8, clean_text(f"Classification: {ptype_label} (Source: {ptype_source})"), ln=True, align='C')
 
         # ── QR Code (Enhancement #10) ────────────────────────────────────────
         if HAS_QRCODE:
@@ -398,6 +668,24 @@ class PDFService:
 
         # ── PAGE 1B: OUR UNIQUE AI APPROACH (METHODOLOGY) ────────────────────
         self._generate_methodology_page(pdf, property_data)
+
+        # ── NEW: NEIGHBORHOOD STATISTICAL ANALYSIS PAGE ───────────────────────
+        try:
+            self._generate_neighborhood_stats_page(pdf, property_data, equity_data)
+        except Exception as e:
+            logger.warning(f"Neighborhood stats page failed (non-fatal): {e}")
+
+        # ── NEW: EVIDENCE SIGNAL BREAKDOWN PAGE ───────────────────────────────
+        try:
+            self._generate_evidence_signals_page(pdf, property_data, equity_data)
+        except Exception as e:
+            logger.warning(f"Evidence signals page failed (non-fatal): {e}")
+
+        # ── NEW: EXTERNAL OBSOLESCENCE PAGE ───────────────────────────────────
+        try:
+            self._generate_external_obsolescence_page(pdf, property_data, equity_data)
+        except Exception as e:
+            logger.warning(f"External obsolescence page failed (non-fatal): {e}")
 
         # ── PAGE 2: ACCOUNT HISTORY ──────────────────────────────────────────
         pdf.add_page()
