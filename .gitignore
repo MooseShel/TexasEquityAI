@@ -27,5 +27,10 @@ DCAD2025/
 CCAD_DATA/
 TAD_DATA/
 hcad_downloads/
+hcad_2025_data/
+hcad_*_data/
 *.zip
 *.csv
+*.txt
+!requirements.txt
+!packages.txt
