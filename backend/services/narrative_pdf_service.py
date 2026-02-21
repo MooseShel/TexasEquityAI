@@ -159,6 +159,84 @@ class PDFService:
         except: pass
         return None
 
+    # ── Chart Generation ──────────────────────────────────────────────────────
+    def _generate_valuation_chart(self, history: dict, current_appraised: float, current_market: float) -> str:
+        """Generates a bar chart of the property's valuation history and saves to temp image."""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.ticker as ticker
+            import tempfile
+            
+            years = []
+            appraised_vals = []
+            market_vals = []
+            
+            # Extract history (sorted ascending for the chart)
+            for year in sorted(history.keys()):
+                v = history[year]
+                appr = self._parse_val(v.get('appraised', 0))
+                mkt = self._parse_val(v.get('market', 0))
+                if appr > 0 or mkt > 0:
+                    years.append(str(year))
+                    appraised_vals.append(appr)
+                    market_vals.append(mkt)
+            
+            # Append current year
+            current_yr = "2025"
+            if current_yr not in history and current_appraised > 0:
+                years.append(current_yr)
+                appraised_vals.append(current_appraised)
+                market_vals.append(current_market)
+                
+            if not years:
+                return None
+                
+            # Create plot
+            fig, ax = plt.subplots(figsize=(8, 3.5), dpi=300)
+            
+            # Styling
+            fig.patch.set_facecolor('white')
+            ax.set_facecolor('#f8fafc')
+            ax.grid(axis='y', linestyle='--', alpha=0.7, color='#cbd5e1')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#94a3b8')
+            ax.spines['bottom'].set_color('#94a3b8')
+            
+            # Plot bars
+            import numpy as np
+            x = np.arange(len(years))
+            width = 0.35
+            
+            ax.bar(x - width/2, appraised_vals, width, label='Appraised', color='#3b82f6')
+            ax.bar(x + width/2, market_vals, width, label='Market', color='#10b981')
+            
+            # Formatting
+            ax.set_xticks(x)
+            ax.set_xticklabels(years, fontsize=10, fontweight='bold', color='#334155')
+            
+            def currency_format(x, pos):
+                if x >= 1e6:
+                    return f'${x*1e-6:.1f}M'
+                return f'${x*1e-3:.0f}K'
+                
+            ax.yaxis.set_major_formatter(ticker.FuncFormatter(currency_format))
+            ax.tick_params(axis='y', colors='#475569', labelsize=9)
+            
+            ax.legend(loc='upper left', frameon=True, facecolor='white', edgecolor='#e2e8f0')
+            
+            plt.tight_layout()
+            
+            # Save to temporary file
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            plt.savefig(tmp.name, format='png', bbox_inches='tight')
+            plt.close(fig)
+            
+            return tmp.name
+        except Exception as e:
+            logger.error(f"Failed to generate valuation chart: {e}")
+            return None
+
     # ── Table Helpers ─────────────────────────────────────────────────────────
     def _generate_methodology_page(self, pdf, property_data):
         """Generates the 'Our Unique AI Approach' methodology page."""
@@ -826,9 +904,35 @@ class PDFService:
                     pdf.cell(hist_w[i_idx], 7, str(val), 1, 0, 'C')
                 pdf.ln()
 
+            # ── Valuation History Chart ──
+            try:
+                chart_path = self._generate_valuation_chart(history, appraised, market_val)
+                if chart_path:
+                    pdf.ln(5)
+                    pdf.set_font("Arial", 'B', 9)
+                    pdf.cell(0, 7, "  Valuation Trend Analysis", ln=True)
+                    # Embed the generated chart
+                    x_start = 15
+                    y_start = pdf.get_y()
+                    pdf.image(chart_path, x=x_start, y=y_start, w=180)
+                    pdf.set_y(y_start + 70)  # Move cursor past the image
+                    
+                    import threading
+                    def cleanup():
+                        try: os.remove(chart_path)
+                        except: pass
+                    threading.Timer(2.0, cleanup).start()
+            except Exception as e:
+                logger.warning(f"Valuation history chart generation failed: {e}")
+
         # ── Land Breakdown ──
         if property_data.get('land_breakdown'):
             pdf.ln(3)
+            # Check for page overflow
+            if pdf.get_y() > 250:
+                pdf.add_page()
+                self._draw_header(pdf, property_data, "ACCOUNT HISTORY (CONT.)")
+            
             pdf.set_fill_color(220, 225, 235)
             pdf.set_font("Arial", 'B', 9)
             pdf.cell(0, 7, "  Detailed Land Records", ln=True, fill=True)
