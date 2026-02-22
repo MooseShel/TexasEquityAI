@@ -484,6 +484,11 @@ class HCADScraper(AppraisalDistrictConnector):
                                 if (cols.length >= 2) appraised = cols[cols.length - 1].innerText;
                             }
                         }
+                        // Modern Layout (Cards / Rows)
+                        if (valBox.innerText.includes('All Values Pending')) {
+                            return { appraised: 'Pending', market: 'Pending' };
+                        }
+                        
                         if (!market) {
                             const mktRow = Array.from(valBox.querySelectorAll('.row')).find(r => r.innerText.includes('Market'));
                             if (mktRow) {

@@ -20,27 +20,35 @@ logger = logging.getLogger(__name__)
 _geocode_cache: Dict[str, Optional[Dict]] = {}
 
 
-def geocode_nominatim(address: str) -> Optional[Dict[str, float]]:
-    """Geocode via free Nominatim API. Rate-limited to 1 req/sec."""
+def geocode_geoapify(address: str) -> Optional[Dict[str, float]]:
+    """Geocode via free Geoapify API."""
     if not address or len(address) < 5:
         return None
     cache_key = address.strip().lower()
     if cache_key in _geocode_cache:
         return _geocode_cache[cache_key]
     try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": address, "format": "json", "limit": 1, "countrycodes": "us"},
-            headers={"User-Agent": "TexasEquityAI/1.0"},
-            timeout=5,
+        geoapify_key = os.environ.get("GEOAPIFY_API_KEY", "b3a32fdeb3e449a08a474fd3cc89bf2d")
+        response = requests.get(
+            "https://api.geoapify.com/v1/geocode/search",
+            params={
+                "text": f"{address}, Texas",
+                "apiKey": geoapify_key,
+                "format": "json"
+            },
+            timeout=5
         )
-        data = resp.json()
-        if data:
-            result = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
-            _geocode_cache[cache_key] = result
-            return result
+        if response.status_code == 200:
+            data = response.json().get('results', [])
+            if data:
+                result = {
+                    "lat": float(data[0]["lat"]),
+                    "lng": float(data[0]["lon"]) # Geoapify uses 'lon', but our internal standard is 'lng'
+                }
+                _geocode_cache[cache_key] = result
+                return result
     except Exception as e:
-        logger.debug(f"Nominatim geocode failed for '{address}': {e}")
+        logger.debug(f"Geoapify geocode failed for '{address}': {e}")
     _geocode_cache[cache_key] = None
     return None
 
@@ -71,8 +79,8 @@ def geocode_google(address: str) -> Optional[Dict[str, float]]:
 
 
 def geocode(address: str) -> Optional[Dict[str, float]]:
-    """Geocode with Nominatim first, Google fallback."""
-    result = geocode_nominatim(address)
+    """Geocode with Geoapify first, Google fallback."""
+    result = geocode_geoapify(address)
     if result:
         return result
     return geocode_google(address)
@@ -127,8 +135,8 @@ def enrich_comps_with_distance(
         else:
             comp["distance_mi"] = None
 
-        # Nominatim rate limit: 1 req/sec
-        time.sleep(0.3)
+        # Geoapify rate limit: up to 3000/day
+        time.sleep(0.1)
 
     # Add distance rank (1 = closest)
     ranked = sorted(

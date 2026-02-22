@@ -244,7 +244,7 @@ class StreamlitLogCapture(logging.Handler):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_address(address: str):
-    """Geocode an address using the free Nominatim API (no key required).
+    """Geocode an address using the free Geoapify API.
     Automatically strips unit/suite numbers and retries if the full address fails.
     """
     import re
@@ -253,13 +253,12 @@ def geocode_address(address: str):
 
     def _try_geocode(addr: str):
         try:
+            geoapify_key = os.environ.get("GEOAPIFY_API_KEY", "b3a32fdeb3e449a08a474fd3cc89bf2d")
             resp = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": addr, "format": "json", "limit": 1},
-                headers={"User-Agent": "TexasEquityAI/1.0"},
-                timeout=5
+                "https://api.geoapify.com/v1/geocode/search",
+                params={"text": f"{addr}, Texas", "apiKey": geoapify_key, "format": "json"},
             )
-            data = resp.json()
+            data = resp.json().get('results', [])
             if data:
                 return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])}
         except Exception:
@@ -645,19 +644,28 @@ try:
     # Only fetch if there's sufficient text and it's mostly alphabetical (an address, not an account)
     if live_input and len(live_input) >= 5 and sum(c.isalpha() for c in live_input) > 2 and live_input != st.session_state.last_search:
         try:
+            # Using Free Geoapify API 
+            geoapify_key = os.environ.get("GEOAPIFY_API_KEY", "b3a32fdeb3e449a08a474fd3cc89bf2d") # fallback free tier key
             resp = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": f"{live_input}, Texas", "format": "json", "addressdetails": 1, "limit": 4},
-                headers={"User-Agent": "TexasEquityAI/1.0"},
+                "https://api.geoapify.com/v1/geocode/autocomplete",
+                params={
+                    "text": live_input,
+                    "format": "json",
+                    "apiKey": geoapify_key,
+                    "filter": "countrycode:us",
+                    "limit": 5
+                },
                 timeout=3
             )
             if resp.status_code == 200:
-                results = resp.json()
+                results = resp.json().get('results', [])
                 if results:
-                    st.session_state.suggestions = [res.get('display_name').split(', Texas')[0].strip(' ,') + ", TX" for res in results]
+                    # Format: 123 Main St, Houston, TX 77002
+                    st.session_state.suggestions = [res.get('formatted') for res in results if res.get('formatted')]
                 else:
                     st.session_state.suggestions = []
-        except Exception:
+        except Exception as e:
+            logger.error(f"Geoapify autocomplete error: {e}")
             pass # Silent fail to not disrupt UX
             
     if hasattr(st.session_state, 'suggestions') and st.session_state.suggestions and  live_input != st.session_state.selected_suggestion:
