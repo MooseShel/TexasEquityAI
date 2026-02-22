@@ -624,9 +624,12 @@ if 'scan_results' in st.session_state:
                         st.session_state['generate_account_prefill'] = acct
                         st.session_state['selected_suggestion'] = "" # Reset autocomplete
 
-        if st.button("❌ Clear Scan Results", key="clear_scan"):
-            del st.session_state['scan_results']
-            st.rerun()
+        st.divider()
+        c_left, c_mid, c_right = st.columns([1,2,1])
+        with c_mid:
+            if st.button("⬅️ Back to Home (Clear Scan Results)", use_container_width=True, type="secondary"):
+                del st.session_state['scan_results']
+                st.rerun()
 
 account_placeholder = "e.g. 0660460360030 (13 digits)"
 if district_code == "TAD": account_placeholder = "e.g. 04657837 (8 digits)"
