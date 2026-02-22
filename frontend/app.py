@@ -644,28 +644,31 @@ try:
     # Only fetch if there's sufficient text and it's mostly alphabetical (an address, not an account)
     if live_input and len(live_input) >= 5 and sum(c.isalpha() for c in live_input) > 2 and live_input != st.session_state.last_search:
         try:
-            # Using Free Geoapify API 
-            geoapify_key = os.environ.get("GEOAPIFY_API_KEY", "b3a32fdeb3e449a08a474fd3cc89bf2d") # fallback free tier key
             resp = requests.get(
-                "https://api.geoapify.com/v1/geocode/autocomplete",
-                params={
-                    "text": live_input,
-                    "format": "json",
-                    "apiKey": geoapify_key,
-                    "filter": "countrycode:us",
-                    "limit": 5
-                },
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": f"{live_input}, Texas", "format": "json", "addressdetails": 1, "limit": 5},
+                headers={"User-Agent": "TexasEquityAI/1.0"},
                 timeout=3
             )
             if resp.status_code == 200:
-                results = resp.json().get('results', [])
-                if results:
-                    # Format: 123 Main St, Houston, TX 77002
-                    st.session_state.suggestions = [res.get('formatted') for res in results if res.get('formatted')]
-                else:
-                    st.session_state.suggestions = []
-        except Exception as e:
-            logger.error(f"Geoapify autocomplete error: {e}")
+                results = resp.json()
+                formatted_suggestions = []
+                for res in results:
+                    addr = res.get('address', {})
+                    street_num = addr.get('house_number', '')
+                    road = addr.get('road', '')
+                    city = addr.get('city', addr.get('town', addr.get('village', '')))
+                    zip_code = addr.get('postcode', '')
+                    
+                    # Construct clean '1200 Smith St, Houston, TX 77002'
+                    street = f"{street_num} {road}".strip()
+                    if street and city:
+                        clean_addr = f"{street}, {city}, TX {zip_code}".strip(" ,")
+                        if clean_addr not in formatted_suggestions:
+                            formatted_suggestions.append(clean_addr)
+                        
+                st.session_state.suggestions = formatted_suggestions
+        except Exception:
             pass # Silent fail to not disrupt UX
             
     if hasattr(st.session_state, 'suggestions') and st.session_state.suggestions and  live_input != st.session_state.selected_suggestion:
