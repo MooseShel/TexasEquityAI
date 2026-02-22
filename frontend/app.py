@@ -1479,8 +1479,22 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                     })
                                 
                                 if hist_rows:
-                                    hist_df = pd.DataFrame(hist_rows).set_index("Year")
-                                    st.bar_chart(hist_df, y=["Appraised", "Market"])
+                                    hist_df = pd.DataFrame(hist_rows)
+                                    import plotly.express as px
+                                    fig = px.bar(
+                                        hist_df,
+                                        x="Year",
+                                        y=["Appraised", "Market"],
+                                        barmode="group",
+                                        labels={"value": "Valuation", "variable": ""}
+                                    )
+                                    fig.update_layout(
+                                        yaxis=dict(tickformat="$,.0f"),
+                                        hovermode="x unified",
+                                        xaxis_type='category'
+                                    )
+                                    fig.update_traces(hovertemplate="%{y:$,.0f}")
+                                    st.plotly_chart(fig, use_container_width=True)
                 with tab2:
                     st.subheader("Equity Analysis")
                     equity_has_data = data['equity'] and (
