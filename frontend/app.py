@@ -1414,8 +1414,13 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         st.subheader("Market Analysis")
                         appraised = data['property'].get('appraised_value', 0)
                         market = data['market_value']
-                        st.metric("Appraised Value", f"${appraised:,.0f}")
-                        st.metric("Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f}", delta_color="inverse")
+                        st.metric("County Appraised Value", f"${appraised:,.0f}", help="The county's final appraised value after homestead caps or exemptions.")
+                        st.metric("County Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f} over cap", delta_color="inverse", help="The county's initial uncapped market assessment.")
+                        
+                        justified = data.get('equity', {}).get('justified_value_floor')
+                        if justified and justified < appraised:
+                            st.divider()
+                            st.metric("AI Target Protest Value", f"${justified:,.0f}", delta=f"-${appraised - justified:,.0f} reduction target", delta_color="normal", help="The lowest defensible property value calculated by our AI based on equity and sales comparables.")
 
                         val_hist = data['property'].get('valuation_history')
                         if val_hist:
