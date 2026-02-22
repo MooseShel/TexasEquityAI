@@ -147,6 +147,7 @@ async def get_full_protest(
                     # Only switch current_account if we got a real assessorID back
                     if resolved_account:
                         current_account = resolved_account
+                        yield json.dumps({"status": f"✅ Resolver [RentCast]: Found account ID {current_account} (confidence 100%)"}) + "\n"
                         logger.info(f"Resolved address to account: {current_account} via RentCast")
                     else:
                         logger.info(f"RentCast resolve returned no assessorID — keeping original input as account key.")
@@ -223,7 +224,7 @@ async def get_full_protest(
                 connector = DistrictConnectorFactory.get_connector(current_district or "HCAD", current_account)
                 original_address = lookup_addr
             else:
-                yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping district records and history..."}) + "\n"
+                yield json.dumps({"status": "⛏️ Data Mining Agent: Scraping HCAD records..."}) + "\n"
                 
                 # 1. Cache & Scrape — DB-first for ALL districts
                 cached_property = await supabase_service.get_property_by_account(current_account)
@@ -614,9 +615,18 @@ async def get_full_protest(
                     property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
             
             # Vision Analysis
+            yield json.dumps({"status": "📸 Vision Agent: Analyzing property condition..."}) + "\n"
             # Use the cleaned search_address for vision acquisition
             image_paths = await vision_agent.get_street_view_images(search_address)
+            
+            # Check Vision Cache first (the agent also checks, but we log it here if it's instant)
+            cached_vision = await supabase_service.get_cached_vision(current_account)
+            if cached_vision:
+                yield json.dumps({"status": "📸 Vision Agent: Using cached property condition analysis..."}) + "\n"
+            
             vision_detections = await vision_agent.analyze_property_condition(image_paths, property_details)
+            
+            yield json.dumps({"status": "🔍 AI Condition Analyst: Comparing property conditions across comps..."}) + "\n"
             
             # Combine external obsolescence from FEMA into narrative context
             if flood_data and flood_data.get('is_high_risk'):
@@ -681,10 +691,12 @@ async def get_full_protest(
             except Exception as se_err:
                 logger.warning(f"Savings estimator failed (non-fatal): {se_err}")
 
-            yield json.dumps({"status": "\u270d\ufe0f Legal Narrator: Synthesizing evidence into formal narrative..."}) + "\n"
+            yield json.dumps({"status": "✍️ Legal Narrator: Evaluating protest viability..."}) + "\n"
             
             # 6. Narrative & PDF
             narrative = narrative_agent.generate_protest_narrative(property_details, equity_results, vision_detections, market_value)
+            
+            yield json.dumps({"status": f"✍️ Legal Narrator: Generating protest narrative ({equity_results.get('sales_count', 0)} sales comps support reduction)..."}) + "\n"
             
             os.makedirs("outputs", exist_ok=True)
             form_path = f"outputs/Form_41_44_{current_account}.pdf"
