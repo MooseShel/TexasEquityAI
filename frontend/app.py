@@ -604,27 +604,30 @@ if 'scan_results' in st.session_state:
                 if 'estimated_over_assessment' in display_df.columns:
                     display_df['estimated_over_assessment'] = display_df['estimated_over_assessment'].apply(lambda x: f"${x:,.0f}")
                 
+                # Add a boolean column for the user to click to trigger a protest
+                display_df.insert(0, '🚀 Protest', False)
                 display_df.columns = [c.replace('_', ' ').title() for c in display_df.columns]
                 
-                st.dataframe(
+                edited_df = st.data_editor(
                     display_df, 
                     use_container_width=True, 
                     hide_index=True,
+                    disabled=[c for c in display_df.columns if c != '🚀 Protest'], # Only the checkbox is editable
                     column_config={
+                        "🚀 Protest": st.column_config.CheckboxColumn("🚀 Protest", help="Click to generate a protest packet for this account"),
                         "Details": st.column_config.LinkColumn("Details", display_text="View Source")
                     }
                 )
-
-            st.caption("💡 Click 'Select' below to quickly start a protest for any flagged account.")
-            
-            # Use native Streamlit buttons to avoid full-page URL reloads
-            cols = st.columns(3)
-            for i, row in display_df.iterrows():
-                acct = row['Account Number']
-                with cols[i % 3]:
-                    if st.button(f"Generate Packet for {acct} 🚀", key=f"gen_btn_{acct}"):
-                        st.session_state['generate_account_prefill'] = acct
+                
+                # Check if the user clicked any of the Protest checkboxes
+                if '🚀 Protest' in edited_df.columns:
+                    selected_rows = edited_df[edited_df['🚀 Protest'] == True]
+                    if not selected_rows.empty:
+                        # Grab the first selected account
+                        selected_acct = selected_rows.iloc[0]['Account Number']
+                        st.session_state['generate_account_prefill'] = selected_acct
                         st.session_state['selected_suggestion'] = "" # Reset autocomplete
+                        st.rerun()
 
         st.divider()
         c_left, c_mid, c_right = st.columns([1,2,1])
@@ -1445,10 +1448,23 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         
                         try:
                             # Safely attempt to parse out the AI opinion of value from the data payload
-                            eq_floor = data.get('equity', {}).get('justified_value_floor', appraised) if isinstance(data.get('equity'), dict) else appraised
+                            import json
+                            eq_data = data.get('equity')
+                            if isinstance(eq_data, str):
+                                try: eq_data = json.loads(eq_data)
+                                except: eq_data = {}
+                            if not eq_data: eq_data = {}
+                                
+                            eq_floor = eq_data.get('justified_value_floor', appraised) if isinstance(eq_data, dict) else appraised
+                            try: eq_floor = float(eq_floor)
+                            except: eq_floor = appraised
                             
                             ms = appraised
                             s_data = data.get('sales_comps', [])
+                            if isinstance(s_data, str):
+                                try: s_data = json.loads(s_data)
+                                except: s_data = []
+                                
                             if isinstance(s_data, list) and len(s_data) > 0:
                                 prices = []
                                 for sc in s_data:
@@ -1466,7 +1482,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 st.divider()
                                 st.metric("AI Target Protest Value", f"${opinion:,.0f}", delta=f"-${appraised - opinion:,.0f} recommended reduction", delta_color="normal", help="The lowest defensible property value calculated by our AI based on equity and sales comparables.")
                         except Exception as e:
-                            pass
+                            st.caption(f"Error parsing opinion value: {e}")
 
                         val_hist = data['property'].get('valuation_history')
                         if val_hist:
