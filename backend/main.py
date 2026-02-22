@@ -105,14 +105,39 @@ async def get_full_protest(
         try:
             yield json.dumps({"status": "🔍 Resolver Agent: Locating property and resolving address..."}) + "\n"
             
-            # 0. Address Resolution (RentCast Enabled)
+            # 0. Fast DB Address Resolution (Cost-saving optimization)
             current_account = account_number
-            current_district = district # Initialize local var from outer scope
+            current_district = district
             rentcast_fallback_data = None
-            
+            resolved_from_db = False
+
             # Heuristic: If input has spaces and letters, treat as address
-            if any(c.isalpha() for c in account_number) and " " in account_number:
-                logger.info(f"Input '{account_number}' detected as address. Attempting resolution...")
+            is_address_input = any(c.isalpha() for c in current_account) and " " in current_account
+
+            if is_address_input:
+                logger.info(f"Input '{current_account}' detected as address. Searching local database first...")
+                try:
+                    candidates = await supabase_service.search_address_globally(current_account)
+                    if candidates:
+                        best = candidates[0]
+                        if best.get('district') and best.get('account_number'):
+                            new_dist = best['district']
+                            new_acc = best['account_number']
+                            logger.info(f"Global Address Match (DB): '{current_account}' -> {new_dist} Account #{new_acc} ({best['address']})")
+                            
+                            if new_dist != current_district:
+                                logger.info(f"Address-Correcting district from {current_district} to {new_dist}")
+                                current_district = new_dist
+                            
+                            # CRITICAL: Switch to the real account number!
+                            current_account = new_acc
+                            resolved_from_db = True
+                except Exception as e:
+                    logger.warning(f"Global Address Lookup (DB) failed: {e}")
+
+            # 0a. Fallback Address Resolution (RentCast Enabled) if DB miss
+            if is_address_input and not resolved_from_db:
+                logger.info(f"No local DB match for '{account_number}'. Falling back to RentCast resolution...")
                 resolved = await bridge.resolve_address(account_number)
                 if resolved:
                     resolved_account = resolved.get('account_number')
@@ -120,19 +145,17 @@ async def get_full_protest(
                     is_residential_resolve = resolved_ptype in ('Single Family', 'Condo', 'Townhouse', 'Residential')
 
                     # Only switch current_account if we got a real assessorID back
-                    # (commercial properties often have assessorID=None in RentCast)
                     if resolved_account:
                         current_account = resolved_account
-                        logger.info(f"Resolved address to account: {current_account}")
+                        logger.info(f"Resolved address to account: {current_account} via RentCast")
                     else:
                         logger.info(f"RentCast resolve returned no assessorID — keeping original input as account key.")
 
                     # Only use as fallback data if it's NOT a confirmed residential with no assessorID
-                    # (would wrongly block the commercial gate)
                     if resolved_account or not is_residential_resolve:
                         rentcast_fallback_data = resolved
                     else:
-                        logger.info(f"Skipping rentcast_fallback_data: residential propertyType='{resolved_ptype}' but no assessorID — likely wrong match.")
+                        logger.info(f"Skipping rentcast_fallback_data: residential propertyType='{resolved_ptype}' but no assessorID.")
 
                     # Infer district from resolved address to ensure correct connector usage
                     if not current_district:
@@ -143,7 +166,7 @@ async def get_full_protest(
                         elif "plano" in res_addr: current_district = "CCAD"
                         elif "houston" in res_addr: current_district = "HCAD"
                         if current_district:
-                            logger.info(f"Inferred district from address: {current_district}")
+                            logger.info(f"Inferred district from RentCast address: {current_district}")
 
             # 0b. Account Pattern Auto-Correction
             # Even if the user selected a district, the account number format might prove them wrong.
@@ -164,30 +187,6 @@ async def get_full_protest(
                         current_district = db_dist
             except Exception as e:
                 logger.warning(f"Global DB lookup failed during district check: {e}")
-
-            # 0d. Global Address Lookup (Layer 2.5)
-            # If input looks like an address but we aren't sure of district (e.g. "123 Main St"),
-            # search ALL districts. This turns "123 Main St" into "Account 123456" + "TCAD" instantly.
-            if any(c.isalpha() for c in current_account) and not detected_district:
-                try:
-                    candidates = await supabase_service.search_address_globally(current_account)
-                    if candidates:
-                        # Pick best match (first result is usually best match from ILIKE)
-                        best = candidates[0]
-                        if best.get('district') and best.get('account_number'):
-                            new_dist = best['district']
-                            new_acc = best['account_number']
-                            logger.info(f"Global Address Match: '{current_account}' -> {new_dist} Account #{new_acc} ({best['address']})")
-                            
-                            if new_dist != current_district:
-                                logger.info(f"Address-Correcting district from {current_district} to {new_dist}")
-                                current_district = new_dist
-                            
-                            # CRITICAL: Switch to the real account number!
-                            # This allows the next step (get_property_by_account) to hit the DB cache instantly.
-                            current_account = new_acc
-                except Exception as e:
-                    logger.warning(f"Global Address Lookup failed: {e}")
 
 
             # 0e. Early Property Type Detection
