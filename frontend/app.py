@@ -621,9 +621,64 @@ elif district_code == "CCAD": account_placeholder = "e.g. R-2815-00C-0100-1 or 2
 elif district_code == "TCAD": account_placeholder = "e.g. 123456 (select TCAD manually — not auto-detected)"
 elif district_code == "DCAD": account_placeholder = "e.g. 00000776533000000 (17 digits)"
 
-account_number = st.text_input(f"Enter {district_code} Account Number or Street Address", 
-                              placeholder=account_placeholder,
-                              key="account_input")
+# ── Address Autocomplete / Input ──────────────────────────────────────────
+account_number = None
+
+try:
+    from st_keyup import st_keyup
+    st.write(f"**Enter {district_code} Account Number or Street Address**")
+    
+    # Store selected suggestion in session state to prevent loop reset
+    if "selected_suggestion" not in st.session_state:
+        st.session_state.selected_suggestion = ""
+    if "last_search" not in st.session_state:
+        st.session_state.last_search = ""
+        
+    # The live input box
+    live_input = st_keyup(
+        "", 
+        placeholder=account_placeholder,
+        key="account_input_live", 
+        debounce=500
+    )
+    
+    # Only fetch if there's sufficient text and it's mostly alphabetical (an address, not an account)
+    if live_input and len(live_input) >= 5 and sum(c.isalpha() for c in live_input) > 2 and live_input != st.session_state.last_search:
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": f"{live_input}, Texas", "format": "json", "addressdetails": 1, "limit": 4},
+                headers={"User-Agent": "TexasEquityAI/1.0"},
+                timeout=3
+            )
+            if resp.status_code == 200:
+                results = resp.json()
+                if results:
+                    st.session_state.suggestions = [res.get('display_name').split(', Texas')[0].strip(' ,') + ", TX" for res in results]
+                else:
+                    st.session_state.suggestions = []
+        except Exception:
+            pass # Silent fail to not disrupt UX
+            
+    if hasattr(st.session_state, 'suggestions') and st.session_state.suggestions and  live_input != st.session_state.selected_suggestion:
+        selected = st.selectbox(
+            "📍 Select Address Match", 
+            [""] + st.session_state.suggestions,
+            index=0,
+            key="suggestion_dropdown"
+        )
+        if selected:
+            st.session_state.selected_suggestion = selected
+            st.session_state.last_search = live_input
+            account_number = selected
+            
+    if not account_number:
+        account_number = live_input
+            
+except ImportError:
+    account_number = st.text_input(f"Enter {district_code} Account Number or Street Address", 
+                                  placeholder=account_placeholder,
+                                  key="account_input")
 
 async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None, force_fresh_comps=False):
     try:
