@@ -561,6 +561,12 @@ if 'scan_results' in st.session_state:
     scan_dist = st.session_state.get('scan_district_code', '')
 
     with st.expander(f"🔍 Scan Results: Neighborhood {nbhd_code} ({scan_dist}) — {len(scan_flagged)} flagged", expanded=True):
+        st.markdown("""
+        **How we detect anomalies:** 
+        This engine compares every property in the neighborhood based on Assessed Price per Square Foot ($/ft²). 
+        * **Z-Score:** Measures how many standard deviations a property's assessed value is above the neighborhood average. A Z-Score of +1.5 or higher strongly signals an unfair valuation.
+        * **Percentile:** Shows where the property ranks in the neighborhood. E.g. the 95th percentile means the county valued this property higher than 95% of its neighbors per sqft.
+        """)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Properties", scan_stats.get('property_count', 0))
         c2.metric("Median $/ft²", f"${scan_stats.get('median_pps', 0):,.0f}")
