@@ -584,7 +584,7 @@ if 'scan_results' in st.session_state:
                 if dist == "DCAD": return f"https://www.dallascad.org/AcctDetailRes.aspx?ID={acct}"
                 if dist == "TCAD": return f"https://travis.prodigycad.com/property-detail/{acct}"
                 # HCAD's new Blazor portal blocks direct URL access to PropertyDetail with 403/404s, so link to the search page
-                return "https://search.hcad.org/Search"
+                return "https://search.hcad.org/"
 
             df['Details'] = df['account_number'].apply(lambda x: get_district_url(scan_dist, x))
             df['Action'] = df['account_number'].apply(lambda x: f"/?generate_account={x}")
@@ -643,12 +643,12 @@ try:
     # Pre-populate from query params if user clicked "Generate Packet" from Anomaly Table
     prefill_val = st.query_params.get("generate_account", "")
         
-    # The live input box
+    # The live input box (dynamic key forces component to remount when prefill changes)
     live_input = st_keyup(
         "", 
         value=prefill_val,
         placeholder=account_placeholder,
-        key="account_input_live", 
+        key=f"account_input_live_{prefill_val}", 
         debounce=500
     )
     
