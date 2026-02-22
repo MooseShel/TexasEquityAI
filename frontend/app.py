@@ -587,9 +587,8 @@ if 'scan_results' in st.session_state:
                 return "https://search.hcad.org/"
 
             df['Details'] = df['account_number'].apply(lambda x: get_district_url(scan_dist, x))
-            df['Action'] = df['account_number'].apply(lambda x: f"/?generate_account={x}")
 
-            display_cols = ['account_number', 'Details', 'address', 'pps', 'z_score', 'percentile', 'estimated_over_assessment', 'Action']
+            display_cols = ['account_number', 'Details', 'address', 'pps', 'z_score', 'percentile', 'estimated_over_assessment']
             available_cols = [c for c in display_cols if c in df.columns]
 
             if available_cols:
@@ -610,12 +609,20 @@ if 'scan_results' in st.session_state:
                     use_container_width=True, 
                     hide_index=True,
                     column_config={
-                        "Details": st.column_config.LinkColumn("Details", display_text="View Source"),
-                        "Action": st.column_config.LinkColumn("Action", display_text="Generate Packet 🚀")
+                        "Details": st.column_config.LinkColumn("Details", display_text="View Source")
                     }
                 )
 
-            st.caption("💡 Click 'Generate Packet 🚀' in the table to quickly start a protest for any flagged account.")
+            st.caption("💡 Click 'Select' below to quickly start a protest for any flagged account.")
+            
+            # Use native Streamlit buttons to avoid full-page URL reloads
+            cols = st.columns(3)
+            for i, row in display_df.iterrows():
+                acct = row['Account Number']
+                with cols[i % 3]:
+                    if st.button(f"Generate Packet for {acct} 🚀", key=f"gen_btn_{acct}"):
+                        st.session_state['generate_account_prefill'] = acct
+                        st.session_state['selected_suggestion'] = "" # Reset autocomplete
 
         if st.button("❌ Clear Scan Results", key="clear_scan"):
             del st.session_state['scan_results']
@@ -640,8 +647,8 @@ try:
     if "last_search" not in st.session_state:
         st.session_state.last_search = ""
         
-    # Pre-populate from query params if user clicked "Generate Packet" from Anomaly Table
-    prefill_val = st.query_params.get("generate_account", "")
+    # Pre-populate from session state if user clicked "Generate Packet" button from Anomaly Table
+    prefill_val = st.session_state.get('generate_account_prefill', "")
         
     # The live input box (dynamic key forces component to remount when prefill changes)
     live_input = st_keyup(
