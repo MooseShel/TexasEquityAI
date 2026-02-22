@@ -42,7 +42,9 @@ from backend.agents.permit_agent import PermitAgent
 from backend.utils.address_utils import normalize_address, is_real_address
 from backend.agents.anomaly_detector import AnomalyDetectorAgent
 
-st.set_page_config(page_title="Texas Equity AI", layout="wide")
+st.set_page_config(page_title="Texas Equity AI", page_icon="logo.webp", layout="wide")
+
+st.sidebar.image("logo.webp", use_container_width=True)
 
 # ── QR Code / Link Routing (Enhancement #10) ─────────────────────────────────
 # Check if the app is loaded with ?account=XXXXXXXX
