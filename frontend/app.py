@@ -577,7 +577,8 @@ if 'scan_results' in st.session_state:
                 if dist == "CCAD": return f"https://www.collincad.org/propertysearch?prop={acct}"
                 if dist == "DCAD": return f"https://www.dallascad.org/AcctDetailRes.aspx?ID={acct}"
                 if dist == "TCAD": return f"https://travis.prodigycad.com/property-detail/{acct}"
-                return f"https://search.hcad.org/Account/PropertyDetail?url_account={acct}"
+                # HCAD's new Blazor portal blocks direct URL access to PropertyDetail with 403/404s, so link to the search page
+                return "https://search.hcad.org/Search"
 
             df['Details'] = df['account_number'].apply(lambda x: get_district_url(scan_dist, x))
             df['Action'] = df['account_number'].apply(lambda x: f"/?generate_account={x}")
@@ -633,9 +634,13 @@ try:
     if "last_search" not in st.session_state:
         st.session_state.last_search = ""
         
+    # Pre-populate from query params if user clicked "Generate Packet" from Anomaly Table
+    prefill_val = st.query_params.get("generate_account", "")
+        
     # The live input box
     live_input = st_keyup(
         "", 
+        value=prefill_val,
         placeholder=account_placeholder,
         key="account_input_live", 
         debounce=500
