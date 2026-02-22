@@ -1443,10 +1443,30 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         st.metric("County Appraised Value", f"${appraised:,.0f}", help="The county's final appraised value after homestead caps or exemptions.")
                         st.metric("County Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f} over cap", delta_color="inverse", help="The county's initial uncapped market assessment.")
                         
-                        justified = data.get('equity', {}).get('justified_value_floor')
-                        if justified and justified < appraised:
-                            st.divider()
-                            st.metric("AI Target Protest Value", f"${justified:,.0f}", delta=f"-${appraised - justified:,.0f} reduction target", delta_color="normal", help="The lowest defensible property value calculated by our AI based on equity and sales comparables.")
+                        try:
+                            # Safely attempt to parse out the AI opinion of value from the data payload
+                            eq_floor = data.get('equity', {}).get('justified_value_floor', appraised) if isinstance(data.get('equity'), dict) else appraised
+                            
+                            ms = appraised
+                            s_data = data.get('sales_comps', [])
+                            if isinstance(s_data, list) and len(s_data) > 0:
+                                prices = []
+                                for sc in s_data:
+                                    p = sc.get('sale_price', sc.get('Sale Price', 0)) if isinstance(sc, dict) else 0
+                                    try: p = float(str(p).replace('$','').replace(',',''))
+                                    except: p = 0
+                                    if p > 0: prices.append(p)
+                                if prices:
+                                    prices.sort()
+                                    ms = prices[len(prices)//2]
+                            
+                            opinion = min(appraised, eq_floor, ms) if ms > 0 else min(appraised, eq_floor)
+                            
+                            if opinion < appraised:
+                                st.divider()
+                                st.metric("AI Target Protest Value", f"${opinion:,.0f}", delta=f"-${appraised - opinion:,.0f} recommended reduction", delta_color="normal", help="The lowest defensible property value calculated by our AI based on equity and sales comparables.")
+                        except Exception as e:
+                            pass
 
                         val_hist = data['property'].get('valuation_history')
                         if val_hist:
@@ -1487,7 +1507,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                         hist_df,
                                         x="Year",
                                         y=["Appraised", "Market"],
-                                        barmode="group",
+                                        barmode="stack",
                                         labels={"value": "Valuation", "variable": ""}
                                     )
                                     fig.update_layout(
