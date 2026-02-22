@@ -207,9 +207,23 @@ class HCADScraper(AppraisalDistrictConnector):
                     await asyncio.sleep(0.5)
 
                 # Step 3: Search
+                html_before = await page.content()
+                os.makedirs("debug", exist_ok=True)
+                with open("debug/form_dump.html", "w", encoding="utf-8") as f:
+                    f.write(html_before)
+
                 input_selector = "input[type='search']"
                 await page.fill(input_selector, "")
-                await page.type(input_selector, account_number, delay=80)
+                
+                search_term = account_number
+                if is_address:
+                    # Strip city/state 
+                    search_term = search_term.split(',')[0].strip()
+                    # Strip common street suffixes that break HCAD search
+                    search_term = re.sub(r'(?i)\b(Avenue|Ave|Street|St|Road|Rd|Drive|Dr|Boulevard|Blvd|Parkway|Pkwy|Lane|Ln|Court|Ct|Circle|Cir|Trail|Trl|Highway|Hwy|Freeway|Fwy)\b[\.]?', '', search_term).strip()
+                    logger.info(f"Normalized address search term: {search_term}")
+                    
+                await page.type(input_selector, search_term, delay=80)
                 await page.keyboard.press("Enter")
                 
                 # Step 4: Wait for data to appear (Polling approach)
@@ -223,7 +237,12 @@ class HCADScraper(AppraisalDistrictConnector):
                     if await page.locator("#OwnerInfoComponent").is_visible():
                         logger.info("Data detected on detail page.")
                         break
-                    
+
+                    # Detection level 1.5: No results found
+                    if "No matching records found" in content or "No data available in table" in content or "No accounts found" in content or "No results" in content:
+                        logger.warning(f"Fast fail: 'No records found' in table for {search_term}")
+                        return None
+
                     # Detection level 2: Search results table found
                     if "table-hover" in content or "Account Number" in content:
                         try:
@@ -240,7 +259,9 @@ class HCADScraper(AppraisalDistrictConnector):
                                 return None
                             
                             if is_address:
-                                result_link = page.locator("tr.table-hover td a").first
+                                result_link = page.locator("tr.resulttr").first
+                                if not await result_link.is_visible():
+                                    result_link = page.locator("tr.table-hover td a").first
                             else:
                                 result_link = page.get_by_text(account_number, exact=True).first
                                 
@@ -255,6 +276,8 @@ class HCADScraper(AppraisalDistrictConnector):
                 else:
                     logger.error("Timed out waiting for property data to appear.")
                     os.makedirs("debug", exist_ok=True)
+                    with open(f"debug/poll_fail_{account_number.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
+                        f.write(content)
                     await page.screenshot(path=f"debug/poll_fail_{account_number.replace(' ', '_')}.png")
                     return None
 
