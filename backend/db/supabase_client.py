@@ -125,11 +125,11 @@ class SupabaseService:
         """
         if not self.client: return None
         try:
-            self.client.table("properties").upsert({
-                "account_number": account_number,
+            update_data = {
                 "cached_comps": json.dumps(comps),
                 "comps_scraped_at": datetime.now(timezone.utc).isoformat(),
-            }, on_conflict="account_number").execute()
+            }
+            self.client.table("properties").update(update_data).eq("account_number", account_number).execute()
             logger.info(f"Saved {len(comps)} comps to cache for {account_number}.")
         except Exception as e:
             logger.warning(f"save_cached_comps failed: {e}")
@@ -284,11 +284,11 @@ class SupabaseService:
         if not self.client:
             return
         try:
-            self.client.table("properties").upsert({
-                "account_number": account_number,
+            update_data = {
                 data_col: json.dumps(value) if isinstance(value, (dict, list)) else value,
                 ts_col: datetime.now(timezone.utc).isoformat(),
-            }, on_conflict="account_number").execute()
+            }
+            self.client.table("properties").update(update_data).eq("account_number", account_number).execute()
             logger.info(f"Cache SAVED for {account_number}.{data_col}")
         except Exception as e:
             logger.warning(f"_save_cached_field({data_col}) failed: {e}")
@@ -313,19 +313,71 @@ class SupabaseService:
             for comp in comps:
                 # Ensure it's a dict
                 comp_dict = comp if isinstance(comp, dict) else comp.model_dump()
+                
+                address = comp_dict.get("Address") or comp_dict.get("address")
+                
+                sale_price_raw = comp_dict.get("Sale Price") or comp_dict.get("sale_price")
+                sale_price = None
+                if isinstance(sale_price_raw, str):
+                    sp_str = sale_price_raw.replace("$", "").replace(",", "").replace(" (est)", "").strip()
+                    try: sale_price = float(sp_str)
+                    except ValueError: pass
+                else:
+                    sale_price = sale_price_raw
+                
+                sale_date = comp_dict.get("Sale Date") or comp_dict.get("sale_date")
+                if isinstance(sale_date, str) and "(Loan)" in sale_date:
+                    sale_date = sale_date.replace(" (Loan)", "").strip()
+                if not sale_date or sale_date == "Unknown":
+                    sale_date = None
+                    
+                sqft_raw = comp_dict.get("SqFt") or comp_dict.get("sqft")
+                sqft = None
+                if isinstance(sqft_raw, str):
+                    sq_str = sqft_raw.replace(",", "").strip()
+                    if sq_str.isdigit(): sqft = int(sq_str)
+                else:
+                    sqft = sqft_raw
+                    
+                price_per_sqft_raw = comp_dict.get("Price/SqFt") or comp_dict.get("price_per_sqft")
+                price_per_sqft = None
+                if isinstance(price_per_sqft_raw, str):
+                    pps_str = price_per_sqft_raw.replace("$", "").replace(",", "").strip()
+                    try: price_per_sqft = float(pps_str)
+                    except ValueError: pass
+                else:
+                    price_per_sqft = price_per_sqft_raw
+                    
+                year_built = comp_dict.get("Year Built") or comp_dict.get("year_built")
+                if year_built == "N/A":
+                    year_built = None
+                    
+                dist_raw = comp_dict.get("Distance") or comp_dict.get("distance") or comp_dict.get("dist_from_subject")
+                dist = None
+                if isinstance(dist_raw, str):
+                    d_str = dist_raw.replace(" mi", "").strip()
+                    try: dist = float(d_str)
+                    except ValueError: pass
+                else:
+                    dist = dist_raw
+                    
+                prop_type = comp_dict.get("Type") or comp_dict.get("property_type")
+                if isinstance(prop_type, str) and "(Inferred)" in prop_type:
+                    prop_type = prop_type.replace(" (Inferred)", "").strip()
+
                 records.append({
                     "account_number": account_number,
                     "protest_id": protest_id,
-                    "address": comp_dict.get("address"),
-                    "sale_price": comp_dict.get("sale_price"),
-                    "sale_date": comp_dict.get("sale_date") or None,
-                    "sqft": comp_dict.get("sqft"),
-                    "price_per_sqft": comp_dict.get("price_per_sqft"),
-                    "year_built": comp_dict.get("year_built"),
-                    "source": comp_dict.get("source", "RentCast"),
-                    "dist_from_subject": comp_dict.get("distance", comp_dict.get("dist_from_subject")),
+                    "address": address,
+                    "sale_price": sale_price,
+                    "sale_date": sale_date,
+                    "sqft": sqft,
+                    "price_per_sqft": price_per_sqft,
+                    "year_built": year_built,
+                    "source": comp_dict.get("Source") or comp_dict.get("source", "RentCast"),
+                    "dist_from_subject": dist,
                     "similarity_score": comp_dict.get("similarity", comp_dict.get("similarity_score")),
-                    "property_type": comp_dict.get("property_type")
+                    "property_type": prop_type
                 })
             
             if records:

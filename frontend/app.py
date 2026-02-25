@@ -810,14 +810,20 @@ try:
         if sum(c.isalpha() for c in query) < 2:
             return []
 
-        # 1. DB search (instant, free)
+        # 1. DB search (instant, free) - Synchronous REST call to avoid asyncio loop crashes on Streamlit Cloud
         try:
-            from backend.db.supabase_client import supabase_service as _supa
-            results = asyncio.run(_supa.search_address_globally(query, limit=5))
-            addrs = [r.get('address', '') for r in (results or []) if r.get('address')]
-            if addrs:
-                return addrs
-        except Exception:
+            import os, requests
+            supa_url = os.getenv("SUPABASE_URL")
+            supa_key = os.getenv("SUPABASE_KEY")
+            if supa_url and supa_key:
+                headers = {"apikey": supa_key, "Authorization": f"Bearer {supa_key}"}
+                params = {"address": f"ilike.%{query}%", "select": "address", "limit": 5}
+                r = requests.get(f"{supa_url}/rest/v1/properties", headers=headers, params=params, timeout=2)
+                if r.status_code == 200:
+                    addrs = [row.get('address', '') for row in r.json() if row.get('address')]
+                    if addrs:
+                        return addrs
+        except Exception as e:
             pass
 
         # 2. Nominatim fallback (only if DB returned nothing)
@@ -875,6 +881,7 @@ except ImportError:
                                       key="account_input")
 
 async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None, force_fresh_comps=False):
+    equity_results = {}
     try:
         yield {"status": "🔍 Resolver Agent: Locating property and resolving address..."}
         current_account = account_number
@@ -1449,12 +1456,27 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             if flood_data: property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
 
         # Cache-first: Vision analysis
+        import os
         cached_vision = await supabase_service.get_cached_vision(current_account)
         if cached_vision and cached_vision.get('detections') is not None:
             logger.info(f"Using cached vision analysis for {current_account}")
             yield {"status": "📸 Vision Agent: Using cached property condition analysis..."}
             vision_detections = cached_vision.get('detections')
             image_paths = cached_vision.get('image_paths', [])
+            
+            # Verify images exist locally (Streamlit Cloud ephemeral storage clears on reboot)
+            missing_images = [p for p in image_paths if p and not os.path.exists(p) and p != "mock_street_view.jpg"]
+            if missing_images and search_address:
+                logger.info(f"Cached images missing locally. Re-fetching Street View for {search_address}...")
+                yield {"status": "📸 Vision Agent: Restoring Street View images..."}
+                image_paths = await agents["vision_agent"].get_street_view_images(search_address)
+                # Update cache with new paths if they changed (unlikely, but safe)
+                try:
+                    await supabase_service.save_cached_vision(current_account, {
+                        'detections': vision_detections,
+                        'image_paths': image_paths,
+                    })
+                except Exception: pass
         else:
             image_paths = await agents["vision_agent"].get_street_view_images(search_address)
             vision_detections = await agents["vision_agent"].analyze_property_condition(image_paths, property_details)
@@ -2028,7 +2050,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
 
                         for comp in data['equity'].get('equity_5', []):
                             comp_addr = comp.get('address', '')
-                            if not comp_addr or comp_addr == 'Unknown':
+                            # Skip if unknown or if it's the subject property itself
+                            if not comp_addr or comp_addr == 'Unknown' or comp_addr.upper() == subject_addr.upper():
                                 continue
                             # Append district city for better geocoding accuracy
                             comp_upper = comp_addr.upper()
@@ -2216,7 +2239,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
 
                         for sc in sales_comps:
                             sc_addr = sc.get('Address', '')
-                            if not sc_addr:
+                            if not sc_addr or sc_addr.upper() == subject_addr.upper():
                                 continue
                             sc_coords = geocode_address(sc_addr)
                             if sc_coords:
