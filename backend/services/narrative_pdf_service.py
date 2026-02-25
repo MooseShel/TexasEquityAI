@@ -47,6 +47,15 @@ class NarrativeAgent:
         self.openai_llm = None
         self.xai_llm = None
 
+        # File-based debug logger for narrative generation
+        os.makedirs("outputs", exist_ok=True)
+        fh = logging.FileHandler("outputs/narrative_debug.log", mode='a')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(fh)
+
+        logger.info(f"NarrativeAgent init: GEMINI_API_KEY={'SET' if self.gemini_key else 'MISSING'}, OPENAI_API_KEY={'SET' if self.openai_key else 'MISSING'}, XAI_API_KEY={'SET' if self.xai_key else 'MISSING'}")
+
         if self.gemini_key:
             try:
                 self.gemini_client = genai.Client(api_key=self.gemini_key)
@@ -163,19 +172,32 @@ INSTRUCTIONS:
 6. Be factual and professional — this is for an administrative ARB hearing, NOT a judicial court. Do NOT address them as "Your Honor" or "May it please the court". Instead, address them as "Members of the Appraisal Review Board" or similar.
 7. Do NOT include headers, titles, or bullet points — write continuous prose paragraphs only"""
 
-        # Try Gemini first
+        # Try Gemini first (with retry for rate limiting)
         if self.gemini_client:
-            try:
-                response = self.gemini_client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt
-                )
-                narrative = response.text.strip()
-                if narrative and len(narrative) > 100:
-                    logger.info(f"Narrative generated via Gemini ({len(narrative)} chars)")
-                    return clean_text(narrative)
-            except Exception as e:
-                logger.warning(f"Gemini narrative generation failed: {e}")
+            import time
+            for gemini_model in ["gemini-2.0-flash", "gemini-1.5-pro"]:
+                for attempt in range(2):  # 2 attempts per model
+                    try:
+                        response = self.gemini_client.models.generate_content(
+                            model=gemini_model,
+                            contents=prompt
+                        )
+                        narrative = response.text.strip()
+                        if narrative and len(narrative) > 100:
+                            logger.info(f"Narrative generated via Gemini/{gemini_model} ({len(narrative)} chars)")
+                            return clean_text(narrative)
+                        else:
+                            logger.warning(f"Gemini/{gemini_model} returned short/empty response: '{narrative[:80]}...'")
+                            break  # Don't retry on empty response, try next model
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        logger.warning(f"Gemini/{gemini_model} attempt {attempt+1} failed: {type(e).__name__}: {e}")
+                        if 'resource_exhausted' in err_str or '429' in err_str or 'retrydelay' in err_str:
+                            if attempt == 0:
+                                logger.info(f"Gemini rate limited — waiting 25s before retry...")
+                                time.sleep(25)
+                                continue
+                        break  # Non-rate-limit error, try next model
 
         # Try OpenAI
         if self.openai_llm:

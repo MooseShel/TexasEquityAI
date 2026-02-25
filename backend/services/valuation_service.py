@@ -234,12 +234,12 @@ class ValuationService:
 
         return adjustments
 
-    def _parse_year(self, year_val) -> Optional[int]:
-        if not year_val: return None
+    def _parse_year(self, year_val) -> int:
+        if not year_val: return 0
         try:
             return int(str(year_val)[:4])
         except:
-            return None
+            return 0
 
     def get_opinion_of_value(self, subject: Dict, adjusted_comps: List[Dict]) -> Dict:
         """
