@@ -12,6 +12,7 @@ import json
 import asyncio
 import logging
 import requests
+import time
 from PIL import Image
 from dotenv import load_dotenv
 
