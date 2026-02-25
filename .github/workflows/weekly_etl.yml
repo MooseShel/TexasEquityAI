@@ -1,0 +1,33 @@
+name: Weekly HCAD ETL Pipeline
+
+on:
+  schedule:
+    # Run at 2:00 AM CST every Sunday
+    - cron: '0 7 * * 0'
+  workflow_dispatch:
+    # Allow manual triggering from the GitHub Actions UI
+
+jobs:
+  run-etl:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas supabase python-dotenv
+        
+    - name: Run HCAD ETL Pipeline
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      run: |
+        python backend/scripts/hcad_etl_pipeline.py
