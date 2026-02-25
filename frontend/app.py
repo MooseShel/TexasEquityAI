@@ -45,7 +45,7 @@ from backend.agents.anomaly_detector import AnomalyDetectorAgent
 
 st.set_page_config(page_title="Texas Equity AI", page_icon="logo.webp", layout="wide")
 
-st.sidebar.image("logo.webp", use_container_width=True)
+st.sidebar.image("logo.webp", width="stretch")
 
 # ── QR Code / Link Routing (Enhancement #10) ─────────────────────────────────
 # Check if the app is loaded with ?account=XXXXXXXX
@@ -764,7 +764,7 @@ if 'scan_results' in st.session_state:
                 
                 edited_df = st.data_editor(
                     display_df, 
-                    use_container_width=True, 
+                    width='stretch', 
                     hide_index=True,
                     disabled=[c for c in display_df.columns if c != '🚀 Protest'], # Only the checkbox is editable
                     column_config={
@@ -786,7 +786,7 @@ if 'scan_results' in st.session_state:
         st.divider()
         c_left, c_mid, c_right = st.columns([1,2,1])
         with c_mid:
-            if st.button("⬅️ Back to Home (Clear Scan Results)", use_container_width=True, type="secondary"):
+            if st.button("⬅️ Back to Home (Clear Scan Results)", type="secondary"):
                 del st.session_state['scan_results']
                 st.rerun()
 
@@ -1050,6 +1050,22 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             property_details['property_type'] = ptype.lower()
         if ptype_source != "Unknown" and 'ptype_source' not in property_details:
             property_details['ptype_source'] = ptype_source
+
+        # ── Enrich missing fields from RentCast if available ──────────────────
+        # HCAD scraper doesn't provide beds/baths, and DB cache may be missing year_built/land_area.
+        # RentCast data (fetched during address resolution) fills these gaps.
+        if rentcast_fallback_data and isinstance(rentcast_fallback_data, dict):
+            rc = rentcast_fallback_data.get('rentcast_data') or rentcast_fallback_data
+            enrich_map = {
+                'year_built': rc.get('yearBuilt'),
+                'bedrooms': rc.get('bedrooms'),
+                'bathrooms': rc.get('bathrooms'),
+                'land_area': rc.get('lotSize'),
+            }
+            for key, val in enrich_map.items():
+                if val and not property_details.get(key):
+                    property_details[key] = val
+                    logger.debug(f"Enriched property_details['{key}'] = {val} from RentCast")
 
         raw_addr = property_details.get('address', '')
         district_context = property_details.get('district', 'HCAD')
@@ -1463,42 +1479,49 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         if annotated_paths:
             image_path = annotated_paths[0]
 
-        # ── AI Comp Photo Comparison (Enhancement #1) ────────────────────────
-        comp_images = None
-        equity_comps = equity_results.get('equity_5', []) if isinstance(equity_results, dict) else []
-        if equity_comps and image_paths:
-            yield {"status": "🔍 AI Condition Analyst: Comparing property conditions across comps..."}
-            try:
-                comp_images = await agents["vision_agent"].fetch_comp_images(
-                    subject_address=search_address,
-                    subject_image_path=image_path,
-                    comparables=equity_comps,
-                    max_comps=5
-                )
-                n_fetched = len([k for k in (comp_images or {}) if not k.endswith('_condition') and k != 'subject'])
-                logger.info(f"Comp photo comparison: {n_fetched} comp images fetched + analyzed")
-            except Exception as e:
-                logger.warning(f"Comp photo comparison failed (non-fatal): {e}")
-                comp_images = None
-
-        # ── Condition Delta Scoring ────────────────────────────────────────
+        # ── AI Comp Photo Comparison & Condition Delta Scoring ────────────────────────
+        comp_images = {}
         try:
+            import asyncio as _asyncio
             from backend.services.condition_delta_service import enrich_comps_with_condition
             equity_comps_cd = equity_results.get('equity_5', []) if isinstance(equity_results, dict) else []
             if equity_comps_cd and image_path and image_path != "mock_street_view.jpg":
-                yield {"status": "📸 Condition Delta: Scoring subject vs comp conditions..."}
+                yield {"status": "📸 AI Condition Analyst: Analyzing subject and comp conditions in parallel..."}
+                
+                comp_images['subject'] = image_path
+                
+                # Fetch and score all comps in parallel with a 60s safety timeout
                 property_details['vision_detections'] = vision_detections
-                delta_result = await enrich_comps_with_condition(
-                    property_details, equity_comps_cd,
-                    agents["vision_agent"], subject_image_path=image_path
+                delta_result = await _asyncio.wait_for(
+                    enrich_comps_with_condition(
+                        property_details, equity_comps_cd,
+                        agents["vision_agent"], subject_image_path=image_path
+                    ),
+                    timeout=60
                 )
+                
                 if delta_result:
                     equity_results['condition_delta'] = delta_result
                     delta_val = delta_result.get('condition_delta', 0)
                     if delta_val < -1:
                         yield {"status": f"📸 Condition Delta: Subject in worse condition (Δ={delta_val:.1f})"}
+                    
+                    # Extract subject condition summary from the delta result
+                    subj_score = delta_result.get('subject_condition_score', 6)
+                    score_labels = {10: 'Excellent', 8: 'Very Good', 7: 'Good', 6: 'Average', 5: 'Fair', 4: 'Below Average', 3: 'Poor', 2: 'Very Poor', 1: 'Condemned'}
+                    comp_images['subject_condition'] = score_labels.get(subj_score, 'Average') + ' condition.'
+                    
+                    # Map the parallel results straight to the PDF comp_images format!
+                    for cc in delta_result.get('comp_conditions', []):
+                        addr = cc.get('address')
+                        if addr and cc.get('image_path'):
+                            comp_images[addr] = cc['image_path']
+                            comp_images[f"{addr}_condition"] = cc.get('summary', 'Condition analysis unavailable.')
+                            
+        except _asyncio.TimeoutError:
+            logger.warning("Condition delta timed out after 60s — skipping (non-fatal)")
         except Exception as cd_err:
-            logger.warning(f"Condition delta failed (non-fatal): {cd_err}")
+            logger.warning(f"Condition delta / photo comparison failed (non-fatal): {cd_err}")
 
         # ── Predictive Savings Estimation ─────────────────────────────────
         try:
@@ -1724,7 +1747,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             <div class="prop-grid">
                                 <div class="prop-grid-item">
                                     <label>Year Built</label>
-                                    <div class="value">{prop.get('year_built', 'N/A')}</div>
+                                    <div class="value">{prop.get('year_built') or 'N/A'}</div>
                                 </div>
                                 <div class="prop-grid-item">
                                     <label>Building Area</label>
@@ -1732,11 +1755,11 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 </div>
                                 <div class="prop-grid-item">
                                     <label>Lot Size</label>
-                                    <div class="value">{f"{prop.get('land_area_acres', 0):.2f} acres" if prop.get('land_area_acres') else 'N/A'}</div>
+                                    <div class="value">{f"{float(prop.get('land_area', 0)) / 43560:.2f} acres" if prop.get('land_area') and float(prop.get('land_area', 0)) > 0 else (f"{prop.get('land_area_acres', 0):.2f} acres" if prop.get('land_area_acres') else 'N/A')}</div>
                                 </div>
                                 <div class="prop-grid-item">
                                     <label>Beds / Baths</label>
-                                    <div class="value">{prop.get('bedrooms', '-')} / {prop.get('bathrooms', '-')}</div>
+                                    <div class="value">{prop.get('bedrooms') or prop.get('beds', '-')} / {prop.get('bathrooms') or prop.get('baths', '-')}</div>
                                 </div>
                                 <div class="prop-grid-item">
                                     <label>Property Type</label>
@@ -1872,7 +1895,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                         xaxis_type='category'
                                     )
                                     fig.update_traces(hovertemplate="%{y:$,.0f}")
-                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.plotly_chart(fig)
                 with tab_comps:
                     st.subheader("⚖️ Equity Analysis")
                     equity_has_data = data['equity'] and (
@@ -2041,7 +2064,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 initial_view_state=view_state,
                                 tooltip=tooltip,
                                 map_style=None,
-                            ), use_container_width=True)
+                            ))
 
 
                             # Legend
@@ -2225,7 +2248,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 initial_view_state=view_state,
                                 tooltip=tooltip,
                                 map_style=None,
-                            ), use_container_width=True)
+                            ))
 
                             st.caption("🔴 Subject Property &nbsp;&nbsp; 🟢 Sales Comparables")
                         else:

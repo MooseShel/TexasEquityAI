@@ -34,17 +34,108 @@ class EquityAgent:
             
         logger.info(f"EquityAgent: Executing city-wide pgvector search for {subject_property.get('account_number')}...")
         
-        # 1. Fetch the absolute closest 20 physical matches from the entire database
-        top_20 = vector_store.find_similar_properties(subject_property, limit=20)
+        subj_nbhd = str(subject_property.get('neighborhood_code', '')).strip()
         
-        if not top_20 or len(top_20) < 3:
-            logger.warning(f"Vector search returned insufficient matches ({len(top_20)}). Returning baseline.")
+        # TWO-PASS NEIGHBORHOOD PREFERENCE STRATEGY
+        # 1. Fetch a wider pool (40 matches) from the entire database
+        # 2. Partition into same-neighborhood (local) vs city-wide pools
+        # 3. Prefer local comps; fill remaining slots from city-wide
+        #
+        # ARB panels strongly prefer same-neighborhood comparables. This approach
+        # ensures we prioritize local comps while maintaining a fallback for
+        # neighborhoods with sparse data coverage.
+        
+        wide_pool = vector_store.find_similar_properties(subject_property, limit=40)
+        
+        if not wide_pool or len(wide_pool) < 3:
+            logger.warning(f"Vector search returned insufficient matches ({len(wide_pool) if wide_pool else 0}). Returning baseline.")
             return {
-                'equity_5': top_20,
+                'equity_5': wide_pool or [],
                 'justified_value_floor': subj_val,
                 'subject_value_per_sqft': subj_pps,
                 'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
             }
+        
+        # Partition into local (same neighborhood) and city-wide pools
+        local_pool = []
+        citywide_pool = []
+        
+        # Extract base neighborhood code (e.g., '8014' from '8014.00') to treat
+        # sub-groupings as the same local neighborhood.
+        subj_base_nbhd = subj_nbhd.split('.')[0] if subj_nbhd else ''
+        
+        for comp in wide_pool:
+            comp_nbhd = str(comp.get('neighborhood_code', '')).strip()
+            comp_base_nbhd = comp_nbhd.split('.')[0] if comp_nbhd else ''
+            
+            if subj_base_nbhd and comp_base_nbhd == subj_base_nbhd:
+                comp['comp_source'] = 'local'
+                local_pool.append(comp)
+            else:
+                comp['comp_source'] = 'city-wide'
+                citywide_pool.append(comp)
+        
+        logger.info(f"EquityAgent: Neighborhood preference split — {len(local_pool)} local ({subj_nbhd}), {len(citywide_pool)} city-wide")
+        
+        # AGE-PROXIMITY FILTER: Reject comps with year_built >20 years from subject
+        # ARB panels dismiss comps from a completely different era (e.g., 1940s vs 2018)
+        subj_year = 0
+        try:
+            subj_year = int(str(subject_property.get('year_built') or 0)[:4])
+        except (ValueError, TypeError):
+            pass
+        
+        MAX_YEAR_GAP = 20  # years
+        
+        def filter_by_age(pool):
+            """Filter comps by age proximity. Keeps age-compatible comps first, then appends distant ones as fallback."""
+            if not subj_year or subj_year < 1900:
+                return pool  # Can't filter without subject year
+            
+            age_compatible = []
+            age_distant = []
+            for comp in pool:
+                comp_year = 0
+                try:
+                    comp_year = int(str(comp.get('year_built') or 0)[:4])
+                except (ValueError, TypeError):
+                    pass
+                
+                if comp_year and comp_year > 1900 and abs(comp_year - subj_year) > MAX_YEAR_GAP:
+                    age_distant.append(comp)
+                    logger.debug(f"  Age filter: {comp.get('address', '?')} built {comp_year} (gap={abs(comp_year - subj_year)}yr) — demoted")
+                else:
+                    age_compatible.append(comp)
+            
+            if age_distant:
+                logger.info(f"EquityAgent: Age filter demoted {len(age_distant)} comps with >{MAX_YEAR_GAP}yr gap from subject (built {subj_year})")
+            
+            return age_compatible + age_distant  # Compatible first, distant as fallback
+        
+        local_pool = filter_by_age(local_pool)
+        citywide_pool = filter_by_age(citywide_pool)
+        
+        # Select: prefer local comps; only use city-wide if local pool is insufficient
+        # ARB panels strongly prefer same-neighborhood comps — city-wide comps from 
+        # Pasadena/Cypress etc. weaken the argument. Only use them as a last resort.
+        MIN_LOCAL_THRESHOLD = 5  # If we have ≥5 local, skip city-wide entirely
+        TARGET_COMPS = 10
+        MAX_LOCAL = 10
+        
+        selected = local_pool[:MAX_LOCAL]
+        
+        if len(selected) < MIN_LOCAL_THRESHOLD:
+            # Not enough local comps — fill with city-wide
+            remaining_slots = TARGET_COMPS - len(selected)
+            if remaining_slots > 0:
+                selected.extend(citywide_pool[:remaining_slots])
+                logger.info(f"EquityAgent: Only {len(local_pool)} local comps — filling {min(remaining_slots, len(citywide_pool))} from city-wide pool")
+        else:
+            logger.info(f"EquityAgent: {len(selected)} local comps available — skipping city-wide pool entirely")
+        
+        top_20 = selected
+        logger.info(f"EquityAgent: Final selection: {len([c for c in top_20 if c.get('comp_source') == 'local'])} local + "
+                     f"{len([c for c in top_20 if c.get('comp_source') == 'city-wide'])} city-wide comps")
 
         # 2. Add 'value_per_sqft' to each comp and filter out bad data
         valid_comps = []

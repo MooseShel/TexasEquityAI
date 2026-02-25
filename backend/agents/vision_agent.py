@@ -75,7 +75,7 @@ class VisionAgent:
         try:
             url = "https://maps.googleapis.com/maps/api/geocode/json"
             params = {"address": address, "key": self.google_api_key}
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 if data["status"] == "OK":
@@ -148,6 +148,7 @@ class VisionAgent:
             return []
 
     async def _fetch_single_image(self, location: str, slug: str, suffix: str, heading: Optional[float] = None) -> Optional[str]:
+        import asyncio
         params = {
             "size": "1024x768", # Higher resolution for better Gemini analysis
             "location": location,
@@ -161,7 +162,9 @@ class VisionAgent:
             
         url = "https://maps.googleapis.com/maps/api/streetview"
         try:
-            response = requests.get(url, params=params)
+            def _do_fetch():
+                return requests.get(url, params=params, timeout=15)
+            response = await asyncio.to_thread(_do_fetch)
             if response.status_code == 200:
                 path = f"data/{slug}_{suffix}.jpg"
                 with open(path, 'wb') as f:
@@ -256,6 +259,7 @@ class VisionAgent:
              return []
 
         # 1. Try OpenAI (GPT-4o) - PRIMARY (best structured image analysis)
+        import asyncio
         if self.openai_client:
             try:
                 logger.info("Attempting Vision analysis with OpenAI GPT-4o (Primary)...")
@@ -281,12 +285,15 @@ class VisionAgent:
                         logger.error(f"Failed to encode image {p}: {img_err}")
 
                 if valid_images:
-                    response = self.openai_client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=messages,
-                        max_tokens=2000,
-                        response_format={"type": "json_object"}
-                    )
+                    def _run_openai_full():
+                        return self.openai_client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=messages,
+                            max_tokens=2000,
+                            response_format={"type": "json_object"}
+                        )
+                    
+                    response = await asyncio.to_thread(_run_openai_full)
                     content = response.choices[0].message.content
 
                     # Guard: model may return None content on refusal or API error
@@ -300,7 +307,7 @@ class VisionAgent:
                                 for key, value in data.items():
                                     if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
                                         return value
-                                return []
+                                    return []
                             elif isinstance(data, list):
                                 return data
                         except json.JSONDecodeError:
@@ -318,10 +325,12 @@ class VisionAgent:
                     logger.info(f"Attempting Vision analysis with Gemini (attempt {attempt + 1})...")
                     imgs = [Image.open(p) for p in image_paths_existing]
                     if imgs:
-                        response = self.gemini_client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=[prompt] + imgs
-                        )
+                        def _run_gemini_full():
+                            return self.gemini_client.models.generate_content(
+                                model='gemini-2.0-flash',
+                                contents=[prompt] + imgs
+                            )
+                        response = await asyncio.to_thread(_run_gemini_full)
                         return self._parse_json_response(response.text)
                 except Exception as e:
                     error_str = str(e)
@@ -330,7 +339,7 @@ class VisionAgent:
                         # Transient rate limit — worth a retry
                         delay = retries[attempt]
                         logger.warning(f"Gemini 429 rate limit — retrying in {delay}s (attempt {attempt + 1})...")
-                        time.sleep(delay)
+                        await asyncio.sleep(delay)
                     else:
                         if is_quota_exhausted:
                             logger.error(f"Gemini quota exhausted (RESOURCE_EXHAUSTED) — skipping retries, falling back to Grok.")
@@ -363,11 +372,14 @@ class VisionAgent:
                     except: pass
 
                 if valid_images:
-                    response = self.xai_client.chat.completions.create(
-                        model="grok-2-vision-latest",
-                        messages=messages,
-                        max_tokens=2000
-                    )
+                    def _run_xai_full():
+                        return self.xai_client.chat.completions.create(
+                            model="grok-2-vision-latest",
+                            messages=messages,
+                            max_tokens=2000
+                        )
+                    
+                    response = await asyncio.to_thread(_run_xai_full)
                     return self._parse_json_response(response.choices[0].message.content)
             except Exception as e:
                 logger.warning(f"xAI Vision failed: {e}.")
@@ -496,20 +508,25 @@ class VisionAgent:
         )
 
         # 1. Try OpenAI (fastest and cheapest for short responses)
+        import asyncio
         if self.openai_client:
             try:
                 base64_image = self._encode_image(image_path)
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                        ]
-                    }],
-                    max_tokens=150
-                )
+                
+                def _run_openai():
+                    return self.openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                            ]
+                        }],
+                        max_tokens=150
+                    )
+                
+                response = await asyncio.to_thread(_run_openai)
                 content = response.choices[0].message.content
                 if content:
                     return content.strip()
@@ -520,10 +537,14 @@ class VisionAgent:
         if self.gemini_client:
             try:
                 img = Image.open(image_path)
-                response = self.gemini_client.models.generate_content(
-                    model='gemini-2.0-flash',
-                    contents=[prompt, img]
-                )
+                
+                def _run_gemini():
+                    return self.gemini_client.models.generate_content(
+                        model='gemini-2.0-flash',
+                        contents=[prompt, img]
+                    )
+                    
+                response = await asyncio.to_thread(_run_gemini)
                 if response.text:
                     return response.text.strip()
             except Exception as e:
@@ -533,17 +554,21 @@ class VisionAgent:
         if self.xai_client:
             try:
                 base64_image = self._encode_image(image_path)
-                response = self.xai_client.chat.completions.create(
-                    model="grok-2-vision-latest",
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                        ]
-                    }],
-                    max_tokens=150
-                )
+                
+                def _run_xai():
+                    return self.xai_client.chat.completions.create(
+                        model="grok-2-vision-latest",
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                            ]
+                        }],
+                        max_tokens=150
+                    )
+                
+                response = await asyncio.to_thread(_run_xai)
                 content = response.choices[0].message.content
                 if content:
                     return content.strip()

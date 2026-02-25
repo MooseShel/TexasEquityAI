@@ -79,11 +79,11 @@ def geocode_google(address: str) -> Optional[Dict[str, float]]:
 
 
 def geocode(address: str) -> Optional[Dict[str, float]]:
-    """Geocode with Nominatim first, Google fallback."""
-    result = geocode_nominatim(address)
+    """Geocode with Google first (fast, no rate limit), Nominatim fallback."""
+    result = geocode_google(address)
     if result:
         return result
-    return geocode_google(address)
+    return geocode_nominatim(address)
 
 
 # ── Distance ──────────────────────────────────────────────────────────────────
@@ -135,8 +135,9 @@ def enrich_comps_with_distance(
         else:
             comp["distance_mi"] = None
 
-        # Nominatim rate limit: 1 req/sec
-        time.sleep(1.0)
+        # Only sleep for Nominatim fallback (Google has no rate limit)
+        if not os.getenv("GOOGLE_STREET_VIEW_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
+            time.sleep(1.0)
 
     # Add distance rank (1 = closest)
     ranked = sorted(

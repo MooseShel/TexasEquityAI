@@ -22,7 +22,7 @@ class SupabaseService:
         if self.url and self.key:
             try:
                 self.client: Client = create_client(self.url, self.key)
-                logger.info("Supabase client initialized successfully.")
+                logger.debug("Supabase client initialized successfully.")
             except Exception as e:
                 logger.error(f"Supabase client initialization failed: {e}. Database operations will be disabled.")
                 self.client = None
@@ -299,6 +299,46 @@ class SupabaseService:
 
     async def save_cached_sales(self, account_number: str, sales_data: list):
         await self._save_cached_field(account_number, "sales_cache", "sales_fetched_at", sales_data)
+
+    async def save_sales_comparables(self, account_number: str, protest_id: str, comps: list):
+        """
+        Saves individual sales comparables to the sales_comparables table for analytics and UI history.
+        """
+        if not self.client or not comps: return
+        try:
+            # Delete any existing sales comps for this account to prevent duplicates
+            self.client.table("sales_comparables").delete().eq("account_number", account_number).execute()
+            
+            records = []
+            for comp in comps:
+                # Ensure it's a dict
+                comp_dict = comp if isinstance(comp, dict) else comp.model_dump()
+                records.append({
+                    "account_number": account_number,
+                    "protest_id": protest_id,
+                    "address": comp_dict.get("address"),
+                    "sale_price": comp_dict.get("sale_price"),
+                    "sale_date": comp_dict.get("sale_date") or None,
+                    "sqft": comp_dict.get("sqft"),
+                    "price_per_sqft": comp_dict.get("price_per_sqft"),
+                    "year_built": comp_dict.get("year_built"),
+                    "source": comp_dict.get("source", "RentCast"),
+                    "dist_from_subject": comp_dict.get("distance", comp_dict.get("dist_from_subject")),
+                    "similarity_score": comp_dict.get("similarity", comp_dict.get("similarity_score")),
+                    "property_type": comp_dict.get("property_type")
+                })
+            
+            if records:
+                result = self.client.table("sales_comparables").insert(records).execute()
+                # Supabase Python client returns a data object, errors usually raise exceptions. 
+                # But just in case, we check if it returned empty data when it shouldn't have.
+                if hasattr(result, 'data') and len(result.data) == len(records):
+                    logger.info(f"✅ Saved {len(records)} comp rows to sales_comparables for {account_number}.")
+                else:
+                    logger.warning(f"⚠️ sales_comparables insert returned unexpected result: {result}")
+        except Exception as e:
+            logger.error(f"❌ save_sales_comparables failed entirely: {e}")
+
 
     # ── FEMA Flood Zone Cache (365-day TTL) ───────────────────────────────
     async def get_cached_flood(self, account_number: str):

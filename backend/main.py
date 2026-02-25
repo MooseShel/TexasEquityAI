@@ -240,7 +240,14 @@ async def get_full_protest(
                 
                 # Use cached data directly if it has REAL content — skip scraper entirely
                 # Ghost/placeholder records (appraised=450k, area=2500, no year/nbhd) are rejected
+                # Also reject stale records missing key enrichment fields (valuation_history, year_built)
+                has_enrichment = (
+                    cached_property.get('valuation_history') 
+                    and cached_property.get('year_built')
+                ) if cached_property else False
+                
                 if (cached_property
+                        and has_enrichment
                         and cached_property.get('address')
                         and cached_property.get('appraised_value')
                         and cached_property.get('neighborhood_code')
@@ -427,14 +434,29 @@ async def get_full_protest(
 
             # 4. Sales Comparison Analysis (Independent of Equity)
             print("DEBUG: Executing Sales Analysis Block in Main...")
-            yield json.dumps({"status": "💰 Sales Agent: Fetching recent sales comparables..."}) + "\n"
-            logger.info("Main: Calling get_sales_analysis...")
-            try:
-                sales_results = equity_engine.get_sales_analysis(property_details)
-                print(f"DEBUG: get_sales_analysis result type: {type(sales_results)}")
-            except Exception as e:
-                print(f"DEBUG: get_sales_analysis CRASHED: {e}")
-                sales_results = None
+            
+            cached_sales = await supabase_service.get_cached_sales(current_account)
+            sales_results = None
+            
+            if cached_sales:
+                yield json.dumps({"status": "💰 Sales Agent: Loaded recent sales comparables from cache..."}) + "\n"
+                logger.info(f"Main: Loaded {len(cached_sales)} sales comps from cache.")
+                sales_results = {
+                    "sales_comps": cached_sales,
+                    "sales_count": len(cached_sales)
+                }
+            else:
+                yield json.dumps({"status": "💰 Sales Agent: Fetching recent sales comparables..."}) + "\n"
+                logger.info("Main: Calling get_sales_analysis...")
+                try:
+                    sales_results = equity_engine.get_sales_analysis(property_details)
+                    print(f"DEBUG: get_sales_analysis result type: {type(sales_results)}")
+                    
+                    if sales_results and sales_results.get('sales_comps'):
+                        await supabase_service.save_cached_sales(current_account, sales_results.get('sales_comps', []))
+                except Exception as e:
+                    print(f"DEBUG: get_sales_analysis CRASHED: {e}")
+                    sales_results = None
                 
             equity_results = {} # Initialize early
             if sales_results:
@@ -728,21 +750,30 @@ async def get_full_protest(
             # FEMA Check
             flood_data = None
             if coords:
-                flood_data = await fema_agent.get_flood_zone(coords['lat'], coords['lng'])
-                if flood_data:
+                cached_flood = await supabase_service.get_cached_flood(current_account)
+                if cached_flood:
+                    flood_data = cached_flood
                     property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
+                else:
+                    flood_data = await fema_agent.get_flood_zone(coords['lat'], coords['lng'])
+                    if flood_data:
+                        property_details['flood_zone'] = flood_data.get('zone', 'Zone X')
+                        await supabase_service.save_cached_flood(current_account, flood_data)
             
             # Vision Analysis
             yield json.dumps({"status": "📸 Vision Agent: Analyzing property condition..."}) + "\n"
             # Use the cleaned search_address for vision acquisition
             image_paths = await vision_agent.get_street_view_images(search_address)
             
-            # Check Vision Cache first (the agent also checks, but we log it here if it's instant)
+            # Check Vision Cache first
             cached_vision = await supabase_service.get_cached_vision(current_account)
             if cached_vision:
                 yield json.dumps({"status": "📸 Vision Agent: Using cached property condition analysis..."}) + "\n"
-            
-            vision_detections = await vision_agent.analyze_property_condition(image_paths, property_details)
+                vision_detections = cached_vision
+            else:
+                vision_detections = await vision_agent.analyze_property_condition(image_paths, property_details)
+                if vision_detections:
+                    await supabase_service.save_cached_vision(current_account, vision_detections)
             
             yield json.dumps({"status": "🔍 AI Condition Analyst: Comparing property conditions across comps..."}) + "\n"
             
@@ -868,6 +899,19 @@ async def get_full_protest(
                                 logger.info(f"✅ Saved {len(clean_comps)} equity comps.")
                             except Exception as e:
                                 logger.error(f"Failed to save equity comps: {e}")
+                                
+                        # Save the sales comps if they exist
+                        if equity_results.get('sales_comps'):
+                            try:
+                                logger.info(f"Saving {len(equity_results['sales_comps'])} sales comps to DB...")
+                                await supabase_service.save_sales_comparables(
+                                    current_account, 
+                                    saved_protest['id'], 
+                                    equity_results['sales_comps']
+                                )
+                                logger.info(f"✅ Saved {len(equity_results['sales_comps'])} sales comps.")
+                            except Exception as e:
+                                logger.error(f"Failed to save sales comps: {e}")
                     else:
                         logger.warning("Failed to save protest record (no ID returned).")
 

@@ -61,8 +61,16 @@ class HCADScraper(AppraisalDistrictConnector):
                 has_year       = bool(cached.get('year_built'))
                 has_nbhd       = bool(cached.get('neighborhood_code'))
                 if has_real_value or has_year or has_nbhd or has_real_area:
-                    logger.info(f"HCAD: Returning bulk-data record for {account_number} (no scraping needed).")
-                    return cached
+                    # Cache freshness: if key enrichment fields are missing, force re-scrape to self-heal
+                    missing_fields = []
+                    if not cached.get('year_built'): missing_fields.append('year_built')
+                    if not cached.get('building_grade'): missing_fields.append('building_grade')
+                    if not cached.get('land_area'): missing_fields.append('land_area')
+                    if missing_fields and (has_real_value or has_real_area):
+                        logger.info(f"HCAD: Cache hit but missing {missing_fields} — forcing re-scrape to enrich.")
+                    else:
+                        logger.info(f"HCAD: Returning bulk-data record for {account_number} (no scraping needed).")
+                        return cached
                 else:
                     logger.warning(f"HCAD: Supabase record for {account_number} looks like a ghost/placeholder (appraised={cached.get('appraised_value')}, year={cached.get('year_built')}) — skipping cache, forcing scrape.")
         except Exception as e:

@@ -5,10 +5,16 @@ the Vision Agent's quick_condition_summary() method.
 
 Produces a numeric delta: negative = subject in worse shape than comps,
 which supports a §23.01 depreciation argument.
+
+Uses ThreadPoolExecutor for TRUE parallel execution that works in
+both FastAPI and Streamlit event loops.
 """
 
 import logging
 import re
+import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -84,6 +90,86 @@ def compute_delta(subject_score: int, comp_scores: List[int]) -> Dict:
     }
 
 
+def _score_comp_sync(comp: Dict, vision_agent) -> Optional[Dict]:
+    """
+    Synchronous worker that scores a single comp.
+    Runs in a ThreadPoolExecutor thread — no asyncio needed.
+    """
+    addr = comp.get('address', '')
+    if not addr:
+        return None
+    try:
+        # get_comp_street_view checks local cache first, then fetches via requests.get
+        slug = addr.replace(' ', '_').replace(',', '').replace('.', '')[:60]
+        cached_path = f"data/comp_{slug}_front.jpg"
+
+        if os.path.exists(cached_path) and os.path.getsize(cached_path) > 5000:
+            img = cached_path
+            logger.info(f"Comp Street View cache hit: {img}")
+        else:
+            # Fetch synchronously (we're already in a thread)
+            import requests
+            os.makedirs("data", exist_ok=True)
+            params = {
+                "size": "1024x768",
+                "location": addr,
+                "key": vision_agent.google_api_key,
+                "fov": 80, "pitch": 0, "source": "outdoor"
+            }
+            resp = requests.get(
+                "https://maps.googleapis.com/maps/api/streetview",
+                params=params, timeout=15
+            )
+            if resp.status_code != 200 or len(resp.content) < 5000:
+                logger.warning(f"ConditionDelta: Street View failed for {addr}")
+                return None
+            img = cached_path
+            with open(img, 'wb') as f:
+                f.write(resp.content)
+
+        # Run quick condition via OpenAI (synchronous call — fine in thread)
+        import base64
+        if not vision_agent.openai_client:
+            return None
+
+        with open(img, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode('utf-8')
+
+        prompt = (
+            "You are a property appraiser. Look at this Street View image and provide a "
+            "brief 1-2 sentence condition assessment. Focus on: roof condition, paint/siding, "
+            "driveway, landscaping, and overall maintenance level. Be specific about what you see. "
+            "Rate overall condition as: Excellent, Good, Fair, or Poor. "
+            "Return ONLY the text summary, no JSON or formatting."
+        )
+
+        response = vision_agent.openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                ]
+            }],
+            max_tokens=150,
+            timeout=30
+        )
+        summary = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
+        score = score_condition_text(summary)
+
+        return {
+            "account_number": comp.get('account_number', ''),
+            "address": addr,
+            "score": score,
+            "summary": summary,
+            "image_path": img,
+        }
+    except Exception as e:
+        logger.warning(f"ConditionDelta: Scoring failed for {addr}: {e}")
+        return None
+
+
 async def enrich_comps_with_condition(
     subject_data: Dict,
     equity_5: List[Dict],
@@ -94,12 +180,11 @@ async def enrich_comps_with_condition(
     Orchestrates condition delta scoring:
     1. Extract subject condition_score from existing vision analysis
     2. Fetch comp Street View images
-    3. Run quick_condition_summary on each comp
+    3. Run quick_condition_summary on each comp (TRUE PARALLEL via ThreadPoolExecutor)
     4. Compute delta
 
     Returns enrichment dict to merge into equity_results.
     """
-    import asyncio
 
     # 1. Get subject condition score
     subject_score = None
@@ -124,40 +209,41 @@ async def enrich_comps_with_condition(
         subject_score = 6  # Default to "Average" if we can't determine
         logger.info("ConditionDelta: Using default subject score of 6 (Average)")
 
-    # 2. Score comps (fetch images + quick analysis)
+    # 2. Score comps using ThreadPoolExecutor for TRUE parallelism
+    #    This bypasses asyncio entirely — works in both FastAPI and Streamlit
     comp_conditions = []
     comp_scores = []
+    comps_to_score = equity_5[:5]
 
-    async def _score_comp(comp):
-        addr = comp.get('address', '')
-        if not addr:
-            return None
-        try:
-            img = await vision_agent.get_comp_street_view(addr)
-            if not img:
-                return None
-            summary = await vision_agent.quick_condition_summary(img)
-            score = score_condition_text(summary)
-            return {
-                "account_number": comp.get('account_number', ''),
-                "address": addr,
-                "score": score,
-                "summary": summary,
-                "image_path": img,
-            }
-        except Exception as e:
-            logger.warning(f"ConditionDelta: Scoring failed for {addr}: {e}")
-            return None
+    logger.info(f"ConditionDelta: Scoring {len(comps_to_score)} comps in parallel via ThreadPoolExecutor...")
 
-    # Run comp scoring — limit to 5 comps, sequential to avoid rate limits
-    for comp in equity_5[:5]:
-        result = await _score_comp(comp)
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {
+            executor.submit(_score_comp_sync, comp, vision_agent): i
+            for i, comp in enumerate(comps_to_score)
+        }
+        # Wait for all futures with a 45-second timeout
+        results = {}
+        for future in as_completed(futures, timeout=45):
+            idx = futures[future]
+            try:
+                results[idx] = future.result()
+            except Exception as e:
+                logger.warning(f"ConditionDelta: Comp {idx} thread failed: {e}")
+                results[idx] = None
+
+    # Process results in order
+    for i in range(len(comps_to_score)):
+        result = results.get(i)
         if result and result.get('score') is not None:
             comp_conditions.append(result)
             comp_scores.append(result['score'])
             # Attach score to the comp dict for PDF rendering
-            comp['condition_score'] = result['score']
-            comp['condition_summary'] = result.get('summary', '')
+            equity_5[i]['condition_score'] = result['score']
+            equity_5[i]['condition_summary'] = result.get('summary', '')
+
+    logger.info(f"ConditionDelta: Successfully scored {len(comp_conditions)}/{len(comps_to_score)} comps")
 
     # 3. Compute delta
     delta_result = compute_delta(subject_score, comp_scores)
