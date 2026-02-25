@@ -1081,7 +1081,7 @@ class PDFService:
         total_score = min(100, score_equity + score_sales + score_condition + score_flood + score_permits)
 
         # ── ML Win Probability (preferred) or heuristic fallback ──────────
-        ml_pred = equity_results.get('ml_prediction', {}) if equity_results else {}
+        ml_pred = equity_data.get('ml_prediction', {}) if equity_data else {}
         if ml_pred and ml_pred.get('win_probability'):
             ml_prob = ml_pred['win_probability']
             win_prob = ml_pred.get('win_probability_pct', f"{ml_prob:.0%}")

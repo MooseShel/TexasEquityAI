@@ -108,6 +108,7 @@ async def get_full_protest(
     async def protest_generator():
         print("DEBUG: protest_generator STARTED!")
         try:
+            equity_results = {} # Global initialization to prevent NameError
             yield json.dumps({"status": "🔍 Resolver Agent: Locating property and resolving address..."}) + "\n"
             
             # 0. Fast DB Address Resolution (Cost-saving optimization)
@@ -458,7 +459,7 @@ async def get_full_protest(
                     print(f"DEBUG: get_sales_analysis CRASHED: {e}")
                     sales_results = None
                 
-            equity_results = {} # Initialize early
+
             if sales_results:
                 count = sales_results.get('sales_count', 0)
                 logger.info(f"Main: get_sales_analysis returned {count} comps.")

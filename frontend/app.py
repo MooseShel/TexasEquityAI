@@ -822,9 +822,12 @@ try:
                 if r.status_code == 200:
                     addrs = [row.get('address', '') for row in r.json() if row.get('address')]
                     if addrs:
+                        logger.info(f"Autocomplete [DB] hit: {len(addrs)} results for '{query}'")
                         return addrs
+                else:
+                    logger.warning(f"Autocomplete [DB] status {r.status_code}: {r.text}")
         except Exception as e:
-            pass
+            logger.error(f"Autocomplete [DB] error: {e}")
 
         # 2. Nominatim fallback (only if DB returned nothing)
         try:
@@ -2057,6 +2060,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             comp_upper = comp_addr.upper()
                             comp_has_state = any(s in comp_upper for s in [', TX', ',TX', ' TX ','TEXAS', 'HOUSTON', 'DALLAS', 'FORT WORTH', 'AUSTIN', 'PLANO'])
                             full_addr = comp_addr if comp_has_state else f"{comp_addr}, {city_suffix}"
+                            # Throttle to avoid Nominatim 429 Too Many Requests
+                            time.sleep(1.2)
                             coords = geocode_address(full_addr)
                             if coords:
                                 map_points.append({
@@ -2241,6 +2246,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             sc_addr = sc.get('Address', '')
                             if not sc_addr or sc_addr.upper() == subject_addr.upper():
                                 continue
+                            time.sleep(1.2) # Nominatim throttle
                             sc_coords = geocode_address(sc_addr)
                             if sc_coords:
                                 sales_map_points.append({
