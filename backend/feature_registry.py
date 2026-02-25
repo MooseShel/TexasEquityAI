@@ -103,6 +103,10 @@ FEATURES = [
      "short": "Geocoding + external obsolescence detection",
      "detail": "Nominatim + Google geocoding, haversine distance, and external obsolescence detection (highways, industrial, commercial, power infrastructure)."},
 
+    {"name": "Neighborhood Crime Intelligence", "category": "enrichment", "tier": 2, "status": "live",
+     "short": "OpenData API real-time crime radius search",
+     "detail": "Live API integration (e.g. SODA API) checks violent/property crime incidents within a 0.5-mile radius over 365 days to prove External Obsolescence."},
+
     # ── Report & Delivery ─────────────────────────────────────────────
     {"name": "Evidence Packet PDF", "category": "report", "tier": 1, "status": "live",
      "short": "1,900-line comprehensive ARB-ready report",

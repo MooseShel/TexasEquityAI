@@ -39,6 +39,7 @@ from backend.db.supabase_client import supabase_service
 from backend.services.hcad_form_service import HCADFormService
 from backend.agents.fema_agent import FEMAAgent
 from backend.agents.permit_agent import PermitAgent
+from backend.agents.crime_agent import CrimeAgent
 from backend.utils.address_utils import normalize_address, is_real_address
 from backend.agents.anomaly_detector import AnomalyDetectorAgent
 
@@ -244,24 +245,25 @@ class StreamlitLogCapture(logging.Handler):
         if self.lines:
             placeholder.code("\n".join(self.lines[-60:]), language=None)
 
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=86400)
 def geocode_address(address: str):
-    """Geocode an address using the free Geoapify API.
+    """Geocode an address using OpenStreetMap Nominatim (free, no API key needed).
     Automatically strips unit/suite numbers and retries if the full address fails.
     """
-    import re
+    import re, time
     if not address or len(address) < 5:
         return None
 
     def _try_geocode(addr: str):
         try:
-            geoapify_key = os.environ.get("GEOAPIFY_API_KEY", "b3a32fdeb3e449a08a474fd3cc89bf2d")
             resp = requests.get(
-                "https://api.geoapify.com/v1/geocode/search",
-                params={"text": f"{addr}, Texas", "apiKey": geoapify_key, "format": "json"},
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": addr, "format": "json", "limit": 1},
+                headers={"User-Agent": "TexasEquityAI/1.0"},
+                timeout=5,
             )
-            data = resp.json().get('results', [])
-            if data:
+            data = resp.json()
+            if data and len(data) > 0:
                 return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])}
         except Exception:
             pass
@@ -271,6 +273,9 @@ def geocode_address(address: str):
     result = _try_geocode(address)
     if result:
         return result
+
+    # Brief pause to respect Nominatim rate limit (1 req/sec)
+    time.sleep(0.5)
 
     # Strip unit/suite suffix (e.g. "# 198", "Suite 4", "Ste B", "Apt 2", "Unit 5") and retry
     cleaned = re.sub(r'\s*(#|Suite|Ste|Apt|Unit)\s*\S+', '', address, flags=re.IGNORECASE).strip().strip(',')
@@ -310,6 +315,7 @@ def setup_playwright():
         except Exception as e:
             logger.error(f"Failed to install Playwright: {e}")
 
+@st.cache_resource
 def get_agents():
     # Ensure browsers are installed before agents start
     setup_playwright()
@@ -324,18 +330,162 @@ def get_agents():
         "form_service": HCADFormService(),
         "fema_agent": FEMAAgent(),
         "permit_agent": PermitAgent(),
+        "crime_agent": CrimeAgent(),
         "anomaly_agent": AnomalyDetectorAgent(),
     }
 
 agents = get_agents()
 
-# Custom CSS for polished look
+# Custom CSS for polished look & mobile responsiveness
 st.markdown("""
 <style>
+    /* ── Typography & Variables ── */
+    :root {
+        --primary: #2E66FA;
+        --surface: #FFFFFF;
+        --background: #F8FAFC;
+        --text-main: #1E293B;
+        --text-muted: #64748B;
+        --border: #E2E8F0;
+        --radius: 12px;
+        --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
+        --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -2px rgba(0,0,0,0.05);
+    }
+    
+    /* Base Button Styling */
     .stButton>button {
         width: 100%;
         border-radius: 8px;
-        font-weight: bold;
+        font-weight: 600;
+        min-height: 44px; /* Touch target size */
+        transition: all 0.2s ease;
+    }
+    .stButton>button:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-md);
+    }
+
+    /* ── Property Details Card ── */
+    .property-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px;
+        box-shadow: var(--shadow-sm);
+        margin-bottom: 20px;
+        transition: box-shadow 0.2s;
+    }
+    .property-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+    .prop-address {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text-main);
+        margin-bottom: 4px;
+    }
+    .prop-meta {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border);
+    }
+    .prop-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+        gap: 16px;
+    }
+    .prop-grid-item label {
+        display: block;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+        margin-bottom: 4px;
+        font-weight: 600;
+    }
+    .prop-grid-item .value {
+        font-size: 1.05rem;
+        font-weight: 500;
+        color: var(--text-main);
+    }
+
+    /* ── Metric Cards ── */
+    /* Target Streamlit's native metric containers */
+    [data-testid="metric-container"] {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px !important;
+        box-shadow: var(--shadow-sm);
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    [data-testid="metric-container"]:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
+    }
+    
+    /* Metric Labels */
+    [data-testid="stMetricLabel"] {
+        color: var(--text-muted);
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+
+    /* Metric Values */
+    [data-testid="stMetricValue"] > div {
+        color: var(--text-main);
+        font-weight: 700;
+        font-size: 1.8rem;
+    }
+
+    /* Mobile Responsive Overrides */
+    @media (max-width: 768px) {
+        /* Force main container to use full width with less padding */
+        .block-container {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            padding-top: 2rem !important;
+            max-width: 100% !important;
+        }
+
+        /* Stack all columns vertically on mobile */
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+
+        /* Enable horizontal scrolling for tabs instead of wrapping/clipping */
+        [data-baseweb="tab-list"] {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            scrollbar-width: none;
+            gap: 4px !important;
+        }
+        [data-baseweb="tab-list"]::-webkit-scrollbar {
+            display: none;
+        }
+        
+        /* Make tabs slightly smaller and prevent wrapping */
+        [data-baseweb="tab"] {
+            white-space: nowrap !important;
+            min-width: fit-content !important;
+            padding: 8px 12px !important;
+            font-size: 14px !important;
+        }
+
+        /* Ensure tables can scroll horizontally */
+        [data-testid="stDataFrame"] {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+
+        /* Force inputs to 16px to prevent iOS auto-zoom */
+        input, select, textarea {
+            font-size: 16px !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -417,11 +567,8 @@ with st.sidebar.expander("Manual Data (Optional Override)"):
     m_area = st.number_input("Building Area (sqft)", value=0)
 
 st.sidebar.divider()
-st.sidebar.subheader("📈 Savings Calculator")
+st.sidebar.subheader("⚙️ Settings & Options")
 tax_rate = st.sidebar.slider("Property Tax Rate (%)", 1.0, 4.0, 2.5, 0.1)
-
-st.sidebar.divider()
-st.sidebar.subheader("⚙️ Options")
 force_fresh_comps = st.sidebar.checkbox(
     "🔄 Force fresh comps",
     value=False,
@@ -471,6 +618,15 @@ with st.sidebar.expander("🔔 Assessment Monitor", expanded=False):
     from backend.services.assessment_monitor import AssessmentMonitor
     monitor = AssessmentMonitor()
 
+    @st.cache_data(ttl=300)
+    def fetch_watches():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _watches = loop.run_until_complete(monitor.get_watch_list())
+        loop.close()
+        return _watches
+
     # Add property to watch
     watch_acct = st.text_input("Account to watch", placeholder="e.g. 0660460360030", key="watch_acct_input")
     watch_threshold = st.slider("Alert threshold (%)", 1, 25, 5, key="watch_threshold")
@@ -486,12 +642,11 @@ with st.sidebar.expander("🔔 Assessment Monitor", expanded=False):
             else:
                 change = result.get('change_pct', 0)
                 st.success(f"Added! YoY change: {change:+.1f}%")
+                fetch_watches.clear() # Clear cache to show new addition
+                st.rerun()
 
     # Show watch list
-    loop2 = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop2)
-    watches = loop2.run_until_complete(monitor.get_watch_list())
-    loop2.close()
+    watches = fetch_watches()
 
     if watches:
         st.markdown(f"**Watching {len(watches)} properties:**")
@@ -517,6 +672,7 @@ with st.sidebar.expander("🔔 Assessment Monitor", expanded=False):
                 asyncio.set_event_loop(loop3)
                 refresh_result = loop3.run_until_complete(monitor.refresh_all())
                 loop3.close()
+            fetch_watches.clear() # Clear cache after refresh
             st.success(f"Checked {refresh_result['checked']}, {refresh_result['alerts']} alerts")
             st.rerun()
     else:
@@ -524,32 +680,30 @@ with st.sidebar.expander("🔔 Assessment Monitor", expanded=False):
 
 # ── Pitch Deck Generator ────────────────────────────────────────────
 st.sidebar.divider()
-with st.sidebar.expander("📑 Pitch Deck Generator", expanded=False):
-    from backend.feature_registry import get_live_count
-    feat_count = get_live_count()
-    st.caption(f"Generate investor/customer PDF ({feat_count} features)")
-    if st.button("📄 Generate Pitch Deck", key="gen_pitch_deck"):
-        with st.spinner("Generating pitch deck..."):
-            import subprocess, sys
-            result = subprocess.run(
-                [sys.executable, "-X", "utf8", "scripts/generate_pitch_deck.py"],
-                capture_output=True, text=True, cwd="."
+from backend.feature_registry import get_live_count
+feat_count = get_live_count()
+if st.sidebar.button("📄 Generate Pitch Deck", key="gen_pitch_deck", help=f"Generate investor/customer PDF ({feat_count} features)"):
+    with st.spinner("Generating pitch deck..."):
+        import subprocess, sys
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", "scripts/generate_pitch_deck.py"],
+            capture_output=True, text=True, cwd="."
+        )
+    if result.returncode == 0:
+        pdf_path = "outputs/Texas_Equity_AI_Pitch_Deck.pdf"
+        if os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            st.sidebar.download_button(
+                "⬇️ Download Pitch Deck",
+                data=pdf_bytes,
+                file_name="Texas_Equity_AI_Pitch_Deck.pdf",
+                mime="application/pdf",
+                key="download_pitch_deck"
             )
-        if result.returncode == 0:
-            pdf_path = "outputs/Texas_Equity_AI_Pitch_Deck.pdf"
-            if os.path.exists(pdf_path):
-                with open(pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-                st.download_button(
-                    "⬇️ Download Pitch Deck",
-                    data=pdf_bytes,
-                    file_name="Texas_Equity_AI_Pitch_Deck.pdf",
-                    mime="application/pdf",
-                    key="download_pitch_deck"
-                )
-                st.success(f"Generated! {feat_count} features included.")
-        else:
-            st.error(f"Generation failed: {result.stderr[:200]}")
+            st.sidebar.success(f"Generated! {feat_count} features included.")
+    else:
+        st.sidebar.error(f"Generation failed: {result.stderr[:200]}")
 
 # Main Content
 st.title("Property Tax Protest Dashboard")
@@ -646,76 +800,79 @@ elif district_code == "DCAD": account_placeholder = "e.g. 00000776533000000 (17 
 account_number = None
 
 try:
-    from st_keyup import st_keyup
-    st.write(f"**Enter {district_code} Account Number or Street Address**")
-    
-    # Store selected suggestion in session state to prevent loop reset
-    if "selected_suggestion" not in st.session_state:
-        st.session_state.selected_suggestion = ""
-    if "last_search" not in st.session_state:
-        st.session_state.last_search = ""
-        
-    # Pre-populate from session state if user clicked "Generate Packet" button from Anomaly Table
-    prefill_val = st.session_state.get('generate_account_prefill', "")
-        
-    # The live input box (dynamic key forces component to remount when prefill changes)
-    live_input = st_keyup(
-        "", 
-        value=prefill_val,
-        placeholder=account_placeholder,
-        key=f"account_input_live_{prefill_val}", 
-        debounce=500
-    )
-    
-    # Only fetch if there's sufficient text and it's mostly alphabetical (an address, not an account)
-    if live_input and len(live_input) >= 5 and sum(c.isalpha() for c in live_input) > 2 and live_input != st.session_state.last_search:
+    from streamlit_searchbox import st_searchbox
+    import asyncio
+
+    def search_addresses(query: str) -> list:
+        """Search DB for matching addresses. Falls back to geocoding if DB has no hits."""
+        if not query or len(query) < 3:
+            return []
+        if sum(c.isalpha() for c in query) < 2:
+            return []
+
+        # 1. DB search (instant, free)
+        try:
+            from backend.db.supabase_client import supabase_service as _supa
+            results = asyncio.run(_supa.search_address_globally(query, limit=5))
+            addrs = [r.get('address', '') for r in (results or []) if r.get('address')]
+            if addrs:
+                return addrs
+        except Exception:
+            pass
+
+        # 2. Nominatim fallback (only if DB returned nothing)
         try:
             resp = requests.get(
                 "https://nominatim.openstreetmap.org/search",
-                params={"q": f"{live_input}, Texas", "format": "json", "addressdetails": 1, "limit": 5},
-                headers={"User-Agent": "TexasEquityAI/1.0"},
-                timeout=3
+                params={"q": f"{query}, Texas", "format": "json", "addressdetails": 1, "limit": 5},
+                headers={"User-Agent": "TexasEquityAI/1.0"}, timeout=2
             )
             if resp.status_code == 200:
-                results = resp.json()
-                formatted_suggestions = []
-                for res in results:
-                    addr = res.get('address', {})
-                    street_num = addr.get('house_number', '')
-                    road = addr.get('road', '')
-                    city = addr.get('city', addr.get('town', addr.get('village', '')))
-                    zip_code = addr.get('postcode', '')
-                    
-                    # Construct clean '1200 Smith St, Houston, TX 77002'
-                    street = f"{street_num} {road}".strip()
+                out = []
+                for res in resp.json():
+                    a = res.get('address', {})
+                    num = a.get('house_number', '')
+                    road = a.get('road', '')
+                    city = a.get('city', a.get('town', a.get('village', '')))
+                    zp = a.get('postcode', '')
+                    street = f"{num} {road}".strip()
                     if street and city:
-                        clean_addr = f"{street}, {city}, TX {zip_code}".strip(" ,")
-                        if clean_addr not in formatted_suggestions:
-                            formatted_suggestions.append(clean_addr)
-                        
-                st.session_state.suggestions = formatted_suggestions
+                        out.append(f"{street}, {city}, TX {zp}".strip(" ,"))
+                return out[:5]
         except Exception:
-            pass # Silent fail to not disrupt UX
-            
-    if hasattr(st.session_state, 'suggestions') and st.session_state.suggestions and  live_input != st.session_state.selected_suggestion:
-        selected = st.selectbox(
-            "📍 Select Address Match", 
-            [""] + st.session_state.suggestions,
-            index=0,
-            key="suggestion_dropdown"
-        )
-        if selected:
-            st.session_state.selected_suggestion = selected
-            st.session_state.last_search = live_input
-            account_number = selected
-            
-    if not account_number:
-        account_number = live_input
-            
+            pass
+
+        return []
+
+    # Pre-populate from anomaly table
+    prefill_val = st.session_state.get('generate_account_prefill', "")
+
+    selected = st_searchbox(
+        search_addresses,
+        label=f"Enter {district_code} Account Number or Street Address",
+        placeholder=account_placeholder,
+        default=prefill_val if prefill_val else None,
+        clear_on_submit=False,
+        key="address_searchbox"
+    )
+
+    account_number = selected if selected else None
+
 except ImportError:
-    account_number = st.text_input(f"Enter {district_code} Account Number or Street Address", 
-                                  placeholder=account_placeholder,
-                                  key="account_input")
+    # Fallback if streamlit-searchbox not installed
+    try:
+        from st_keyup import st_keyup
+        live_input = st_keyup(
+            f"Enter {district_code} Account Number or Street Address",
+            placeholder=account_placeholder,
+            key="account_input_live",
+            debounce=400
+        )
+        account_number = live_input if live_input else None
+    except ImportError:
+        account_number = st.text_input(f"Enter {district_code} Account Number or Street Address",
+                                      placeholder=account_placeholder,
+                                      key="account_input")
 
 async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None, force_fresh_comps=False):
     try:
@@ -1181,6 +1338,40 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             except Exception as geo_err:
                 logger.warning(f"Geo-intelligence failed (non-fatal): {geo_err}")
 
+            # ── Local Crime Analysis (External Obsolescence) ────────
+            try:
+                crime_address = property_details.get('address', '')
+                detected_district = property_details.get('district', prop_district or 'HCAD')
+                if crime_address and is_real_address(crime_address) and detected_district in ('HCAD',):
+                    yield {"status": "🚨 Intelligence Agent: Checking neighborhood crime activity for external obsolescence..."}
+                    import asyncio
+                    crime_stats = await agents["crime_agent"].get_local_crime_data(crime_address)
+                    if crime_stats and crime_stats.get('count', 0) > 0:
+                        obs = property_details.get('external_obsolescence', {'factors': []})
+                        if 'factors' not in obs:
+                            obs['factors'] = []
+                        
+                        # Scale impact purely based on volume
+                        severity_impact = 5.0 if crime_stats['count'] > 15 else (2.5 if crime_stats['count'] > 5 else 1.0)
+                        
+                        crime_factor = {
+                            "description": crime_stats.get('message', ''),
+                            "impact_pct": severity_impact
+                        }
+                        
+                        obs['factors'].append(crime_factor)
+                        property_details['external_obsolescence'] = obs
+                        
+                        if 'external_obsolescence' not in equity_results:
+                            equity_results['external_obsolescence'] = {'factors': []}
+                        if 'factors' not in equity_results['external_obsolescence']:
+                            equity_results['external_obsolescence']['factors'] = []
+                            
+                        equity_results['external_obsolescence']['factors'].append(crime_factor)
+                        yield {"status": f"🚨 Intelligence Agent: Discovered elevated local crime risk (+{severity_impact}% obsolescence offset)"}
+            except Exception as crime_err:
+                logger.warning(f"Crime intelligence failed (non-fatal): {crime_err}")
+
         except Exception as e:
             import traceback
             logger.error(f"Equity analysis failed: {e}\n{traceback.format_exc()}")
@@ -1289,12 +1480,18 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         # ── Protest Viability Gate ────────────────────────────────────────────
         # Only call the LLM if there is at least one valid protest argument.
         # This avoids wasting API credits and generating inaccurate narratives.
-        appraised_val = property_details.get('appraised_value', 0) or 0
-        justified_val = equity_results.get('justified_value_floor', 0) if isinstance(equity_results, dict) else 0
-        justified_val = justified_val or 0
+        def _safe_flt(v):
+            if not v: return 0.0
+            if isinstance(v, (int, float)): return float(v)
+            try: return float(str(v).replace('$', '').replace(',', '').strip())
+            except: return 0.0
+            
+        appraised_val = _safe_flt(property_details.get('appraised_value', 0))
+        justified_val = _safe_flt(equity_results.get('justified_value_floor', 0) if isinstance(equity_results, dict) else 0)
+        market_value = _safe_flt(market_value)
 
         has_equity_argument   = justified_val > 0 and appraised_val > justified_val
-        has_market_argument   = market_value and market_value > 0 and appraised_val > market_value
+        has_market_argument   = market_value > 0 and appraised_val > market_value
         has_condition_issues  = bool(vision_detections and len(vision_detections) > 0)
         flood_zone            = property_details.get('flood_zone', 'Zone X')
         has_flood_risk        = flood_zone and 'Zone X' not in flood_zone
@@ -1427,22 +1624,110 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                 if final_data:
                     status.update(label="✅ Protest Packet Ready!", state="complete", expanded=False)
 
-            # Check logic outside the status container (Dedent to 8 spaces)
             if final_data:
                 data = final_data
                 
-                # Top-level button removed as per user request (moved back to Narrative tab)
+                # ── Hero Summary Banner ──────────────────────────────────────────────
+                st.divider()
+                st.success("🎉 **Analysis Complete!** Here is a quick summary of your property tax protest potential.")
+                
+                # Extract values for banner
+                appraised_str = data['property'].get('appraised_value', 0)
+                try:
+                    appraised = float(str(appraised_str).replace('$', '').replace(',', '').strip())
+                except:
+                    appraised = 0.0
+                    
+                eq_data = data.get('equity', {})
+                if isinstance(eq_data, str):
+                    try:
+                        import json
+                        eq_data = json.loads(eq_data)
+                    except:
+                        eq_data = {}
+                        
+                justified = eq_data.get('justified_value_floor', appraised) if isinstance(eq_data, dict) else appraised
+                try: justified = float(justified)
+                except: justified = appraised
+                
+                mkt_str = data.get('market_value', 0)
+                try: mkt = float(str(mkt_str).replace('$', '').replace(',', '').strip())
+                except: mkt = appraised
+                
+                # Deductions
+                vision_items = data.get('vision', [])
+                vision_deduct = sum(v.get('deduction', 0) for v in (vision_items if isinstance(vision_items, list) else []) if isinstance(v, dict) and v.get('issue') != 'CONDITION_SUMMARY')
+                
+                base_val = min([v for v in (appraised, justified, mkt) if v > 0] or [appraised])
+                target_val = max(0, base_val - vision_deduct)
+                savings = max(0, appraised - target_val)
+                
+                hcA, hcB, hcC = st.columns(3)
+                with hcA:
+                    st.metric("County Appraised", f"${appraised:,.0f}")
+                with hcB:
+                    st.metric("AI Target Value", f"${target_val:,.0f}", delta=f"-${savings:,.0f} reduction" if savings > 0 else None, delta_color="normal")
+                with hcC:
+                    st.metric("Est. Tax Savings", f"${savings * (tax_rate/100):,.0f}" if savings > 0 else "$0", help=f"Assuming a {tax_rate}% tax rate.")
                 
                 st.divider()
                 
-                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏠 Property", "⚖️ Equity", "💰 Sales Comps", "📸 Vision", "📄 Protest", "⚙️ Data"])
-                with tab1:
+                tab_overview, tab_comps, tab_condition, tab_protest, tab_debug = st.tabs(["📊 Overview", "⚖️ Comparables", "📸 Condition", "📄 Protest Packet", "🔧 Debug"])
+                with tab_overview:
                     col1, col2 = st.columns(2)
-                    with col1: st.subheader("Details"); st.json(data['property'])
+                    with col1: 
+                        st.subheader("Details")
+                        prop = data.get('property', {})
+                        st.markdown(f"""
+                        <div class="property-card">
+                            <div class="prop-address">{prop.get('address', 'Unknown Address')}</div>
+                            <div class="prop-meta">Account: {prop.get('account_number', 'N/A')} | Owner: {prop.get('owner_name', 'On File')}</div>
+                            <div class="prop-grid">
+                                <div class="prop-grid-item">
+                                    <label>Year Built</label>
+                                    <div class="value">{prop.get('year_built', 'N/A')}</div>
+                                </div>
+                                <div class="prop-grid-item">
+                                    <label>Building Area</label>
+                                    <div class="value">{f"{prop.get('building_area', 0):,.0f} sq ft" if prop.get('building_area') else 'N/A'}</div>
+                                </div>
+                                <div class="prop-grid-item">
+                                    <label>Lot Size</label>
+                                    <div class="value">{f"{prop.get('land_area_acres', 0):.2f} acres" if prop.get('land_area_acres') else 'N/A'}</div>
+                                </div>
+                                <div class="prop-grid-item">
+                                    <label>Beds / Baths</label>
+                                    <div class="value">{prop.get('bedrooms', '-')} / {prop.get('bathrooms', '-')}</div>
+                                </div>
+                                <div class="prop-grid-item">
+                                    <label>Property Type</label>
+                                    <div class="value">{"🏢 Commercial" if prop.get('property_type', '').lower() == 'commercial' else "🏠 Residential"}</div>
+                                </div>
+                                <div class="prop-grid-item">
+                                    <label>Neighborhood</label>
+                                    <div class="value">{prop.get('neighborhood_code', 'N/A')}</div>
+                                </div>
+                                <div class="prop-grid-item">
+                                    <label>Homestead</label>
+                                    <div class="value">{"✅ Yes" if prop.get('homestead', False) else "❌ No"}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     with col2:
                         st.subheader("Market Analysis")
-                        appraised = data['property'].get('appraised_value', 0)
-                        market = data['market_value']
+                        _app = data['property'].get('appraised_value', 0)
+                        try:
+                            appraised = float(str(_app).replace('$', '').replace(',', '').strip())
+                        except:
+                            appraised = 0.0
+                        
+                        _market = data.get('market_value', 0)
+                        try:
+                            market = float(str(_market).replace('$', '').replace(',', '').strip())
+                        except:
+                            market = appraised
+                        
                         st.metric("County Appraised Value", f"${appraised:,.0f}", help="The county's final appraised value after homestead caps or exemptions.")
                         st.metric("County Market Value", f"${market:,.0f}", delta=f"${market - appraised:,.0f} over cap", delta_color="inverse", help="The county's initial uncapped market assessment.")
                         
@@ -1450,25 +1735,36 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             # Safely attempt to parse out the AI opinion of value from the data payload
                             import json
                             eq_data = data.get('equity')
-                            if isinstance(eq_data, str):
+                            if not eq_data: eq_data = {}
+                            elif isinstance(eq_data, str):
                                 try: eq_data = json.loads(eq_data)
                                 except: eq_data = {}
-                            if not eq_data: eq_data = {}
                                 
                             eq_floor = eq_data.get('justified_value_floor', appraised) if isinstance(eq_data, dict) else appraised
                             try: eq_floor = float(eq_floor)
                             except: eq_floor = appraised
                             
                             ms = appraised
-                            s_data = data.get('sales_comps', [])
-                            if isinstance(s_data, str):
+                            # Sales comps live at data['equity']['sales_comps'] during live generation
+                            # or at data['sales_comps'] if loaded from DB cache
+                            s_data = data.get('sales_comps')
+                            if not s_data and isinstance(eq_data, dict):
+                                s_data = eq_data.get('sales_comps', [])
+                            if not s_data: s_data = []
+                            elif isinstance(s_data, str):
                                 try: s_data = json.loads(s_data)
                                 except: s_data = []
                                 
                             if isinstance(s_data, list) and len(s_data) > 0:
                                 prices = []
                                 for sc in s_data:
-                                    p = sc.get('sale_price', sc.get('Sale Price', 0)) if isinstance(sc, dict) else 0
+                                    p = 0
+                                    if isinstance(sc, dict):
+                                        p = sc.get('sale_price', sc.get('Sale Price', 0))
+                                    elif hasattr(sc, 'sale_price'):
+                                        p = getattr(sc, 'sale_price', 0)
+                                    elif hasattr(sc, '__dict__'):
+                                        p = sc.__dict__.get('sale_price', sc.__dict__.get('Sale Price', 0))
                                     try: p = float(str(p).replace('$','').replace(',',''))
                                     except: p = 0
                                     if p > 0: prices.append(p)
@@ -1478,9 +1774,14 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             
                             opinion = min(appraised, eq_floor, ms) if ms > 0 else min(appraised, eq_floor)
                             
+                            st.divider()
                             if opinion < appraised:
-                                st.divider()
                                 st.metric("AI Target Protest Value", f"${opinion:,.0f}", delta=f"-${appraised - opinion:,.0f} recommended reduction", delta_color="normal", help="The lowest defensible property value calculated by our AI based on equity and sales comparables.")
+                            elif not eq_data and not s_data:
+                                # We haven't run the deep scan yet
+                                st.metric("AI Target Protest Value", "Pending Scan", help="Click 'Generate Protest Packet' to run deep AI analysis.")
+                            else:
+                                st.metric("AI Target Protest Value", f"${opinion:,.0f}", delta="No reduction found", delta_color="off", help="Based on current market data, the county value appears fair.")
                         except Exception as e:
                             st.caption(f"Error parsing opinion value: {e}")
 
@@ -1533,8 +1834,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                     )
                                     fig.update_traces(hovertemplate="%{y:$,.0f}")
                                     st.plotly_chart(fig, use_container_width=True)
-                with tab2:
-                    st.subheader("Equity Analysis")
+                with tab_comps:
+                    st.subheader("⚖️ Equity Analysis")
                     equity_has_data = data['equity'] and (
                         data['equity'].get('equity_5') or
                         data['equity'].get('justified_value_floor', 0) > 0
@@ -1554,8 +1855,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             over_by = justified_val - appraised
                             st.info(
                                 f"**No equity over-assessment found.** "
-                                f"Your appraised value (\${appraised:,.0f}) is **\${over_by:,.0f} below** "
-                                f"the median justified value of comparable properties (\${justified_val:,.0f}). "
+                                f"Your appraised value (\\${appraised:,.0f}) is **\\${over_by:,.0f} below** "
+                                f"the median justified value of comparable properties (\\${justified_val:,.0f}). "
                                 f"This means your neighbors are assessed *higher* per square foot than you are — "
                                 f"the equity argument does not support a reduction. "
                                 f"Any protest would need to rely on market value, condition, or location factors instead.",
@@ -1564,9 +1865,9 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         elif savings > 0:
                             st.success(
                                 f"**Equity over-assessment detected!** "
-                                f"Your appraised value (\${appraised:,.0f}) exceeds the justified value floor "
-                                f"(\${justified_val:,.0f}) by **\${savings:,.0f}**. "
-                                f"At a {tax_rate}% tax rate, this represents ~\${savings * (tax_rate/100):,.0f} in potential annual savings.",
+                                f"Your appraised value (\\${appraised:,.0f}) exceeds the justified value floor "
+                                f"(\\${justified_val:,.0f}) by **\\${savings:,.0f}**. "
+                                f"At a {tax_rate}% tax rate, this represents ~\\${savings * (tax_rate/100):,.0f} in potential annual savings.",
                                 icon="✅"
                             )
 
@@ -1622,7 +1923,17 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
 
                         # Geocode subject property
                         subject_addr = data['property'].get('address', '')
-                        subject_coords = geocode_address(subject_addr)
+                        district_city_map = {
+                            "HCAD": "Houston, TX", "TAD": "Fort Worth, TX",
+                            "DCAD": "Dallas, TX", "TCAD": "Austin, TX", "CCAD": "Plano, TX"
+                        }
+                        district_key = data['property'].get('district', 'HCAD')
+                        city_suffix = district_city_map.get(district_key, "Texas")
+                        # Only append city/state if it's not already in the address
+                        addr_upper = subject_addr.upper()
+                        has_state = any(s in addr_upper for s in [', TX', ',TX', ' TX ','TEXAS', 'HOUSTON', 'DALLAS', 'FORT WORTH', 'AUSTIN', 'PLANO'])
+                        full_subject_addr = subject_addr if has_state else f"{subject_addr}, {city_suffix}"
+                        subject_coords = geocode_address(full_subject_addr)
 
                         # Geocode each comp
                         map_points = []
@@ -1642,13 +1953,9 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             if not comp_addr or comp_addr == 'Unknown':
                                 continue
                             # Append district city for better geocoding accuracy
-                            district_city_map = {
-                                "HCAD": "Houston, TX", "TAD": "Fort Worth, TX",
-                                "DCAD": "Dallas, TX", "TCAD": "Austin, TX", "CCAD": "Plano, TX"
-                            }
-                            district_key = data['property'].get('district', 'HCAD')
-                            city_suffix = district_city_map.get(district_key, "Texas")
-                            full_addr = comp_addr if any(c.isdigit() and len(comp_addr) > 10 for c in comp_addr) else f"{comp_addr}, {city_suffix}"
+                            comp_upper = comp_addr.upper()
+                            comp_has_state = any(s in comp_upper for s in [', TX', ',TX', ' TX ','TEXAS', 'HOUSTON', 'DALLAS', 'FORT WORTH', 'AUSTIN', 'PLANO'])
+                            full_addr = comp_addr if comp_has_state else f"{comp_addr}, {city_suffix}"
                             coords = geocode_address(full_addr)
                             if coords:
                                 map_points.append({
@@ -1694,8 +2001,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 layers=[layer],
                                 initial_view_state=view_state,
                                 tooltip=tooltip,
-                                map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-                            ))
+                                map_style=None,
+                            ), use_container_width=True)
 
 
                             # Legend
@@ -1703,7 +2010,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                         else:
                             st.info("Map unavailable — could not geocode property addresses.")
 
-                with tab3:
+                    st.divider()
                     st.subheader("💰 Sales Comparable Analysis")
                     sales_comps = data['equity'].get('sales_comps', [])
                     if sales_comps:
@@ -1750,10 +2057,10 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             gap = appraised - median_sale
                             st.success(
                                 f"**Market over-appraisal detected!** "
-                                f"Your appraised value (\${appraised:,.0f}) exceeds the median sale price "
-                                f"of {len(sales_comps)} comparable sales (\${median_sale:,.0f}) by **\${gap:,.0f}**. "
-                                f"Sales range: \${min_sale:,.0f} — \${max_sale:,.0f}. "
-                                f"At a {tax_rate}% tax rate, this represents ~\${est_tax_savings:,.0f} in potential annual savings. "
+                                f"Your appraised value (\\${appraised:,.0f}) exceeds the median sale price "
+                                f"of {len(sales_comps)} comparable sales (\\${median_sale:,.0f}) by **\\${gap:,.0f}**. "
+                                f"Sales range: \\${min_sale:,.0f} — \\${max_sale:,.0f}. "
+                                f"At a {tax_rate}% tax rate, this represents ~\\${est_tax_savings:,.0f} in potential annual savings. "
                                 f"This supports a protest under **Texas Tax Code §41.43(b)(3)** and **§23.01**.",
                                 icon="✅"
                             )
@@ -1761,9 +2068,9 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             over_by = median_sale - appraised
                             st.info(
                                 f"**No market over-appraisal found.** "
-                                f"Your appraised value (\${appraised:,.0f}) is **\${over_by:,.0f} below** "
-                                f"the median sale price of comparable properties (\${median_sale:,.0f}). "
-                                f"Sales range: \${min_sale:,.0f} — \${max_sale:,.0f}. "
+                                f"Your appraised value (\\${appraised:,.0f}) is **\\${over_by:,.0f} below** "
+                                f"the median sale price of comparable properties (\\${median_sale:,.0f}). "
+                                f"Sales range: \\${min_sale:,.0f} — \\${max_sale:,.0f}. "
                                 f"The sales comparison approach does not independently support a reduction, "
                                 f"but this data can corroborate condition or equity-based arguments.",
                                 icon="ℹ️"
@@ -1824,7 +2131,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 "lon": subject_coords["lon"],
                                 "label": "Subject",
                                 "address": subject_addr,
-                                "sale_price": f"Appraised: \${data['property'].get('appraised_value', 0):,.0f}",
+                                "sale_price": f"Appraised: ${appraised:,.0f}",
                                 "color": [220, 50, 50, 220],
                                 "radius": 40,
                             })
@@ -1878,8 +2185,8 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                                 layers=[layer],
                                 initial_view_state=view_state,
                                 tooltip=tooltip,
-                                map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-                            ))
+                                map_style=None,
+                            ), use_container_width=True)
 
                             st.caption("🔴 Subject Property &nbsp;&nbsp; 🟢 Sales Comparables")
                         else:
@@ -1896,7 +2203,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     else:
                         st.warning("No recent sales comparables found for this property.")
 
-                with tab4:
+                with tab_condition:
                     st.subheader("📸 Condition Analysis")
                     vision_items = data.get('vision', [])
                     all_imgs = data.get('all_image_paths', [])
@@ -1986,7 +2293,29 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     else:
                         st.warning("No Street View images available for this property.")
 
-                with tab5:
+                    st.divider()
+                    st.subheader("🚨 Geo-Intelligence & External Obsolescence")
+                    st.write("Analysis of neighborhood factors that negatively impact property value (e.g., crime, flood zones, infrastructure).")
+                    
+                    crime_stats = data['property'].get('crime_stats')
+                    ext_obs = data['property'].get('external_obsolescence', data.get('equity', {}).get('external_obsolescence', {}))
+                    
+                    if crime_stats and crime_stats.get('count', 0) > 0:
+                        st.error(f"**High Crime Area Detected**\n\n{crime_stats.get('message', '')}")
+                        st.caption(f"*Data sourced directly from Houston Police Department Open Data API (within {crime_stats.get('radius_miles', 0.5)} miles over the last {crime_stats.get('timeframe_days', 365)} days).*")
+                    else:
+                        st.success("**Crime Level:** No significant violent/property crime clusters found in immediate radius.")
+                        
+                    st.divider()
+                    st.subheader("Documented Value Deductions")
+                    factors = ext_obs.get('factors', []) if isinstance(ext_obs, dict) else []
+                    if factors:
+                        for f in factors:
+                            st.warning(f"**-{f.get('impact_pct', 0)}% Impact:** {f.get('description', '')}")
+                    else:
+                        st.info("No external obsolescence factors (crime, flood, industrial) found for this property.")
+
+                with tab_protest:
                     st.subheader("📄 Protest Summary")
                     
                     # ── Condition-Adjusted Recommended Value ──────────────
@@ -2011,28 +2340,83 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     recommended_value = max(0, base_value - total_vision_deduction)
                     total_savings = max(0, appraised - recommended_value)
                     
-                    rc1, rc2, rc3 = st.columns(3)
+                    rc1, rc2, rc3, rc4 = st.columns(4)
                     with rc1:
                         st.metric("🏠 Current Appraised", f"${appraised:,.0f}")
                     with rc2:
                         st.metric(
-                            "🎯 Recommended Protest Value", 
+                            "🎯 Target Protest Value", 
                             f"${recommended_value:,.0f}",
                             delta=f"-${total_savings:,.0f}" if total_savings > 0 else None,
                             delta_color="inverse"
                         )
+                        
                     with rc3:
-                        if total_vision_deduction > 0:
-                            st.metric("🔧 Condition Deduction", f"-${total_vision_deduction:,.0f}")
-                        else:
-                            st.metric("🔧 Condition Deduction", "$0")
+                        eq_gap = max(0, appraised - justified) if justified > 0 else 0
+                        eq_color = "inverse" if eq_gap > 0 else "normal"
+                        st.metric(
+                            "⚖️ Equity Target",
+                            f"${justified:,.0f}" if justified > 0 else "N/A",
+                            delta=f"-${eq_gap:,.0f}" if eq_gap > 0 else None,
+                            delta_color=eq_color
+                        )
+                        eq_comps = len(data['equity'].get('equity_5', [])) if isinstance(data.get('equity'), dict) else 0
+                        st.caption(f"{eq_comps} neighborhood comps")
+                        
+                    with rc4:
+                        sales_gap = max(0, appraised - mkt) if mkt > 0 else 0
+                        sl_color = "inverse" if sales_gap > 0 else "normal"
+                        st.metric(
+                            "💰 Sales Target",
+                            f"${mkt:,.0f}" if mkt > 0 else "N/A",
+                            delta=f"-${sales_gap:,.0f}" if sales_gap > 0 else None,
+                            delta_color=sl_color
+                        )
+                        sales_count = data['equity'].get('sales_count', 0) if isinstance(data.get('equity'), dict) else 0
+                        st.caption(f"{sales_count} recent sales")
+
+                    # ── AI Value Explanation ──────────────────────────────
+                    st.divider()
+                    # Determine which approach drove the value
+                    if base_value == justified and justified > 0 and justified < appraised:
+                        basis_label = "Equity Uniformity (Texas Tax Code §41.43(b)(3))"
+                    elif base_value == mkt and mkt > 0 and mkt < appraised:
+                        basis_label = "Sales Comparison (Texas Tax Code §41.43(b)(1))"
+                    else:
+                        basis_label = "Current Appraised Value (no lower value found)"
+
+                    st.info(
+                        f"**How is this calculated?** The AI Protest Value is the **lowest** of three approaches: "
+                        f"Equity Uniformity (\\${justified:,.0f}), Sales Comparison (\\${mkt:,.0f}), "
+                        f"and the Current Appraisal (\\${appraised:,.0f}), minus any physical condition deductions. "
+                        f"**Basis used: {basis_label}.**"
+                    )
                     
                     if total_savings > 0:
-                        st.success(f"**Potential tax savings: ${total_savings * (tax_rate/100):,.0f}/year** based on a recommended protest value of ${recommended_value:,.0f} (base: ${base_value:,.0f} minus ${total_vision_deduction:,.0f} condition deduction).")
-                    
+                        st.success(f"**Potential tax savings: \\${total_savings * (tax_rate/100):,.0f}/year** based on a recommended protest value of \\${recommended_value:,.0f} (base: \\${base_value:,.0f} minus \\${total_vision_deduction:,.0f} condition deduction).")
+
+                    # ── Narrative ──────────────────────────────────────────
                     st.divider()
                     st.subheader("Narrative")
-                    st.info(data['narrative'])
+                    safe_narrative = data['narrative'].replace('$', '\\$')
+                    st.info(safe_narrative)
+
+                    # ── HCAD Protest Form ──────────────────────────────────
+                    hcad_form_path = data.get('hcad_form_path', '')
+                    if hcad_form_path and os.path.exists(hcad_form_path):
+                        st.divider()
+                        st.subheader("📝 Pre-Filled Protest Form")
+                        with open(hcad_form_path, "rb") as hf:
+                            st.download_button(
+                                "📥 Download HCAD Protest Form (41.44)",
+                                hf.read(),
+                                file_name=f"HCAD_ProtestForm_{data['property'].get('account_number', 'unknown')}.pdf",
+                                mime="application/pdf"
+                            )
+
+                    # ── Evidence Packet PDF ────────────────────────────────
+                    st.divider()
+                    st.subheader("📦 Complete Evidence Packet")
                     pdf_path = data.get('combined_pdf_path', '')
                     pdf_error = data.get('pdf_error')
                     if pdf_path and os.path.exists(pdf_path):
@@ -2049,4 +2433,7 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                     else:
                         st.warning(f"⚠️ Protest PDF not found. (Path: {pdf_path or 'None'})")
                         st.caption("Please check the logs or try regenerating the packet.")
-                with tab6: st.json(data)
+                with tab_debug:
+                    st.info("This tab contains raw generation data for debugging purposes.")
+                    with st.expander("Show Raw JSON Data", expanded=False):
+                        st.json(data)

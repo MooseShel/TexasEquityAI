@@ -31,6 +31,7 @@ from backend.agents.fema_agent import FEMAAgent
 from backend.agents.permit_agent import PermitAgent
 from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
 from backend.agents.anomaly_detector import AnomalyDetectorAgent
+from backend.agents.crime_agent import CrimeAgent
 
 
 
@@ -53,6 +54,7 @@ fema_agent = FEMAAgent()
 permit_agent = PermitAgent()
 commercial_agent = CommercialEnrichmentAgent()
 anomaly_agent = AnomalyDetectorAgent()
+crime_agent = CrimeAgent()
 
 
 
@@ -97,8 +99,11 @@ async def get_full_protest(
         is_mock = (val == 450000.0 and area == 2500.0 and not has_year and not has_nbhd)
         # 2. Check for empty stub
         is_stub = (val <= 1.0 and area <= 1.0)
+        # 3. Incomplete record: missing BOTH neighborhood_code and building_area
+        #    (likely from RentCast or partial API — can't do equity analysis)
+        is_incomplete = (not has_nbhd and area <= 0)
         
-        return is_mock or is_stub
+        return is_mock or is_stub or is_incomplete
             
     async def protest_generator():
         print("DEBUG: protest_generator STARTED!")
@@ -238,6 +243,8 @@ async def get_full_protest(
                 if (cached_property
                         and cached_property.get('address')
                         and cached_property.get('appraised_value')
+                        and cached_property.get('neighborhood_code')
+                        and (cached_property.get('building_area') or 0) > 0
                         and not _is_ghost_record(cached_property)
                         and not manual_value and not manual_address):
                     logger.info(f"DB-first: Using Supabase cached record for {current_account} — skipping scraper.")
@@ -263,28 +270,26 @@ async def get_full_protest(
                         current_account = scraped_acc
 
                 if not property_details:
-                    if rentcast_fallback_data:
-                         property_details = rentcast_fallback_data
-                    else:
-                        # District-aware City Mapping
-                        district_map = {
-                            "HCAD": "Houston, TX",
-                            "TCAD": "Austin, TX",
-                            "DCAD": "Dallas, TX",
-                            "CCAD": "Plano, TX",
-                            "TAD": "Fort Worth, TX"
-                        }
-                        district_city = district_map.get(current_district, "Houston, TX")
+                    # District-aware City Mapping
+                    district_map = {
+                        "HCAD": "Houston, TX", "TCAD": "Austin, TX", "DCAD": "Dallas, TX",
+                        "CCAD": "Plano, TX", "TAD": "Fort Worth, TX"
+                    }
+                    district_city = district_map.get(current_district, "Houston, TX")
 
-                        if cached_property and not _is_ghost_record(cached_property):
-                            # FIX: Check if cache has the wrong city (legacy "Houston" for non-Harris)
-                            cached_addr = cached_property.get('address', '')
-                            if current_district and current_district != "HCAD" and "Houston" in cached_addr and district_city not in cached_addr:
-                                 logger.info(f"Correcting cached address city for {current_district}: {cached_addr}")
-                                 cached_property['address'] = cached_addr.replace("Houston, TX", district_city)
-                            property_details = cached_property
-                        else:
-                            # Scraper returned nothing — rely on the early property type to decide what to do
+                    # If scraper failed but we have a valid cache, use cache + rentcast enrichment
+                    if cached_property and not _is_ghost_record(cached_property):
+                        cached_addr = cached_property.get('address', '')
+                        if current_district and current_district != "HCAD" and "Houston" in cached_addr and district_city not in cached_addr:
+                             logger.info(f"Correcting cached address city for {current_district}: {cached_addr}")
+                             cached_property['address'] = cached_addr.replace("Houston, TX", district_city)
+                        property_details = cached_property
+                        logger.info("Using cached DB record over RentCast fallback to preserve neighborhood code.")
+                    elif rentcast_fallback_data:
+                         property_details = rentcast_fallback_data
+                         logger.warning("No cache available. Falling back entirely to RentCast data.")
+                    else:
+                        # Scraper returned nothing — rely on the early property type to decide what to do
                             lookup_addr = original_address or account_number
                             
                             is_confirmed_residential = ptype == "Residential"
@@ -357,9 +362,15 @@ async def get_full_protest(
                         "building_area": property_details.get("building_area"),
                         "year_built": property_details.get("year_built"),
                         "neighborhood_code": property_details.get("neighborhood_code"),
-                        "district": property_details.get("district")
+                        "district": property_details.get("district"),
+                        "market_value": property_details.get("market_value"),
+                        "building_grade": property_details.get("building_grade"),
+                        "land_area": property_details.get("land_area"),
                     }
-                    await supabase_service.upsert_property(clean_prop)
+                    # Filter out None values to never overwrite good existing data with blanks
+                    clean_prop = {k: v for k, v in clean_prop.items() if v is not None}
+                    if clean_prop.get("account_number"):
+                        await supabase_service.upsert_property(clean_prop)
                 except: pass
 
             # Enrich property_details with owner/legal info from API sources
@@ -444,6 +455,10 @@ async def get_full_protest(
                 prop_district = property_details.get('district', current_district or 'HCAD')
                 real_neighborhood = []
 
+                # DEBUG: Log equity-critical fields
+                logger.info(f"EQUITY DEBUG: nbhd_code={nbhd_code!r}, bld_area={bld_area}, prop_district={prop_district}, address={prop_address}")
+                logger.info(f"EQUITY DEBUG: property_details keys={list(property_details.keys())}")
+
                 # Layer 0: DB lookup by neighborhood_code + building_area (no browser needed)
                 if nbhd_code and bld_area > 0:
                     db_comps = await supabase_service.get_neighbors_from_db(
@@ -473,13 +488,21 @@ async def get_full_protest(
                         if res and res.get('building_area', 0) > 0:
                             usable.append(res)
                             try:
-                                await supabase_service.upsert_property({
+                                upsert_data = {
                                     "account_number": res.get("account_number"),
                                     "address": res.get("address"),
                                     "appraised_value": res.get("appraised_value"),
                                     "building_area": res.get("building_area"),
-                                    "year_built": res.get("year_built")
-                                })
+                                    "year_built": res.get("year_built"),
+                                    "neighborhood_code": res.get("neighborhood_code"),
+                                    "district": res.get("district"),
+                                    "market_value": res.get("market_value"),
+                                    "building_grade": res.get("building_grade"),
+                                    "land_area": res.get("land_area"),
+                                }
+                                # Filter None to avoid overwriting good data
+                                upsert_data = {k: v for k, v in upsert_data.items() if v is not None}
+                                await supabase_service.upsert_property(upsert_data)
                             except: pass
                     return usable
 
@@ -586,6 +609,40 @@ async def get_full_protest(
                             yield json.dumps({"status": f"🌐 Geo-Intelligence: Found {len(obs_result['factors'])} external obsolescence factor(s)"}) + "\n"
             except Exception as geo_err:
                 logger.warning(f"Geo-intelligence failed (non-fatal): {geo_err}")
+
+            # 4e. Local Crime Analysis (External Obsolescence)
+            try:
+                crime_address = property_details.get('address', '')
+                detected_district = property_details.get('district', district or 'HCAD')
+                if crime_address and is_real_address(crime_address) and detected_district in ('HCAD',):
+                    yield json.dumps({"status": "🚨 Intelligence Agent: Checking neighborhood crime activity for external obsolescence..."}) + "\n"
+                    crime_stats = await crime_agent.get_local_crime_data(crime_address)
+                    if crime_stats and crime_stats.get('count', 0) > 0:
+                        obs = property_details.get('external_obsolescence', {'factors': []})
+                        if 'factors' not in obs:
+                            obs['factors'] = []
+                        
+                        # Scale impact purely based on volume
+                        severity_impact = 5.0 if crime_stats['count'] > 15 else (2.5 if crime_stats['count'] > 5 else 1.0)
+                        
+                        crime_factor = {
+                            "description": crime_stats.get('message', ''),
+                            "impact_pct": severity_impact
+                        }
+                        
+                        obs['factors'].append(crime_factor)
+                        property_details['external_obsolescence'] = obs
+                        
+                        if 'external_obsolescence' not in equity_results:
+                            equity_results['external_obsolescence'] = {'factors': []}
+                        if 'factors' not in equity_results['external_obsolescence']:
+                            equity_results['external_obsolescence']['factors'] = []
+                            
+                        equity_results['external_obsolescence']['factors'].append(crime_factor)
+                        property_details['crime_stats'] = crime_stats
+                        
+            except Exception as crime_err:
+                logger.warning(f"Crime agent failed (non-fatal): {crime_err}")
 
             # 5. Vision & Location Analysis (Flood Zones)
             search_address = property_details.get('address', '')

@@ -68,33 +68,142 @@ class NarrativeAgent:
         if not self.gemini_client and not self.openai_llm and not self.xai_llm:
             return "Narrative Generation Unavailable: No LLM keys found."
 
-        appraised_val = property_data.get('appraised_value', 0) or 0
-        justified_val = equity_data.get('justified_value_floor', 0) if isinstance(equity_data, dict) else 0
-        market_val = market_value or appraised_val
+        def safe_float(val):
+            if not val: return 0.0
+            if isinstance(val, (int, float)): return float(val)
+            try: return float(str(val).replace('$', '').replace(',', '').strip())
+            except: return 0.0
 
-        equity_situation = f"Appraised: ${appraised_val:,.0f} | Justified: ${justified_val:,.0f}"
+        appraised_val = safe_float(property_data.get('appraised_value', 0))
+        justified_val = safe_float(equity_data.get('justified_value_floor', 0) if isinstance(equity_data, dict) else 0)
+        market_val = safe_float(market_value) or appraised_val
+        building_area = safe_float(property_data.get('building_area', 0))
+        year_built = property_data.get('year_built', 'N/A')
 
-        inputs = {
-            "address": property_data.get('address', 'N/A'),
-            "account_number": property_data.get('account_number', 'N/A'),
-            "appraised_value": f"{appraised_val:,.0f}",
-            "building_area": property_data.get('building_area', 0),
-            "market_value": f"{market_val:,.0f}",
-            "justified_value": f"{justified_val:,.0f}",
-            "comparables": ", ".join([c.get('address', 'N/A') for c in equity_data.get('equity_5', [])]) if isinstance(equity_data, dict) else "None",
-            "sales_comp_count": 0, "median_sale_price": "N/A", "avg_sale_pps": "N/A", "sales_comps_detail": "N/A",
-            "condition_score": "N/A", "effective_age": "N/A", "issues_detail": "None identified",
-            "total_physical": "0", "total_functional": "0", "total_external": "0", "total_deduction": "0",
-            "subject_permits": "N/A", "comp_renovations": "N/A", "flood_zone": "N/A",
-            "equity_situation": equity_situation, "equity_argument": "", "sales_situation": "", "sales_argument": ""
-        }
+        # Build comparables summary
+        comps = equity_data.get('equity_5', []) if isinstance(equity_data, dict) else []
+        comp_lines = []
+        for c in comps[:5]:
+            c_addr = c.get('address', 'N/A')
+            c_val = safe_float(c.get('appraised_value', 0))
+            c_area = safe_float(c.get('building_area', 0))
+            c_pps = c_val / c_area if c_area > 0 else 0
+            comp_lines.append(f"  - {c_addr}: ${c_val:,.0f} ({c_area:,.0f} sqft, ${c_pps:,.0f}/sqft)")
+        comp_text = "\n".join(comp_lines) if comp_lines else "  No equity comparables available."
 
+        # Build vision/condition summary
+        vision_issues = []
+        total_deduction = 0
+        if isinstance(vision_data, list):
+            for vi in vision_data:
+                if isinstance(vi, dict) and vi.get('issue') != 'CONDITION_SUMMARY':
+                    deduction = safe_float(vi.get('deduction', 0))
+                    vision_issues.append(f"  - {vi.get('issue', 'Unknown')}: ${deduction:,.0f}")
+                    total_deduction += deduction
+        condition_text = "\n".join(vision_issues) if vision_issues else "  No physical condition issues identified."
+
+        # External Obsolescence Check
+        ext_obs = property_data.get('external_obsolescence', equity_data.get('external_obsolescence', {}))
+        obs_lines = []
+        if isinstance(ext_obs, dict) and ext_obs.get('factors'):
+            for f in ext_obs['factors']:
+                obs_lines.append(f"  - {f['description']}")
+        obs_text = "\n".join(obs_lines) if obs_lines else "  No significant external obsolescence factors identified."
+
+        # Sales comps
+        sales_count = equity_data.get('sales_count', 0) if isinstance(equity_data, dict) else 0
+        sales_comps = equity_data.get('sales_comps', []) if isinstance(equity_data, dict) else []
+        sales_lines = []
+        for sc in sales_comps[:5]:
+            if isinstance(sc, dict):
+                sc_addr = sc.get('address', sc.get('Address', 'N/A'))
+                sc_price = safe_float(sc.get('sale_price', sc.get('Sale Price', 0)))
+                sc_date = sc.get('sale_date', sc.get('Sale Date', 'N/A'))
+                sales_lines.append(f"  - {sc_addr}: ${sc_price:,.0f} (sold {sc_date})")
+        sales_text = "\n".join(sales_lines) if sales_lines else "  No recent sales comparables available."
+
+        subj_pps = appraised_val / building_area if building_area > 0 else 0
+        
+        prompt = f"""Write a professional, persuasive property tax protest narrative for a hearing before the Appraisal Review Board (ARB) in Texas. Use formal legal language citing relevant Texas Tax Code sections.
+
+SUBJECT PROPERTY:
+- Address: {property_data.get('address', 'N/A')}
+- Account: {property_data.get('account_number', 'N/A')}
+- Current Appraised Value: ${appraised_val:,.0f}
+- Building Area: {building_area:,.0f} sqft
+- Year Built: {year_built}
+- Price Per SqFt: ${subj_pps:,.0f}
+- Market Value Estimate: ${market_val:,.0f}
+
+EQUITY ANALYSIS (Comparable Properties):
+- Justified Value Floor: ${justified_val:,.0f}
+- Equity Gap: ${max(0, appraised_val - justified_val):,.0f}
+- Comparable Properties:
+{comp_text}
+
+SALES COMPARISON:
+- Sales Count: {sales_count}
+- Sales Comparables:
+{sales_text}
+
+PHYSICAL CONDITION:
+- Total Condition Deduction: ${total_deduction:,.0f}
+- Issues Found:
+{condition_text}
+
+EXTERNAL OBSOLESCENCE (Location & Neighborhood Factors):
+{obs_text}
+
+INSTRUCTIONS:
+1. Write 3-5 paragraphs arguing for a value reduction
+2. Cite Texas Tax Code §41.43(b)(1) for market value, §41.43(b)(3) and §42.26(a)(3) for equity/unequal appraisal
+3. Reference the specific comparables and their values
+4. If condition issues exist, cite §23.01(b) for physical depreciation. If external obsolescence exists (e.g. high local crime, flood zones), argue strongly that it negatively impacts marketability and value.
+5. Conclude with the recommended protest value of ${min(appraised_val, justified_val if justified_val > 0 else appraised_val, market_val if market_val > 0 else appraised_val):,.0f}
+6. Be factual and professional — this is for an administrative ARB hearing, NOT a judicial court. Do NOT address them as "Your Honor" or "May it please the court". Instead, address them as "Members of the Appraisal Review Board" or similar.
+7. Do NOT include headers, titles, or bullet points — write continuous prose paragraphs only"""
+
+        # Try Gemini first
+        if self.gemini_client:
+            try:
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt
+                )
+                narrative = response.text.strip()
+                if narrative and len(narrative) > 100:
+                    logger.info(f"Narrative generated via Gemini ({len(narrative)} chars)")
+                    return clean_text(narrative)
+            except Exception as e:
+                logger.warning(f"Gemini narrative generation failed: {e}")
+
+        # Try OpenAI
         if self.openai_llm:
             try:
-                prompt = PromptTemplate.from_template("Write a professional protest for {address} justifying reduction to ${justified_value}. Cite Texas Tax Code §41.43(b)(1). \n\nData Summary: {equity_situation}")
-                chain = prompt | self.openai_llm | StrOutputParser()
-                return clean_text(chain.invoke(inputs))
-            except: pass
+                from langchain_core.prompts import PromptTemplate
+                from langchain_core.output_parsers import StrOutputParser
+                simple_prompt = PromptTemplate.from_template("{text}")
+                chain = simple_prompt | self.openai_llm | StrOutputParser()
+                result = chain.invoke({"text": prompt})
+                if result and len(result.strip()) > 100:
+                    logger.info(f"Narrative generated via OpenAI ({len(result.strip())} chars)")
+                    return clean_text(result.strip())
+            except Exception as e:
+                logger.warning(f"OpenAI narrative generation failed: {e}")
+
+        # Try XAI (Grok)
+        if self.xai_llm:
+            try:
+                from langchain_core.prompts import PromptTemplate
+                from langchain_core.output_parsers import StrOutputParser
+                simple_prompt = PromptTemplate.from_template("{text}")
+                chain = simple_prompt | self.xai_llm | StrOutputParser()
+                result = chain.invoke({"text": prompt})
+                if result and len(result.strip()) > 100:
+                    logger.info(f"Narrative generated via XAI/Grok ({len(result.strip())} chars)")
+                    return clean_text(result.strip())
+            except Exception as e:
+                logger.warning(f"XAI narrative generation failed: {e}")
 
         return "Protest Narrative: Subject property is over-assessed relative to neighbors."
 
@@ -364,23 +473,28 @@ class PDFService:
             fill = fill_first and is_first
             if fill:
                 pdf.set_fill_color(248, 250, 252)
-            cell_align = 'L' if is_first else align
+            cell_align = 'L' if is_first else 'C'
             
-            # Less aggressive truncation
+            # Truncation based on column width
             raw_text = clean_text(str(v))
-            if len(raw_text) > 45:
-                text_val = raw_text[:42] + "..."
+            max_chars = max(int(widths[i] / 1.8), 10)
+            if len(raw_text) > max_chars:
+                text_val = raw_text[:max_chars - 2] + ".."
             else:
                 text_val = raw_text
                 
-            # Check if value is numeric or currency
-            if isinstance(v, (int, float)) or (isinstance(v, str) and (v.startswith("$") or v.endswith("%"))):
-                curr_align = 'R'
-            else:
-                curr_align = cell_align
             # Also apply subtle bottom border
-            pdf.cell(widths[i], 9, text_val, 'B', 0, curr_align, fill)
+            pdf.cell(widths[i], 8, text_val, 'B', 0, cell_align, fill)
         pdf.ln()
+
+    def _check_grid_space(self, pdf, needed_mm=60):
+        """Check if there's enough space on the page for the next block of rows.
+        If not, add a new page. Returns True if a new page was added."""
+        remaining = pdf.h - pdf.get_y() - pdf.b_margin
+        if remaining < needed_mm:
+            pdf.add_page()
+            return True
+        return False
 
     # ── NEIGHBORHOOD STATISTICAL ANALYSIS PAGE ─────────────────────────────
     def _generate_neighborhood_stats_page(self, pdf, property_data, equity_data):
@@ -526,7 +640,7 @@ class PDFService:
         pdf.add_page()
         self._draw_header(pdf, property_data, "DOCUMENTED ADJUSTMENT FACTORS")
 
-        signals = savings_pred.get('signals', [])
+        signals = savings_pred.get('signal_breakdown', [])
         prob = savings_pred.get('protest_success_probability', 0)
         strength = savings_pred.get('protest_strength', '')
         est_savings = savings_pred.get('estimated_savings', {})
@@ -1124,6 +1238,45 @@ class PDFService:
         pdf.cell(100, 5, "Property Owner / Authorized Agent Signature", 0, 0, 'L')
         pdf.cell(70, 5, "Date", 0, 1, 'L')
 
+        # ══════════════════════════════════════════════════════════════════════════
+        # ── COMMON DATA FOR PAGES 2 AND 3 ──────────────────────────────────────────
+        owner_name = property_data.get('owner_name', '')
+        if not owner_name or owner_name.strip().lower() in ('on file', ''):
+            owner_name = f"Account: {property_data.get('account_number', 'See Records')}"
+        mailing_addr = property_data.get('mailing_address', '')
+        if not mailing_addr or mailing_addr.strip().lower() in ('on file', ''):
+            mailing_addr = "See HCAD Records"
+        legal_desc = property_data.get('legal_description', '')
+        land_use_code = property_data.get('land_use_code', '1001')
+        land_use_desc = property_data.get('land_use_desc', 'Residential Single Family')
+        cad_name = property_data.get('district', 'Harris')
+
+        info_w = [38, 57, 38, 57]
+        rows = [
+            ("Account Number:", property_data.get('account_number', 'N/A'), "CAD:", cad_name),
+            ("Owner Name:", clean_text(owner_name)[:30], "Site Address:", clean_text(property_data.get('address', 'N/A'))[:30]),
+            ("Mailing Address:", clean_text(mailing_addr)[:30] if mailing_addr else "On File", "Legal Desc:", clean_text(legal_desc)[:30] if legal_desc else "N/A"),
+            ("Land Use Code:", str(land_use_code), "Land Use Desc:", clean_text(land_use_desc)[:30]),
+        ]
+
+        pa_w = [24, 24, 24, 24, 24, 24, 24, 24]
+        pa_heads = ["Land Area", "Total Bldg", "NRA", "Bldg Class", "Grade", "NBHD/Econ", "Key Map", "Year Built"]
+        land_area_val = property_data.get('land_area', 0)
+        nbhd = property_data.get('neighborhood_code', 'N/A')
+        grade = property_data.get('building_grade', 'N/A')
+        key_map = property_data.get('key_map', '')
+        pa_vals = [
+            f"{land_area_val:,.0f} SF" if land_area_val else "N/A",
+            f"{subj_area:,.0f} SF",
+            "-",
+            property_data.get('building_class', 'Excellent') if grade and grade.startswith('A') else property_data.get('building_class', 'Good'),
+            str(grade),
+            str(nbhd),
+            str(key_map) if key_map else "-",
+            str(property_data.get('year_built', 'N/A'))
+        ]
+        # ══════════════════════════════════════════════════════════════════════════
+
         # AI-generated narrative (if provided)
         if narrative and len(narrative) > 50:
             pdf.add_page()
@@ -1265,25 +1418,6 @@ class PDFService:
         pdf.cell(0, 7, "  Owner and Subject Property Information", ln=True, fill=True)
         pdf.set_font("Roboto", '', 8)
 
-        owner_name = property_data.get('owner_name', '')
-        # HCAD hides owner names on portal — show account-based fallback if not available
-        if not owner_name or owner_name.strip().lower() in ('on file', ''):
-            owner_name = f"Account: {property_data.get('account_number', 'See Records')}"
-        mailing_addr = property_data.get('mailing_address', '')
-        if not mailing_addr or mailing_addr.strip().lower() in ('on file', ''):
-            mailing_addr = "See HCAD Records"
-        legal_desc = property_data.get('legal_description', '')
-        land_use_code = property_data.get('land_use_code', '1001')
-        land_use_desc = property_data.get('land_use_desc', 'Residential Single Family')
-        cad_name = property_data.get('district', 'Harris')
-
-        info_w = [38, 57, 38, 57]
-        rows = [
-            ("Account Number:", property_data.get('account_number', 'N/A'), "CAD:", cad_name),
-            ("Owner Name:", clean_text(owner_name)[:30], "Site Address:", clean_text(property_data.get('address', 'N/A'))[:30]),
-            ("Mailing Address:", clean_text(mailing_addr)[:30] if mailing_addr else "On File", "Legal Desc:", clean_text(legal_desc)[:30] if legal_desc else "N/A"),
-            ("Land Use Code:", str(land_use_code), "Land Use Desc:", clean_text(land_use_desc)[:30]),
-        ]
         for r in rows:
             pdf.set_font("Roboto", 'B', 7)
             pdf.cell(info_w[0], 6, r[0], 0)
@@ -1319,26 +1453,10 @@ class PDFService:
         # ── Physical Attributes Table ──
         pdf.set_fill_color(241, 245, 249)
         pdf.set_font("Roboto", 'B', 8)
-        pa_w = [24, 24, 24, 24, 24, 24, 24, 24]
-        pa_heads = ["Land Area", "Total Bldg", "NRA", "Bldg Class", "Grade", "NBHD/Econ", "Key Map", "Year Built"]
         for i, h in enumerate(pa_heads):
             pdf.cell(pa_w[i], 7, h, 'B', 0, 'C', True)
         pdf.ln()
         pdf.set_font("Roboto", '', 7)
-        land_area_val = property_data.get('land_area', 0)
-        nbhd = property_data.get('neighborhood_code', 'N/A')
-        grade = property_data.get('building_grade', 'N/A')
-        key_map = property_data.get('key_map', '')
-        pa_vals = [
-            f"{land_area_val:,.0f} SF" if land_area_val else "N/A",
-            f"{subj_area:,.0f} SF",
-            "-",
-            property_data.get('building_class', 'Excellent') if grade and grade.startswith('A') else property_data.get('building_class', 'Good'),
-            str(grade),
-            str(nbhd),
-            str(key_map) if key_map else "-",
-            str(property_data.get('year_built', 'N/A'))
-        ]
         for i, v in enumerate(pa_vals):
             pdf.cell(pa_w[i], 7, clean_text(str(v))[:14], 'B', 0, 'C')
         pdf.ln()
@@ -1537,17 +1655,17 @@ class PDFService:
                     proj_2yr = proj_next * (1 + growth_rate)
 
                     pdf.set_fill_color(255, 248, 220)
-                    pdf.rect(15, pdf.get_y(), 180, 25, 'F')
+                    pdf.rect(15, pdf.get_y(), 180, 30, 'F')
                     pdf.set_xy(20, pdf.get_y() + 3)
                     pdf.set_font("Roboto", 'B', 9)
-                    pdf.cell(0, 6, "AI Forecast (Based on Current Trend)", ln=True)
+                    pdf.cell(170, 6, "AI Forecast (Based on Current Trend)", ln=True)
                     pdf.set_x(20)
                     pdf.set_font("Roboto", '', 8)
-                    pdf.cell(0, 5, clean_text(
+                    pdf.multi_cell(170, 5, clean_text(
                         f"At the current {growth_rate*100:.1f}% annual growth rate, your assessment could reach "
                         f"{self._fmt(proj_next)} next year and {self._fmt(proj_2yr)} in two years. "
                         f"A successful protest now prevents compounding over-assessment."
-                    ), ln=True)
+                    ))
 
         # ── NEW: EVIDENCE SIGNAL BREAKDOWN PAGE ───────────────────────────────
         try:
@@ -1684,7 +1802,7 @@ class PDFService:
                 self._draw_header(pdf, property_data, "RESIDENTIAL SALES COMP GRID")
 
                 n_comps_s = len(sp_comps)
-                factor_w = 32
+                factor_w = 36
                 data_w = int((190 - factor_w) / max(1 + n_comps_s, 1))
                 col_w = [factor_w] + [data_w] * (1 + n_comps_s)
 
@@ -1706,8 +1824,8 @@ class PDFService:
                                 [str(sc_get(sc, 'account_number', sc_get(sc, 'Prop ID', ''))) for sc in sp_comps])
                 self._table_row(pdf, col_w, ["Neighborhood", str(nbhd)] +
                                 [str(nbhd) for _ in sp_comps])
-                self._table_row(pdf, col_w, ["Situs", clean_text(property_data.get('address', ''))[:25]] +
-                                [clean_text(str(sc_get(sc, 'Address', sc_get(sc, 'address', ''))))[:25] for sc in sp_comps])
+                self._table_row(pdf, col_w, ["Situs", clean_text(property_data.get('address', ''))[:30]] +
+                                [clean_text(str(sc_get(sc, 'Address', sc_get(sc, 'address', ''))))[:30] for sc in sp_comps])
 
                 # Value rows
                 self._table_row(pdf, col_w, ["Year Built", str(property_data.get('year_built', ''))] +
@@ -1734,7 +1852,12 @@ class PDFService:
                 self._table_row(pdf, col_w, ["Sale Price", ""] +
                                 [self._fmt(p) for p in sc_prices])
 
-                pdf.ln(2)
+                pdf.ln(1)
+
+                # Check if we have space for the adjustment block (~100mm)
+                if self._check_grid_space(pdf, 100):
+                    self._draw_header(pdf, property_data, "RESIDENTIAL SALES COMP GRID (cont.)")
+                    self._table_header(pdf, col_w, headers, (200, 230, 210))
 
                 # Adjustment rows (simplified for sales — compute basic adjustments)
                 from backend.services.valuation_service import valuation_service
@@ -1780,7 +1903,12 @@ class PDFService:
                 self._table_row(pdf, col_w, ["Segments & Adj", "$0"] + ["$0" for _ in sp_comps])
                 self._table_row(pdf, col_w, ["Other Improvements", "$0"] + ["$0" for _ in sp_comps])
 
-                pdf.ln(2)
+                pdf.ln(1)
+
+                # Check space for Net Adjustment + Indicated Value + summary (~40mm)
+                if self._check_grid_space(pdf, 40):
+                    self._draw_header(pdf, property_data, "RESIDENTIAL SALES COMP GRID (cont.)")
+                    self._table_header(pdf, col_w, headers, (200, 230, 210))
 
                 # Net Adjustment
                 pdf.set_fill_color(230, 240, 255)
@@ -2289,7 +2417,7 @@ class PDFService:
                 pdf.ln(2)
 
                 n_comps = len(page_comps)
-                factor_w = 32
+                factor_w = 36
                 data_w = int((190 - factor_w) / max(1 + n_comps, 1))
                 col_w = [factor_w] + [data_w] * (1 + n_comps)
 
@@ -2315,8 +2443,8 @@ class PDFService:
                                 [comp_val(c, 'account_number') for c in page_comps])
                 self._table_row(pdf, col_w, ["Neighborhood", str(nbhd)] + 
                                 [str(c.get('neighborhood_code', nbhd)) for c in page_comps])
-                self._table_row(pdf, col_w, ["Situs", clean_text(property_data.get('address', ''))[:25]] + 
-                                [clean_text(c.get('address', ''))[:25] for c in page_comps])
+                self._table_row(pdf, col_w, ["Situs", clean_text(property_data.get('address', ''))[:30]] + 
+                                [clean_text(c.get('address', ''))[:30] for c in page_comps])
 
                 self._table_row(pdf, col_w, ["Year Built", str(property_data.get('year_built', ''))] + 
                                 [str(c.get('year_built', '')) for c in page_comps])
@@ -2377,7 +2505,12 @@ class PDFService:
                     for factor in ext_obs['factors'][:3]:
                         pdf.cell(0, 5, clean_text(f"  ⚠ {factor['description']} (-{factor['impact_pct']:.1f}%)"), ln=True, fill=True)
 
-                pdf.ln(2)
+                pdf.ln(1)
+
+                # Check if we have space for the adjustment block (~100mm)
+                if self._check_grid_space(pdf, 100):
+                    self._draw_header(pdf, property_data, "APPENDIX: EQUITY COMP GRID (cont.)")
+                    self._table_header(pdf, col_w, headers, (200, 210, 230))
 
                 subj_grade_disp = str(property_data.get('building_grade', 'N/A'))
                 subj_year_built = str(property_data.get('year_built', ''))
@@ -2411,7 +2544,12 @@ class PDFService:
                 self._table_row(pdf, col_w, ["Segments & Adj", "$0"] + [adj_val(c, 'segments') for c in page_comps])
                 self._table_row(pdf, col_w, ["Other Improvements", "$0"] + [adj_val(c, 'other_improvements') for c in page_comps])
 
-                pdf.ln(2)
+                pdf.ln(1)
+
+                # Check space for Net Adjustment + Indicated Value + summary (~40mm)
+                if self._check_grid_space(pdf, 40):
+                    self._draw_header(pdf, property_data, "APPENDIX: EQUITY COMP GRID (cont.)")
+                    self._table_header(pdf, col_w, headers, (200, 210, 230))
 
                 pdf.set_fill_color(230, 240, 255)
                 pdf.set_font("Roboto", 'B', 7)

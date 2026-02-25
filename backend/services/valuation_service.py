@@ -144,13 +144,13 @@ class ValuationService:
             adjustments["sub_area_diff"] = round((subj_sub_areas - comp_sub_areas) * 50)  # $50/sf for sub areas
 
         # --- 8. Land Value Adjustment ---
-        subj_land = subject.get('land_value') or 0
-        comp_land = comp.get('land_value') or 0
+        subj_land = float(subject.get('land_value') or 0)
+        comp_land = float(comp.get('land_value') or 0)
         # If we don't have comp land, use estimated from subject
         if subj_land and not comp_land:
             # Estimate comp land proportionally by area
-            subj_land_area = subject.get('land_area') or 1
-            comp_land_area = comp.get('land_area') or subj_land_area
+            subj_land_area = float(subject.get('land_area') or 1)
+            comp_land_area = float(comp.get('land_area') or subj_land_area)
             comp_land = subj_land * (comp_land_area / subj_land_area) if subj_land_area > 0 else subj_land
         adjustments["land_value"] = round(subj_land - comp_land) if subj_land and comp_land else 0
         adjustments["subject_land_value"] = subj_land
