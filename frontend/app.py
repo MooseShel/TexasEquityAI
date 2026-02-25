@@ -922,6 +922,25 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
 
         yield {"status": f"⛏️ Data Mining Agent: Scraping {current_district or 'District'} records..."}
         cached_property = await supabase_service.get_property_by_account(current_account)
+        
+        # Safety net: if current_account is still an address string (resolver failed),
+        # try a direct address search in the DB to find the real account number
+        if not cached_property and any(c.isalpha() for c in current_account):
+            try:
+                # Extract just the street portion for a more robust search
+                street_part = current_account.split(",")[0].strip()
+                addr_candidates = await supabase_service.search_address_globally(street_part, limit=3)
+                if addr_candidates:
+                    best_candidate = addr_candidates[0]
+                    real_acct = best_candidate.get('account_number')
+                    if real_acct:
+                        logger.info(f"Address fallback: resolved '{current_account}' → account {real_acct} via DB address search")
+                        current_account = real_acct
+                        current_district = best_candidate.get('district') or current_district
+                        cached_property = await supabase_service.get_property_by_account(current_account)
+            except Exception as addr_fb_err:
+                logger.warning(f"Address fallback search failed: {addr_fb_err}")
+
         connector = DistrictConnectorFactory.get_connector(current_district, current_account)
         original_address = account_number if any(c.isalpha() for c in account_number) else None
 
@@ -938,6 +957,23 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             # Must have at least one rich field to be considered a real scrape
             return has_real_value or has_year or has_nbhd or has_real_area
 
+        # ── Property Type Detection (always run — needed by equity analysis) ─────
+        from backend.agents.property_type_resolver import resolve_property_type
+        ptype = "Unknown"
+        ptype_source = "Unknown"
+        is_likely_commercial = False
+        try:
+            resolve_addr = original_address or (current_account if any(c.isalpha() for c in current_account) else "")
+            ptype, ptype_source = await resolve_property_type(
+                account_number=current_account,
+                address=resolve_addr,
+                district=current_district or "HCAD",
+            )
+            is_likely_commercial = (ptype == "Commercial")
+            logger.info(f"PropertyTypeResolver: {ptype} ({ptype_source}) for '{current_account}'")
+        except Exception as pt_err:
+            logger.warning(f"Property type resolution failed (non-fatal): {pt_err}")
+
         if (is_valid_cache(cached_property)
                 and cached_property.get('address')
                 and not manual_value and not manual_address):
@@ -946,12 +982,6 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
         else:
             if cached_property and not is_valid_cache(cached_property):
                 logger.warning(f"Supabase cache for {current_account} looks like a ghost record (appraised={cached_property.get('appraised_value')}, year_built={cached_property.get('year_built')}, nbhd={cached_property.get('neighborhood_code')}) — forcing fresh scrape.")
-            
-            # ── Property Type Detection (multi-source chain) ────────────────
-            from backend.agents.property_type_resolver import resolve_property_type
-            is_likely_commercial = False
-            ptype_source = "Unknown"
-            ptype = "Unknown"
 
             # Fast path: if we already have RentCast cached data, check it first
             if rentcast_fallback_data:
@@ -981,7 +1011,9 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
                 yield {"status": f"🏢 Commercial Property Detected ({ptype_source}): Prioritizing commercial data sources..."}
                 commercial_agent = CommercialEnrichmentAgent()
-                commercial_data = await commercial_agent.enrich_property(current_account)
+                # Use the original address for enrichment, not the account number
+                enrich_addr = original_address or current_account
+                commercial_data = await commercial_agent.enrich_property(enrich_addr)
             
             if commercial_data and (commercial_data.get('appraised_value', 0) > 0 or commercial_data.get('building_area', 0) > 0):
                 logger.info(f"Commercial Enrichment Successful — Skipping standard scraper. Value: ${commercial_data.get('appraised_value', 0)}")
@@ -1130,9 +1162,16 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
                 if m and m.group(1) in COMMERCIAL_CODE_PREFIXES:
                     return True
 
+                # Also check state_class field directly (DB records have this
+                # but may not have property_type set)
+                sc = str(prop.get('state_class', '') or '').strip().upper()
+                if sc and sc[0:1] in COMMERCIAL_CODE_PREFIXES:
+                    return True
+
                 return False
 
-            is_commercial_prop = _detect_commercial(property_details)
+            # Use both the local heuristic AND the early resolver result
+            is_commercial_prop = _detect_commercial(property_details) or ptype == "Commercial"
 
             # Ensure property_type is set so downstream agents (SalesAgent) classify correctly
             if is_commercial_prop and not property_details.get('property_type'):

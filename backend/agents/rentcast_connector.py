@@ -1,10 +1,45 @@
 import os
 import requests
 import logging
+import time
 from typing import Optional, List
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from backend.models.sales_comp import SalesComparable
 
 logger = logging.getLogger(__name__)
+
+class CircuitBreaker:
+    """Simple memory-based circuit breaker to fail-fast if external API goes down."""
+    def __init__(self, failure_threshold: int = 5, recovery_timeout_sec: int = 300):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout_sec = recovery_timeout_sec
+        self.failure_count = 0
+        self.last_failure_time = 0.0
+
+    def record_failure(self):
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        logger.warning(f"Circuit Breaker threshold increased: {self.failure_count}/{self.failure_threshold}")
+
+    def record_success(self):
+        if self.failure_count > 0:
+            logger.info("Circuit Breaker reset: Connection to API restored.")
+        self.failure_count = 0
+
+    def check(self) -> bool:
+        """Returns True if the circuit is CLOSED (ok to make request). Returns False if OPEN (fail fast)."""
+        if self.failure_count >= self.failure_threshold:
+            time_since_failure = time.time() - self.last_failure_time
+            if time_since_failure < self.recovery_timeout_sec:
+                logger.error(f"Circuit Breaker is OPEN. Failing fast for next {int(self.recovery_timeout_sec - time_since_failure)}s.")
+                return False
+            else:
+                logger.info("Circuit Breaker timeout expired. Half-open state allowed to retry.")
+                return True
+        return True
+
+_rentcast_circuit = CircuitBreaker()
+
 
 # Property types considered residential — used to filter comps by type
 RESIDENTIAL_TYPES = {"single family", "condo", "townhouse", "multifamily", "residential"}
@@ -56,43 +91,61 @@ class RentCastConnector:
             "daysOld": 365,
         }
         logger.info(f"RentCast: Fetching residential AVM comps for {address}...")
-        response = requests.get(self.base_url_comps, headers=headers, params=params)
+        
+        if not _rentcast_circuit.check():
+            logger.error("RentCast: Circuit breaker prevents request.")
+            return []
+            
+        @retry(
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            stop=stop_after_attempt(3),
+            retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout))
+        )
+        def _make_request():
+            resp = requests.get(self.base_url_comps, headers=headers, params=params, timeout=15)
+            resp.raise_for_status()
+            return resp
+
+        try:
+            response = _make_request()
+            _rentcast_circuit.record_success()
+        except Exception as e:
+            logger.error(f"RentCast AVM Request Failed: {e}")
+            _rentcast_circuit.record_failure()
+            return []
 
         comps_list = []
-        if response.status_code == 200:
-            data = response.json()
-            raw_comps = data.get("comparables", []) if data else []
-            logger.info(f"RentCast: Found {len(raw_comps)} AVM comparables.")
+        data = response.json()
+        raw_comps = data.get("comparables", []) if data else []
+        logger.info(f"RentCast: Found {len(raw_comps)} AVM comparables.")
 
-            for comp in raw_comps:
-                try:
-                    # Use actual sale price first, fall back to correlationPrice (AVM comparable)
-                    price = comp.get("lastSalePrice") or comp.get("correlationPrice") or comp.get("price") or 0
-                    sqft  = comp.get("squareFootage") or 0
-                    date  = comp.get("lastSaleDate") or comp.get("listedDate")
-                    ptype = comp.get("propertyType", "")
+        for comp in raw_comps:
+            try:
+                # Use actual sale price first, fall back to correlationPrice (AVM comparable)
+                price = comp.get("lastSalePrice") or comp.get("correlationPrice") or comp.get("price") or 0
+                sqft  = comp.get("squareFootage") or 0
+                date  = comp.get("lastSaleDate") or comp.get("listedDate")
+                ptype = comp.get("propertyType", "")
 
-                    if not price or float(price) <= 0 or not sqft or int(sqft) <= 0:
-                        continue  # skip $0 or zero-sqft comps
+                if not price or float(price) <= 0 or not sqft or int(sqft) <= 0:
+                    continue  # skip $0 or zero-sqft comps
 
-                    price_f = float(price)
-                    sqft_i  = int(sqft)
-                    comps_list.append(SalesComparable(
-                        address=comp.get("formattedAddress") or comp.get("addressLine1", ""),
-                        sale_price=price_f,
-                        sale_date=str(date) if date else None,
-                        sqft=sqft_i,
-                        price_per_sqft=round(price_f / sqft_i, 2),
-                        year_built=comp.get("yearBuilt"),
-                        source="RentCast",
-                        dist_from_subject=comp.get("distance"),
-                        property_type=ptype,
-                    ))
-                except Exception as e:
-                    logger.warning(f"RentCast: Skipping malformed AVM comp: {e}")
-        else:
-            logger.warning(f"RentCast AVM Error: {response.status_code} - {response.text[:200]}")
-
+                price_f = float(price)
+                sqft_i  = int(sqft)
+                comps_list.append(SalesComparable(
+                    address=comp.get("formattedAddress") or comp.get("addressLine1", ""),
+                    sale_price=price_f,
+                    sale_date=str(date) if date else None,
+                    sqft=sqft_i,
+                    price_per_sqft=round(price_f / sqft_i, 2),
+                    year_built=comp.get("yearBuilt"),
+                    source="RentCast",
+                    dist_from_subject=comp.get("distance"),
+                    property_type=ptype,
+                ))
+            except Exception as e:
+                logger.warning(f"RentCast: Skipping malformed AVM comp: {e}")
+        
         # Filter: residential comps should not include commercial types
         comps_list = [c for c in comps_list if not _is_commercial_type(c.property_type)]
         return comps_list
@@ -113,52 +166,70 @@ class RentCastConnector:
             "daysOld": 730,   # 2 year lookback for commercial (less frequent sales)
         }
         logger.info(f"RentCast: Fetching sold commercial properties near {address}...")
-        response = requests.get(self.base_url_props, headers=headers, params=params)
+        
+        if not _rentcast_circuit.check():
+            logger.error("RentCast: Circuit breaker prevents request.")
+            return []
+
+        @retry(
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            stop=stop_after_attempt(3),
+            retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout))
+        )
+        def _make_request():
+            resp = requests.get(self.base_url_props, headers=headers, params=params, timeout=15)
+            resp.raise_for_status()
+            return resp
+
+        try:
+            response = _make_request()
+            _rentcast_circuit.record_success()
+        except Exception as e:
+            logger.error(f"RentCast Properties Request Failed: {e}")
+            _rentcast_circuit.record_failure()
+            return []
 
         comps_list = []
-        if response.status_code == 200:
-            data = response.json()
-            raw_props = data if isinstance(data, list) else data.get("properties", [])
-            logger.info(f"RentCast: Found {len(raw_props)} sold properties nearby.")
+        data = response.json()
+        raw_props = data if isinstance(data, list) else data.get("properties", [])
+        logger.info(f"RentCast: Found {len(raw_props)} sold properties nearby.")
 
-            skipped_no_price = 0
-            skipped_no_sqft = 0
-            for prop in raw_props:
-                try:
-                    ptype = prop.get("propertyType", "")
-                    # Note: type filtering is handled by sales_agent._filter_comps_by_type
-                    # (soft filter — keeps comps as fallback if all would be removed)
+        skipped_no_price = 0
+        skipped_no_sqft = 0
+        for prop in raw_props:
+            try:
+                ptype = prop.get("propertyType", "")
+                # Note: type filtering is handled by sales_agent._filter_comps_by_type
+                # (soft filter — keeps comps as fallback if all would be removed)
 
-                    price = prop.get("lastSalePrice") or prop.get("price") or 0
-                    sqft  = prop.get("squareFootage") or prop.get("buildingSize") or 0
-                    date  = prop.get("lastSaleDate") or prop.get("soldDate")
+                price = prop.get("lastSalePrice") or prop.get("price") or 0
+                sqft  = prop.get("squareFootage") or prop.get("buildingSize") or 0
+                date  = prop.get("lastSaleDate") or prop.get("soldDate")
 
-                    if not price or float(price) <= 0:
-                        skipped_no_price += 1
-                        continue
+                if not price or float(price) <= 0:
+                    skipped_no_price += 1
+                    continue
 
-                    price_f = float(price)
-                    sqft_i  = int(sqft) if sqft else 0
-                    # Allow comps with 0 sqft but valid sale price (common for land/commercial)
-                    pps = round(price_f / sqft_i, 2) if sqft_i > 0 else 0.0
+                price_f = float(price)
+                sqft_i  = int(sqft) if sqft else 0
+                # Allow comps with 0 sqft but valid sale price (common for land/commercial)
+                pps = round(price_f / sqft_i, 2) if sqft_i > 0 else 0.0
 
-                    comps_list.append(SalesComparable(
-                        address=prop.get("formattedAddress") or prop.get("addressLine1", ""),
-                        sale_price=price_f,
-                        sale_date=str(date) if date else None,
-                        sqft=sqft_i,
-                        price_per_sqft=pps,
-                        year_built=prop.get("yearBuilt"),
-                        source="RentCast",
-                        dist_from_subject=prop.get("distance"),
-                        property_type=ptype,
-                    ))
-                except Exception as e:
-                    logger.warning(f"RentCast: Skipping malformed sold property: {e}")
-            if skipped_no_price or skipped_no_sqft:
-                logger.info(f"RentCast sold props: {len(comps_list)} usable, {skipped_no_price} skipped (no price), {skipped_no_sqft} skipped (no sqft)")
-        else:
-            logger.warning(f"RentCast Properties Error: {response.status_code} - {response.text[:200]}")
+                comps_list.append(SalesComparable(
+                    address=prop.get("formattedAddress") or prop.get("addressLine1", ""),
+                    sale_price=price_f,
+                    sale_date=str(date) if date else None,
+                    sqft=sqft_i,
+                    price_per_sqft=pps,
+                    year_built=prop.get("yearBuilt"),
+                    source="RentCast",
+                    dist_from_subject=prop.get("distance"),
+                    property_type=ptype,
+                ))
+            except Exception as e:
+                logger.warning(f"RentCast: Skipping malformed sold property: {e}")
+        
+        logger.info(f"RentCast sold props: {len(comps_list)} usable, {skipped_no_price} skipped (no price), {skipped_no_sqft} skipped (no sqft)")
 
         return comps_list
 

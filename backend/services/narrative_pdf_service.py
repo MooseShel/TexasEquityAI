@@ -1895,7 +1895,12 @@ class PDFService:
                     subj_pct = adj.get('subject_pct_good', 97)
                 self._table_row(pdf, col_w, ["% Good Adj", f"{subj_pct}%"] +
                                 [f"{(sc.get('adjustments', {}) if isinstance(sc, dict) else getattr(sc, 'adjustments', {})).get('comp_pct_good', 80)}%" for sc in sp_comps])
+                pdf.ln(2)
 
+                is_deferred = (sp_comps[0].get('adjustments', {}) if isinstance(sp_comps[0], dict) else getattr(sp_comps[0], 'adjustments', {})).get('is_deferred') if sp_comps else False
+                self._table_row(pdf, col_w, ["Deferred Maint", "Yes" if is_deferred else "No"] + 
+                                [self._fmt((sc.get('adjustments', {}) if isinstance(sc, dict) else getattr(sc, 'adjustments', {})).get('deferred_maintenance', 0)) for sc in sp_comps])
+                
                 pdf.ln(2)
 
                 self._table_row(pdf, col_w, ["Land Value Adj", self._fmt(subj_land)] +
@@ -2408,9 +2413,10 @@ class PDFService:
                 pdf.set_font("Roboto", 'I', 8)
                 pdf.set_text_color(100, 100, 100)
                 methodology_text = (
-                    "Adjustments are calculated using standard appraisal methods: "
-                    "Depreciation based on Marshall & Swift residential cost tables. "
-                    "Size adjustments applied at 50% of base rate (diminishing returns)."
+                    "Adjustments are calculated dynamically using localized Machine Learning regression "
+                    "on recent neighborhood comparables. Base depreciation utilizes Marshall & Swift tables. "
+                    "This methodology identifies the true marginal value of square footage and age in this specific market area "
+                    "rather than relying on arbitrary, static mass-appraisal rules."
                 )
                 pdf.multi_cell(0, 4, clean_text(methodology_text), align='L')
                 pdf.set_text_color(0, 0, 0)
@@ -2538,6 +2544,11 @@ class PDFService:
                 self._table_row(pdf, col_w, ["Lump Sum Adj", ""] + [adj_val(c, 'lump_sum') for c in page_comps])
                 pdf.ln(2)
                 self._table_row(pdf, col_w, ["Sub Area Diff", ""] + [adj_val(c, 'sub_area_diff') for c in page_comps])
+                pdf.ln(2)
+
+                is_deferred = page_comps[0].get('adjustments', {}).get('is_deferred', False) if page_comps else False
+                self._table_row(pdf, col_w, ["Deferred Maint", "Yes" if is_deferred else "No"] + [adj_val(c, 'deferred_maintenance') for c in page_comps])
+
                 pdf.ln(2)
 
                 self._table_row(pdf, col_w, ["Land Value Adj", self._fmt(subj_land)] + [adj_val(c, 'land_value') for c in page_comps])

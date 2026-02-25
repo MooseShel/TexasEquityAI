@@ -205,14 +205,44 @@ class SupabaseService:
         
         try:
             # Use ILIKE for case-insensitive partial match
-            # This is fast enough on indexed 'address' column for prefix searches
-            # For "123 Main", we might get multiple, but usually user types full street
             response = self.client.table("properties") \
                 .select("account_number, address, district, appraised_value") \
                 .ilike("address", f"%{clean_q}%") \
                 .limit(limit) \
                 .execute()
-            return response.data or []
+            if response.data:
+                return response.data
+
+            # Fallback: extract just the street part (before any comma/city)
+            # This handles cases where abbreviation expansion (Ln→Lane) or
+            # city suffix differences prevent the full query from matching
+            street_part = address_query.split(",")[0].strip()
+            clean_street = "".join(c for c in street_part if c.isalnum() or c.isspace()).strip()
+            if clean_street and clean_street != clean_q and len(clean_street) >= 4:
+                response = self.client.table("properties") \
+                    .select("account_number, address, district, appraised_value") \
+                    .ilike("address", f"%{clean_street}%") \
+                    .limit(limit) \
+                    .execute()
+                if response.data:
+                    return response.data
+
+            # Fallback 2: use just house number + first street word
+            # Handles "825 Town and Country Lane" vs "825 TOWN AND COUNTRY LN"
+            parts = clean_street.split() if clean_street else clean_q.split()
+            if len(parts) >= 2 and parts[0][0].isdigit():
+                # Use house number + first two words of street name
+                short_q = " ".join(parts[:min(3, len(parts))])
+                if short_q != clean_street and len(short_q) >= 4:
+                    response = self.client.table("properties") \
+                        .select("account_number, address, district, appraised_value") \
+                        .ilike("address", f"%{short_q}%") \
+                        .limit(limit) \
+                        .execute()
+                    if response.data:
+                        return response.data
+
+            return []
         except Exception as e:
             logger.warning(f"search_address_globally failed: {e}")
             return []

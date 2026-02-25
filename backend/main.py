@@ -459,8 +459,69 @@ async def get_full_protest(
                 logger.info(f"EQUITY DEBUG: nbhd_code={nbhd_code!r}, bld_area={bld_area}, prop_district={prop_district}, address={prop_address}")
                 logger.info(f"EQUITY DEBUG: property_details keys={list(property_details.keys())}")
 
+                def _detect_commercial(prop: dict) -> bool:
+                    """Detect commercial property from property_type string OR HCAD state class codes."""
+                    pt = str(prop.get('property_type', '') or '').lower().strip()
+
+                    # Literal type words (from most APIs / district portals)
+                    COMMERCIAL_KEYWORDS = {
+                        'commercial', 'office', 'retail', 'industrial',
+                        'mixed_use', 'mixed use', 'land', 'vacant',
+                        'warehouse', 'restaurant', 'store', 'hotel', 'motel',
+                        'bank', 'service', 'manufacturing', 'flex', 'apartment',
+                    }
+                    if any(kw in pt for kw in COMMERCIAL_KEYWORDS):
+                        return True
+
+                    # HCAD state class codes → first letter signals property category
+                    # A=residential, B=mobile home, C=vacant, D=farm, E=exempt,
+                    # F=commercial, G=oil/gas, H=commercial, J=utilities, K=commercial
+                    COMMERCIAL_CODE_PREFIXES = ('F', 'G', 'H', 'J', 'K', 'L', 'X')
+                    import re as _re
+                    m = _re.match(r'^([A-Z])\d?$', pt.upper())
+                    if m and m.group(1) in COMMERCIAL_CODE_PREFIXES:
+                        return True
+
+                    # Also check state_class field directly (DB records have this
+                    # but may not have property_type set)
+                    sc = str(prop.get('state_class', '') or '').strip().upper()
+                    if sc and sc[0:1] in COMMERCIAL_CODE_PREFIXES:
+                        return True
+
+                    return False
+
+                # Use both the local heuristic AND the early resolver result
+                is_commercial_prop = _detect_commercial(property_details) or ptype == "Commercial"
+
+                # Ensure property_type is set so downstream agents classify correctly
+                if is_commercial_prop and not property_details.get('property_type'):
+                    property_details['property_type'] = 'commercial'
+                if is_commercial_prop:
+                    property_details['ptype_source'] = ptype_source
+
+                # ── Commercial properties: use API-based comp pool directly ───────
+                if is_commercial_prop:
+                    try:
+                        from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+                        comm_agent_local = CommercialEnrichmentAgent()
+                        yield json.dumps({"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}) + "\n"
+                        comp_pool = comm_agent_local.get_equity_comp_pool(
+                            property_details.get('address', account_number), property_details
+                        )
+                        if comp_pool:
+                            real_neighborhood = comp_pool
+                            equity_results['note'] = (
+                                "Equity analysis is based on recent sales comparables "
+                                "(commercial property — no district neighbor records available)."
+                            )
+                            logger.info(f"Main: Commercial equity pool established: {len(real_neighborhood)} proxy comps.")
+                        else:
+                            logger.warning("Main: Commercial equity pool empty.")
+                    except Exception as e:
+                        logger.error(f"Main: Commercial equity fallback failed: {e}")
+
                 # Layer 0: DB lookup by neighborhood_code + building_area (no browser needed)
-                if nbhd_code and bld_area > 0:
+                if not real_neighborhood and nbhd_code and bld_area > 0:
                     db_comps = await supabase_service.get_neighbors_from_db(
                         current_account, nbhd_code, bld_area, district=prop_district
                     )

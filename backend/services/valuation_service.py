@@ -48,15 +48,23 @@ class ValuationService:
                 lo, hi = keys[i], keys[i + 1]
                 lo_val, hi_val = self.DEPRECIATION_TABLE[lo], self.DEPRECIATION_TABLE[hi]
                 ratio = (age - lo) / (hi - lo)
-                return int(lo_val - ratio * (lo_val - hi_val))
-        if age >= keys[-1]:
-            return self.DEPRECIATION_TABLE[keys[-1]]
-        return 100
+                pct_good = int(lo_val - ratio * (lo_val - hi_val))
+                break
+        else:
+            if age >= keys[-1]:
+                pct_good = self.DEPRECIATION_TABLE[keys[-1]]
+            else:
+                pct_good = 100
 
-    def calculate_adjustments(self, subject: Dict, comp: Dict) -> Dict:
+        # Phase 4: Compound Depreciation Reality Checks
+        # Cap total physical depreciation to 90% (meaning minimum % good is 10%)
+        return max(10, pct_good)
+
+    def calculate_adjustments(self, subject: Dict, comp: Dict, local_rates: Dict = None) -> Dict:
         """
         Calculate the full professional adjustment grid for a comparable property.
         Returns a dict matching the format used in the sample ARB report.
+        Incorporates dynamic ML-derived rates if `local_rates` is provided.
         """
         adjustments = {
             "size": 0,
@@ -70,6 +78,7 @@ class ValuationService:
             "land_value": 0,
             "segments": 0,
             "other_improvements": 0,
+            "deferred_maintenance": 0,
             "total": 0,
             "net_adjustment": 0,
             "indicated_value": 0,
@@ -83,8 +92,14 @@ class ValuationService:
         # --- 1. Size Adjustment ---
         if comp_area > 0 and subj_area > 0:
             diff = subj_area - comp_area
-            base_pps = comp_value / comp_area if comp_area > 0 else 0
-            adj_factor = base_pps * 0.5  # 50% adjustment rule
+            # Check for ML-derived size rate first
+            if local_rates and "size_rate" in local_rates:
+                adj_factor = local_rates["size_rate"]
+                logger.debug(f"Using ML size rate: ${adj_factor:.2f}/sf")
+            else:
+                base_pps = comp_value / comp_area if comp_area > 0 else 0
+                adj_factor = base_pps * 0.5  # 50% adjustment rule (legacy fallback)
+            
             adjustments["size"] = round(diff * adj_factor)
 
         # --- 2. Grade Adjustment ---
@@ -137,6 +152,30 @@ class ValuationService:
             pct_diff = (subj_pct - comp_pct) / 100
             adjustments["percent_good"] = round(comp_value * pct_diff)
 
+        # --- 6.5. Deferred Maintenance Penalty ---
+        # If effective_age > 20 years AND permit_count == 0 AND Vision Agent detects issues
+        permit_summary = subject.get('permit_summary')
+        vision_summary = subject.get('vision_summary')
+        
+        current_year = datetime.datetime.now().year
+        subj_age = max(0, current_year - self._parse_year(subject.get('year_built')))
+        
+        deferred_penalty_value = 0
+        is_deferred = False
+        if subj_age > 20:
+            has_permits = permit_summary.get('has_renovations', True) if permit_summary else True
+            vision_issues = 0
+            if vision_summary:
+                vision_issues = len([i for i in vision_summary if isinstance(i, dict) and i.get('issue') and 'CONDITION_SUMMARY' not in i.get('issue')])
+            
+            if not has_permits and vision_issues > 0:
+                # 10% penalty of the comp value
+                deferred_penalty_value = round(comp_value * -0.10)
+                is_deferred = True
+
+        adjustments["deferred_maintenance"] = deferred_penalty_value
+        adjustments["is_deferred"] = is_deferred
+
         # --- 7. Sub Area Difference ---
         subj_sub_areas = subject.get('sub_areas', 0) or 0
         comp_sub_areas = comp.get('sub_areas', 0) or 0
@@ -146,13 +185,24 @@ class ValuationService:
         # --- 8. Land Value Adjustment ---
         subj_land = float(subject.get('land_value') or 0)
         comp_land = float(comp.get('land_value') or 0)
-        # If we don't have comp land, use estimated from subject
-        if subj_land and not comp_land:
-            # Estimate comp land proportionally by area
-            subj_land_area = float(subject.get('land_area') or 1)
-            comp_land_area = float(comp.get('land_area') or subj_land_area)
-            comp_land = subj_land * (comp_land_area / subj_land_area) if subj_land_area > 0 else subj_land
-        adjustments["land_value"] = round(subj_land - comp_land) if subj_land and comp_land else 0
+        
+        # ML Land Rate Overrides pure Appraised Difference
+        if local_rates and "land_rate" in local_rates:
+            subj_land_area = float(subject.get('land_area') or 0)
+            comp_land_area = float(comp.get('land_area') or 0)
+            if subj_land_area > 0 and comp_land_area > 0:
+                land_diff = subj_land_area - comp_land_area
+                adjustments["land_value"] = round(land_diff * local_rates["land_rate"])
+            else:
+                adjustments["land_value"] = 0
+        else:
+            # Fallback to direct assessed land value comparison
+            if subj_land and not comp_land:
+                # Estimate comp land proportionally by area
+                subj_land_area = float(subject.get('land_area') or 1)
+                comp_land_area = float(comp.get('land_area') or subj_land_area)
+                comp_land = subj_land * (comp_land_area / subj_land_area) if subj_land_area > 0 else subj_land
+            adjustments["land_value"] = round(subj_land - comp_land) if subj_land and comp_land else 0
         adjustments["subject_land_value"] = subj_land
         adjustments["comp_land_value"] = comp_land
 
@@ -170,11 +220,13 @@ class ValuationService:
             adjustments["size"] + adjustments["grade"] + adjustments["age"] +
             adjustments["remodel"] + adjustments["neighborhood"] + adjustments["percent_good"] +
             adjustments["lump_sum"] + adjustments["sub_area_diff"] + adjustments["land_value"] +
-            adjustments["segments"] + adjustments["other_improvements"]
+            adjustments["segments"] + adjustments["other_improvements"] + adjustments["deferred_maintenance"]
         )
 
         # --- Indicated Value = Comp Value + Net Adjustment ---
-        adjustments["indicated_value"] = comp_value + adjustments["net_adjustment"]
+        # Prevent negative indicated values explicitly
+        ind_val = comp_value + adjustments["net_adjustment"]
+        adjustments["indicated_value"] = max(1000, ind_val)
         
         # Keep backward compat
         adjustments["total"] = adjustments["net_adjustment"]

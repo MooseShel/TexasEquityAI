@@ -1,27 +1,29 @@
-import numpy as np
-import pandas as pd
-from sklearn.neighbors import NearestNeighbors
 from typing import List, Dict
 import logging
 from backend.agents.sales_agent import SalesAgent
 from backend.services.valuation_service import valuation_service
+from backend.services.adjustment_model import adjustment_model
 
 logger = logging.getLogger(__name__)
 
 class EquityAgent:
     def __init__(self):
-        self.knn = NearestNeighbors(n_neighbors=20, metric='euclidean')
+        # KNN logic removed: Similarity search is now offloaded to Supabase pgvector
+        pass
 
     def find_equity_5(self, subject_property: Dict, neighborhood_properties: List[Dict]) -> Dict:
         """
-        Perform a K-Nearest Neighbors (KNN) search to find the 20 most physically similar neighbors.
+        Perform a Vector Similarity search via Supabase pgvector to find the most physically similar neighbors across the city.
         Selection: Sort neighbors by 'Assessed Value per SqFt' ascending. Select the top 5 (The 'Equity 5').
         Calculation: Calculate the median of the Equity 5 to determine the 'Justified Value Floor.'
+        Note: The `neighborhood_properties` arg is kept for retro-compatibility but is ignored, as pgvector searches the whole DB.
         """
+        from backend.db.vector_store import vector_store
+        
         subj_val = subject_property.get('appraised_value', 0) or 0
         subj_area = subject_property.get('building_area', 0) or 0
+        subj_pps = (subj_val / subj_area) if subj_area and subj_area > 0 else 0
         
-        # If area is 0, we can't perform meaningful SQFT-based analysis
         if not subj_area or subj_area == 0:
             return {
                 'equity_5': [],
@@ -29,118 +31,72 @@ class EquityAgent:
                 'subject_value_per_sqft': 0,
                 'error': "Missing Property Area: Could not perform Square Foot analysis. Using current appraisal as baseline."
             }
+            
+        logger.info(f"EquityAgent: Executing city-wide pgvector search for {subject_property.get('account_number')}...")
+        
+        # 1. Fetch the absolute closest 20 physical matches from the entire database
+        top_20 = vector_store.find_similar_properties(subject_property, limit=20)
+        
+        if not top_20 or len(top_20) < 3:
+            logger.warning(f"Vector search returned insufficient matches ({len(top_20)}). Returning baseline.")
+            return {
+                'equity_5': top_20,
+                'justified_value_floor': subj_val,
+                'subject_value_per_sqft': subj_pps,
+                'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
+            }
 
-        if not neighborhood_properties:
+        # 2. Add 'value_per_sqft' to each comp and filter out bad data
+        valid_comps = []
+        for comp in top_20:
+            try:
+                area = float(comp.get('building_area') or 0)
+                val = float(comp.get('appraised_value') or 0)
+                if area > 0 and val > 0:
+                    comp['value_per_sqft'] = val / area
+                    # similarity is provided by the RPC
+                    valid_comps.append(comp)
+            except Exception:
+                continue
+                
+        if not valid_comps:
             return {
                 'equity_5': [],
                 'justified_value_floor': subj_val,
-                'subject_value_per_sqft': subj_val / subj_area
+                'subject_value_per_sqft': subj_pps,
+                'error': "Could not calculate value per squar foot for returned vector matches."
             }
+
+        # 3. Sort by 'value_per_sqft' ascending (lowest taxed neighbors first)
+        valid_comps.sort(key=lambda x: x['value_per_sqft'])
         
-        # Build DataFrame from neighbor list
-        df = pd.DataFrame(neighborhood_properties)
-        
-        # Ensure required columns exist
-        for col in ['building_area', 'appraised_value']:
-            if col not in df.columns:
-                df[col] = 0
-        
-        # Convert to numeric, coerce errors to NaN
-        df['building_area'] = pd.to_numeric(df['building_area'], errors='coerce').fillna(0)
-        df['appraised_value'] = pd.to_numeric(df['appraised_value'], errors='coerce').fillna(0)
-        
-        # CRITICAL: Filter out neighbors with 0 area (prevents division-by-zero in value_per_sqft)
-        df = df[df['building_area'] > 0].copy()
-        
-        if len(df) < 3:
-            logger.warning(f"Only {len(df)} valid neighbors after filtering zero-area properties. Returning baseline.")
-            return {
-                'equity_5': [],
-                'justified_value_floor': subj_val,
-                'subject_value_per_sqft': subj_val / subj_area,
-                'error': f"Insufficient comparable properties ({len(df)} found after filtering). Using current appraisal as baseline."
-            }
-        
-        # Features for KNN: Building Area, Year Built (if available)
-        features = ['building_area']
-        subject_vals = [subj_area]
-        
-        if 'year_built' in df.columns and subject_property.get('year_built'):
-            # Convert year_built to numeric, fill missing with median
-            df['year_built'] = pd.to_numeric(df['year_built'], errors='coerce')
-            median_year = df['year_built'].median() if df['year_built'].notna().any() else 1980
-            df['year_built'] = df['year_built'].fillna(median_year)
-            features.append('year_built')
-            subject_vals.append(subject_property['year_built'])
-        
-        X = df[features].values
-        subject_X = np.array([subject_vals])
-        
-        # NORMALIZATION: Scale features to [0,1] to ensure Area doesn't drown out Year Built
-        X_min = X.min(axis=0)
-        X_max = X.max(axis=0)
-        # Avoid division by zero
-        X_range = np.where((X_max - X_min) == 0, 1, X_max - X_min)
-        X_scaled = (X - X_min) / X_range
-        subject_X_scaled = (subject_X - X_min) / X_range
-        
-        # Fit KNN on scaled features
-        n_neighbors = min(20, len(df))
-        self.knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
-        self.knn.fit(X_scaled)
-        distances, indices = self.knn.kneighbors(subject_X_scaled)
-        
-        # Get the most similar neighbors
-        top_20 = df.iloc[indices[0]].copy()
-        
-        # Add similarity score (Inverse distance with a steeper falloff for better UX)
-        max_dist = np.sqrt(len(features))
-        top_20['similarity_score'] = (1 - (distances[0] / max_dist)) * 100
-        top_20['similarity_score'] = top_20['similarity_score'].clip(0, 100)
-        
-        # Calculate 'Assessed Value per SqFt'
-        top_20['value_per_sqft'] = (
-            pd.to_numeric(top_20['appraised_value'], errors='coerce') /
-            pd.to_numeric(top_20['building_area'], errors='coerce')
-        )
-        
-        # Drop any rows where value_per_sqft is NaN or 0
-        top_20 = top_20[top_20['value_per_sqft'] > 0].dropna(subset=['value_per_sqft'])
-        
-        if top_20.empty:
-            return {
-                'equity_5': [],
-                'justified_value_floor': subj_val,
-                'subject_value_per_sqft': subj_val / subj_area,
-                'error': "Could not calculate value per sqft for any comparable properties."
-            }
-        
-        # Sort by value_per_sqft ascending — lowest-taxed comps first
-        top_20_sorted = top_20.sort_values(by='value_per_sqft', ascending=True)
-        
-        # Select top 10
-        equity_5_df = top_20_sorted.head(10).copy()
+        # 4. Select the top 10 for adjustments
+        equity_10 = valid_comps[:10]
         
         # Phase 2: Professional Adjustments
-        logger.info(f"Applying professional adjustments to {len(equity_5_df)} comps...")
-        equity_5_list = equity_5_df.to_dict('records')
+        logger.info(f"Applying professional adjustments to {len(equity_10)} vector comps...")
+        
+        # 4.5. Get Dynamic ML Adjustment Rates
+        logger.info("EquityAgent: Fetching dynamic ML adjustment rates for subject neighborhood...")
+        local_rates = adjustment_model.get_local_rates(subject_property)
+        logger.info(f"EquityAgent: Using adjustment rates: {local_rates}")
+        
         adj_values = []
         
-        for comp in equity_5_list:
+        for comp in equity_10:
             try:
-                adjustments = valuation_service.calculate_adjustments(subject_property, comp)
+                adjustments = valuation_service.calculate_adjustments(subject_property, comp, local_rates)
                 comp['adjustments'] = adjustments
                 adj_values.append(adjustments['adjusted_value'])
             except Exception as e:
                 logger.warning(f"Adjustment calc failed for comp {comp.get('account_number')}: {e}")
                 comp['adjustments'] = {}
-        
-        # Phase 3: Deed / Sale Recency Enrichment
-        # last_sale_date comes from the DB query (properties.last_sale_date)
+
+        # Phase 3: Deed / Sale Recency Enrichment (retro-compatibility)
         from datetime import datetime, timedelta
         cutoff = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")  # 24 months
         recently_sold_count = 0
-        for comp in equity_5_list:
+        for comp in equity_10:
             sale_date = comp.get('last_sale_date')
             if sale_date:
                 comp['recently_sold'] = str(sale_date) >= cutoff
@@ -148,8 +104,9 @@ class EquityAgent:
                     recently_sold_count += 1
             else:
                 comp['recently_sold'] = False
+                
         if recently_sold_count:
-            logger.info(f"EquityAgent: {recently_sold_count}/{len(equity_5_list)} comps have recent deed transfers (< 24mo)")
+            logger.info(f"EquityAgent: {recently_sold_count}/{len(equity_10)} comps have recent deed transfers (< 24mo)")
 
         # New Justified Value Floor = Median of adjusted total values
         if adj_values:
@@ -158,13 +115,8 @@ class EquityAgent:
         else:
             justified_value_floor = subj_val
 
-        # Safe calc for subject PPS
-        subj_pps = 0
-        if subj_area and subj_area > 0:
-            subj_pps = subj_val / subj_area
-
         return {
-            'equity_5': equity_5_list,
+            'equity_5': equity_10,
             'justified_value_floor': justified_value_floor,
             'subject_value_per_sqft': subj_pps
         }

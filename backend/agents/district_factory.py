@@ -10,6 +10,12 @@ class DistrictConnectorFactory:
     """
     Factory to instantiate the correct AppraisalDistrictConnector
     based on account number pattern or explicit district code.
+    
+    DEPRECATION WARNING: Live web scrapers (like HCADScraper) are now 
+    strictly reserved for surgical, single-property fallback operations. 
+    Primary data ingestion is handled by the automated weekly 
+    hcad_etl_pipeline.py (pushing normalized extract dumps directly to Supabase).
+    Always verify cache availability in the Supabase 'properties' table first.
     """
     
     @staticmethod

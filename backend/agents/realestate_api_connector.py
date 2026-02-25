@@ -1,10 +1,47 @@
 import os
 import requests
 import logging
+import time
 from typing import List, Optional
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from backend.models.sales_comp import SalesComparable
 
 logger = logging.getLogger(__name__)
+
+class CircuitBreaker:
+    """Simple memory-based circuit breaker to fail-fast if external API goes down."""
+    def __init__(self, failure_threshold: int = 5, recovery_timeout_sec: int = 300):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout_sec = recovery_timeout_sec
+        self.failure_count = 0
+        self.last_failure_time = 0.0
+
+    def record_failure(self):
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        logger.warning(f"Circuit Breaker threshold increased: {self.failure_count}/{self.failure_threshold}")
+
+    def record_success(self):
+        if self.failure_count > 0:
+            logger.info("Circuit Breaker reset: Connection to API restored.")
+        self.failure_count = 0
+
+    def check(self) -> bool:
+        """Returns True if the circuit is CLOSED (ok to make request). Returns False if OPEN (fail fast)."""
+        if self.failure_count >= self.failure_threshold:
+            time_since_failure = time.time() - self.last_failure_time
+            if time_since_failure < self.recovery_timeout_sec:
+                logger.error(f"Circuit Breaker is OPEN. Failing fast for next {int(self.recovery_timeout_sec - time_since_failure)}s.")
+                return False
+            else:
+                # Half-open: let one request through to test
+                logger.info("Circuit Breaker timeout expired. Half-open state allowed to retry.")
+                return True
+        return True
+
+# Shared circuit breaker instance across all connector instantiations
+_realestate_api_circuit = CircuitBreaker()
+
 
 class RealEstateAPIConnector:
     """
@@ -53,12 +90,25 @@ class RealEstateAPIConnector:
         }
 
         try:
-            logger.info(f"RealEstateAPI: Fetching sales comps for {address}...")
-            response = requests.post(url, json=payload, headers=headers)
-            
-            if response.status_code != 200:
-                logger.error(f"RealEstateAPI Error {response.status_code}: {response.text}")
+            if not _realestate_api_circuit.check():
+                logger.error("RealEstateAPI: Circuit breaker prevents request.")
                 return []
+
+            logger.info(f"RealEstateAPI: Fetching sales comps for {address}...")
+            
+            # Sub-function with tenacity retry for the actual network call
+            @retry(
+                wait=wait_exponential(multiplier=1, min=2, max=10),
+                stop=stop_after_attempt(3),
+                retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout))
+            )
+            def _make_request():
+                resp = requests.post(url, json=payload, headers=headers, timeout=15)
+                resp.raise_for_status()
+                return resp
+
+            response = _make_request()
+            _realestate_api_circuit.record_success()
             
             data = response.json()
             # Parse response. Structure is likely: 
@@ -146,6 +196,7 @@ class RealEstateAPIConnector:
 
         except Exception as e:
             logger.error(f"RealEstateAPI Request Failed: {e}")
+            _realestate_api_circuit.record_failure()
             return []
 
     def get_property_detail(self, address: str) -> Optional[dict]:
@@ -164,11 +215,25 @@ class RealEstateAPIConnector:
         payload = {"address": address}
 
         try:
-            logger.info(f"RealEstateAPI: Fetching details for {address}...")
-            response = requests.post(url, json=payload, headers=headers)
-            if response.status_code != 200:
-                logger.error(f"RealEstateAPI Detail Error {response.status_code}: {response.text[:200]}")
+            if not _realestate_api_circuit.check():
+                logger.error("RealEstateAPI: Circuit breaker prevents request.")
                 return None
+
+            logger.info(f"RealEstateAPI: Fetching details for {address}...")
+            
+            @retry(
+                wait=wait_exponential(multiplier=1, min=2, max=10),
+                stop=stop_after_attempt(3),
+                retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout))
+            )
+            def _make_detail_request():
+                resp = requests.post(url, json=payload, headers=headers, timeout=15)
+                resp.raise_for_status()
+                return resp
+
+            response = _make_detail_request()
+            _realestate_api_circuit.record_success()
+
             raw = response.json()
             if not raw:
                 return None
@@ -214,6 +279,7 @@ class RealEstateAPIConnector:
             return normalized
         except Exception as e:
             logger.error(f"RealEstateAPI Detail Request Failed: {e}")
+            _realestate_api_circuit.record_failure()
             return None
 
     def resolve_to_account_id(self, address: str) -> Optional[str]:
