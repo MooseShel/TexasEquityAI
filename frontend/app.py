@@ -1530,12 +1530,28 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             savings_prediction = estimator.estimate(property_details, equity_results)
             if isinstance(equity_results, dict):
                 equity_results['savings_prediction'] = savings_prediction
-            if savings_prediction.get('signal_count', 0) > 0:
-                prob = savings_prediction.get('protest_success_probability', 0)
-                exp_save = savings_prediction['estimated_savings']['expected']
-                yield {"status": f"✨ Protest Strength: {savings_prediction['protest_strength']} ({prob:.0%}) — Expected savings: ${exp_save:,}/yr"}
         except Exception as se_err:
             logger.warning(f"Savings estimator failed (non-fatal): {se_err}")
+
+        # ── ML Protest Success Predictor ───────────────────────────────────
+        try:
+            from backend.services.protest_predictor import predict_protest_success
+            ml_prediction = predict_protest_success(property_details, equity_results)
+            if isinstance(equity_results, dict):
+                equity_results['ml_prediction'] = ml_prediction
+
+            win_pct = ml_prediction.get('win_probability_pct', '?%')
+            confidence = ml_prediction.get('confidence_level', 'Unknown')
+            exp_save = savings_prediction.get('estimated_savings', {}).get('expected', 0) if 'savings_prediction' in dir() else 0
+            yield {"status": f"🎯 AI Win Predictor: {win_pct} probability ({confidence}) — Expected savings: ${exp_save:,}/yr"}
+
+            # Show top contributing factors
+            contribs = ml_prediction.get('feature_contributions', [])[:3]
+            if contribs:
+                factors = " | ".join([f"{c['impact']} {c['feature']}" for c in contribs])
+                yield {"status": f"📊 Key factors: {factors}"}
+        except Exception as ml_err:
+            logger.warning(f"ML protest predictor failed (non-fatal): {ml_err}")
 
         yield {"status": "✍️ Legal Narrator: Evaluating protest viability..."}
 

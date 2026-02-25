@@ -1046,7 +1046,7 @@ class PDFService:
         permit_info = permit_data or property_data.get('permit_summary', {})
         has_no_permits = not (permit_info.get('has_renovations', False)) if permit_info else True
 
-        # Score components (0-100)
+        # Score components (0-100) — used for visual scorecard
         score_equity = min(40, int((equity_gap / max(appraised, 1)) * 200)) if equity_gap > 0 else 0
         score_sales = min(25, int((sales_gap / max(appraised, 1)) * 125)) if sales_gap > 0 else 0
         score_condition = min(15, int(condition_deduction / 1000)) if condition_deduction > 0 else 0
@@ -1054,11 +1054,26 @@ class PDFService:
         score_permits = 10 if has_no_permits else 0
         total_score = min(100, score_equity + score_sales + score_condition + score_flood + score_permits)
 
-        # Win probability mapping
-        if total_score >= 70: win_prob, win_label, win_color = "85-95%", "STRONG", (5, 150, 105)
-        elif total_score >= 45: win_prob, win_label, win_color = "60-80%", "GOOD", (29, 78, 216)
-        elif total_score >= 25: win_prob, win_label, win_color = "35-55%", "MODERATE", (217, 119, 6)
-        else: win_prob, win_label, win_color = "15-30%", "WEAK", (220, 38, 38)
+        # ── ML Win Probability (preferred) or heuristic fallback ──────────
+        ml_pred = equity_results.get('ml_prediction', {}) if equity_results else {}
+        if ml_pred and ml_pred.get('win_probability'):
+            ml_prob = ml_pred['win_probability']
+            win_prob = ml_pred.get('win_probability_pct', f"{ml_prob:.0%}")
+            win_label = ml_pred.get('confidence_level', 'MODERATE').upper()
+            model_note = f"AI Model: {ml_pred.get('model_version', 'v1')}"
+
+            # Color mapping based on probability
+            if ml_prob >= 0.75: win_color = (5, 150, 105)     # Green
+            elif ml_prob >= 0.55: win_color = (29, 78, 216)    # Blue
+            elif ml_prob >= 0.35: win_color = (217, 119, 6)    # Orange
+            else: win_color = (220, 38, 38)                     # Red
+        else:
+            # Fallback to heuristic scorecard
+            if total_score >= 70: win_prob, win_label, win_color = "85-95%", "STRONG", (5, 150, 105)
+            elif total_score >= 45: win_prob, win_label, win_color = "60-80%", "GOOD", (29, 78, 216)
+            elif total_score >= 25: win_prob, win_label, win_color = "35-55%", "MODERATE", (217, 119, 6)
+            else: win_prob, win_label, win_color = "15-30%", "WEAK", (220, 38, 38)
+            model_note = ""
 
         # Large scorecard box
         pdf.set_fill_color(*win_color)
@@ -1072,6 +1087,11 @@ class PDFService:
         pdf.set_xy(20, 55)
         pdf.set_font("Roboto", '', 14)
         pdf.cell(170, 12, f"Protest Strength: {win_label} | Estimated Savings: {self._fmt(max(equity_gap, sales_gap))} - {self._fmt(max(equity_gap, sales_gap) + condition_deduction)}", align='C')
+        if model_note:
+            pdf.set_xy(20, 68)
+            pdf.set_font("Roboto", '', 7)
+            pdf.set_text_color(200, 220, 255)
+            pdf.cell(170, 5, model_note, align='R')
         pdf.set_text_color(0, 0, 0)
 
         pdf.set_y(82)
