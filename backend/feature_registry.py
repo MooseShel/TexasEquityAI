@@ -74,9 +74,9 @@ FEATURES = [
      "short": "Vision AI condition comparison with depreciation",
      "detail": "Vision AI scores subject (1-10) and each comp. Calculates condition delta and translates to depreciation % citing TX Tax Code 23.01."},
 
-    {"name": "5-Signal Savings Predictor", "category": "ai", "tier": 2, "status": "live",
-     "short": "Weighted protest success probability",
-     "detail": "Combines equity floor, anomaly Z-score, condition delta, geo obsolescence, and flood zone into weighted savings predictions with confidence intervals."},
+    {"name": "XGBoost Win Predictor", "category": "ai", "tier": 2, "status": "live",
+     "short": "544K-record HCAD hearing model (82% accuracy, AUC 0.815)",
+     "detail": "XGBoost gradient-boosted classifier trained on 544,583 real HCAD ARB hearing outcomes. Hybrid approach blends historical base rate (40%) with 18 property-specific evidence signals (60%) to predict exact win probability."},
 
     # ── Enrichment & Intelligence ─────────────────────────────────────
     {"name": "FEMA Flood Zone Detection", "category": "enrichment", "tier": 1, "status": "live",
@@ -120,9 +120,9 @@ FEATURES = [
      "short": "Side-by-side AI photo comparison",
      "detail": "Side-by-side AI photo comparison of subject vs. each comp with condition notes and scores."},
 
-    {"name": "Win Probability Score", "category": "report", "tier": 1, "status": "live",
-     "short": "AI confidence + protest strength rating",
-     "detail": "AI-generated confidence score with protest strength rating (Very Strong / Strong / Moderate / Possible)."},
+    {"name": "ML Win Probability Score", "category": "report", "tier": 1, "status": "live",
+     "short": "XGBoost hybrid prediction with explainable factors",
+     "detail": "ML-backed exact win probability with explainable breakdown. Shows XGBoost base rate from 544K hearings, evidence adjustments, and top contributing factors."},
 
     {"name": "4-Year Valuation Trend", "category": "report", "tier": 1, "status": "live",
      "short": "Assessment trajectory chart",

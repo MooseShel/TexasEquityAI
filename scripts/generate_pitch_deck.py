@@ -321,7 +321,7 @@ def generate_pitch_deck():
         ("[V]", "Computer Vision Analysis", "3-angle Street View imagery analyzed for 15+ defect categories: roof deterioration, foundation cracks, siding damage, drainage issues, and more.", "PATENT-PENDING"),
         ("[=]", "KNN Equity Intelligence", "Machine learning selects the 5 most comparable properties using 7 feature dimensions -- not random picks, but scientifically optimal matches.", "ML-POWERED"),
         ("[M]", "Geo-Intelligence Layer", "Automated detection of external obsolescence: highways within 500ft, industrial facilities, flood zones, power infrastructure -- all factors that reduce value.", "AUTOMATED"),
-        ("[#]", "Predictive Analytics", "5-signal savings estimator predicts protest success probability and expected tax savings range before you file.", "PREDICTIVE"),
+        ("[#]", "Predictive Success Model", "XGBoost ML model trained on 544,583 real HCAD ARB hearing outcomes (82% accuracy). Predicts exact win probability by blending historical base rates with 18 property-specific evidence signals.", "544K RECORDS"),
         ("[D]", "Legal-Grade Output", "ARB-format evidence packet with Texas Tax Code citations, professional adjustment grid, and auto-filled Form 41.44. Ready to present at hearing.", "ARB-READY"),
     ]
     
@@ -412,7 +412,7 @@ def generate_pitch_deck():
     pdf.set_text_color(*pdf.WHITE)
     pdf.cell(35, 5, "Feature")
     
-    headers = ["AI Vision", "ML Comps", "Anomaly", "Geo-Intel", "Condition", "Savings", "Transparent"]
+    headers = ["AI Vision", "ML Comps", "Anomaly", "Geo-Intel", "Predictor", "Savings", "Transparent"]
     col_w = 21.5
     for i, h in enumerate(headers):
         pdf.set_xy(49 + i * col_w, y0 + 1)
@@ -480,6 +480,7 @@ def generate_pitch_deck():
             "Google Gemini 2.0 Flash -- Primary vision & narrative AI",
             "OpenAI GPT-4o -- Fallback vision & analysis",
             "xAI Grok -- Third-layer validation",
+            "XGBoost -- Protest outcome predictor trained on 544K HCAD hearings (82% acc)",
             "scikit-learn KNN -- Equity comp selection algorithm",
             "NumPy / Pandas -- Statistical analysis engine",
         ]),

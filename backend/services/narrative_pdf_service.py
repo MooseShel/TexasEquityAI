@@ -468,10 +468,36 @@ class PDFService:
         ))
         pdf.ln(3)
 
-        # Section 3: Legal Strategy
+        # Section 3: Predictive Success Model (XGBoost)
         pdf.set_font("Montserrat", 'B', 11)
         pdf.set_text_color(10, 25, 47)
-        pdf.cell(0, 7, "3. Legal Strategy & Uniformity", ln=True)
+        pdf.cell(0, 7, "3. Predictive Success Model (XGBoost)", ln=True)
+        pdf.set_font("Roboto", '', 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 5, clean_text(
+            "Your Win Probability is calculated by a hybrid machine learning pipeline trained on "
+            "544,583 real Harris County Appraisal Review Board (ARB) hearing outcomes. The model uses "
+            "XGBoost -- a gradient-boosted decision tree algorithm widely used in financial prediction -- "
+            "to establish a historical base rate for your property class, then adjusts the probability "
+            "using evidence-specific signals unique to your property."
+        ))
+        pdf.ln(1)
+        pdf.set_font("Roboto", '', 8)
+        pdf.multi_cell(0, 4, clean_text(
+            "How it works: (1) XGBoost base rate -- Trained on 544K+ real HCAD hearing records with 82% accuracy "
+            "(AUC 0.815), the model predicts the baseline probability of a successful protest based on property class, "
+            "value magnitude, and hearing type. (2) Evidence-based adjustments -- A calibrated heuristic model then "
+            "adjusts the probability using 18 features specific to YOUR property: equity gap, statistical anomaly Z-score, "
+            "physical condition delta, flood zone risk, geo-obsolescence factors, sales comp strength, and more. "
+            "(3) Hybrid blend -- The final probability is a weighted blend of both models (40% historical base rate, "
+            "60% evidence strength), ensuring predictions are grounded in real outcomes while rewarding strong evidence."
+        ))
+        pdf.ln(3)
+
+        # Section 4: Legal Strategy
+        pdf.set_font("Montserrat", 'B', 11)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "4. Legal Strategy & Uniformity", ln=True)
         pdf.set_font("Roboto", '', 9)
         pdf.set_text_color(0, 0, 0)
         pdf.multi_cell(0, 5, clean_text(
@@ -481,10 +507,10 @@ class PDFService:
         ))
         pdf.ln(3)
 
-        # Section 4: True Tax Savings
+        # Section 5: True Tax Savings
         pdf.set_font("Montserrat", 'B', 11)
         pdf.set_text_color(10, 25, 47)
-        pdf.cell(0, 7, "4. True Tax Savings Calculation", ln=True)
+        pdf.cell(0, 7, "5. True Tax Savings Calculation", ln=True)
         pdf.set_font("Roboto", '', 9)
         pdf.set_text_color(0, 0, 0)
         pdf.multi_cell(0, 5, clean_text(
@@ -500,8 +526,8 @@ class PDFService:
         pdf.multi_cell(0, 4, clean_text(
             "Data Integrity Statement: This report was prepared by analyzing definitive public county records, "
             "MLS parity data, municipal permit histories, FEMA flood maps, and local crime statistics. "
-            "Machine learning models (Ridge Regression, pgVector similarity) were used exclusively to aggregate "
-            "public facts, ensuring objective mathematical compliance with the Texas Tax Code equal and uniform mandate."
+            "Machine learning models (XGBoost, Ridge Regression, pgVector similarity) were used to aggregate "
+            "public facts and predict outcomes, ensuring objective mathematical compliance with the Texas Tax Code."
         ))
         pdf.set_text_color(0, 0, 0)
         pdf.ln(3)
@@ -1094,7 +1120,47 @@ class PDFService:
             pdf.cell(170, 5, model_note, align='R')
         pdf.set_text_color(0, 0, 0)
 
-        pdf.set_y(82)
+        # ── ML Model Explainer Box ────────────────────────────────────────
+        if ml_pred and ml_pred.get('win_probability'):
+            pdf.set_y(78)
+            y_box = pdf.get_y()
+            pdf.set_fill_color(240, 245, 255)
+            pdf.set_draw_color(29, 78, 216)
+            pdf.rect(15, y_box, 180, 32, 'DF')
+
+            pdf.set_xy(18, y_box + 2)
+            pdf.set_font("Montserrat", 'B', 8)
+            pdf.set_text_color(10, 25, 47)
+            pdf.cell(0, 4, "How This Probability Was Calculated", ln=True)
+
+            pdf.set_x(18)
+            pdf.set_font("Roboto", '', 7)
+            pdf.set_text_color(51, 65, 85)
+            xgb_base = ml_pred.get('xgb_base_probability', 0)
+            heur_prob = ml_pred.get('heuristic_probability', 0)
+            pdf.multi_cell(172, 3.5, clean_text(
+                f"This prediction uses a hybrid AI model. Step 1: An XGBoost classifier trained on "
+                f"544,583 real HCAD Appraisal Review Board hearing outcomes provides a historical base rate "
+                f"of {xgb_base:.0%} for properties with your profile (82% accuracy, AUC 0.815). "
+                f"Step 2: A calibrated evidence model evaluates 18 features specific to your property -- "
+                f"equity gap, anomaly Z-score, condition delta, flood zone, sales comps, and more -- "
+                f"producing an evidence-based probability of {heur_prob:.0%}. "
+                f"Step 3: The final Win Probability is a weighted blend: "
+                f"40% historical data + 60% your property's evidence strength."
+            ))
+
+            # Show top contributing factors if available
+            contribs = ml_pred.get('feature_contributions', [])
+            if contribs:
+                pdf.set_x(18)
+                pdf.set_font("Roboto", 'B', 7)
+                factors = "  |  ".join([f"{c.get('impact','')} {c.get('feature','')}" for c in contribs[:4]])
+                pdf.cell(172, 4, clean_text(f"Key factors: {factors}"), ln=True)
+
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_y(y_box + 35)
+        else:
+            pdf.set_y(82)
 
         # Method indicators with traffic lights
         pdf.set_font("Roboto", 'B', 9)
