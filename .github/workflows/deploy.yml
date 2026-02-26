@@ -20,7 +20,6 @@ jobs:
 
       - name: Deploy to Reflex Cloud
         run: |
-          cd frontend_reflex
-          reflex deploy --token ${{ secrets.REFLEX_DEPLOY_TOKEN }} --no-interactive
+          reflex deploy --token ${{ secrets.REFLEX_AUTH_TOKEN }} --project ${{ secrets.REFLEX_PROJECT_ID }} --no-interactive
         env:
-          REFLEX_DEPLOY_TOKEN: ${{ secrets.REFLEX_DEPLOY_TOKEN }}
+          REFLEX_AUTH_TOKEN: ${{ secrets.REFLEX_AUTH_TOKEN }}
