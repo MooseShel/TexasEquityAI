@@ -138,8 +138,9 @@ class CommercialEnrichmentAgent:
         Try RentCast then RealEstateAPI to build a normalized property dict.
         Returns the first successful result with at least some useful data.
         """
+        import asyncio
         # Try RealEstateAPI first (better commercial coverage)
-        result = self._reapi_lookup(address)
+        result = await asyncio.to_thread(self._reapi_lookup, address)
         if result and (result.get("appraised_value", 0) > 0 or result.get("building_area", 0) > 0):
             return result
 

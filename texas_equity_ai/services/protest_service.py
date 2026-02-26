@@ -363,7 +363,7 @@ async def run_protest_pipeline(
                         from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
                         ca = CommercialEnrichmentAgent()
                         yield {"status": "🏢 Commercial Equity: Building value pool from sales comparables..."}
-                        pool = ca.get_equity_comp_pool(property_details.get('address', account_number), property_details)
+                        pool = await asyncio.to_thread(ca.get_equity_comp_pool, property_details.get('address', account_number), property_details)
                         if pool:
                             real_neighborhood = pool
                     except Exception as ce:
@@ -428,7 +428,8 @@ async def run_protest_pipeline(
                 try:
                     from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
                     yield {"status": "🏢 Fallback Comps: Querying API sales comps..."}
-                    pool_fb = CommercialEnrichmentAgent().get_equity_comp_pool(property_details.get('address', account_number), property_details)
+                    ca_fallback = CommercialEnrichmentAgent()
+                    pool_fb = await asyncio.to_thread(ca_fallback.get_equity_comp_pool, property_details.get('address', account_number), property_details)
                     if pool_fb:
                         real_neighborhood = pool_fb
                 except Exception:
@@ -438,7 +439,7 @@ async def run_protest_pipeline(
                 yield {"error": "Could not find sufficient comparable properties. Try manual address override."}
                 return
 
-            equity_results = agents["equity_engine"].find_equity_5(property_details, real_neighborhood)
+            equity_results = await asyncio.to_thread(agents["equity_engine"].find_equity_5, property_details, real_neighborhood)
 
             # Sales comps
             try:
@@ -449,7 +450,7 @@ async def run_protest_pipeline(
                     equity_results['sales_count'] = len(cached_sales)
                 else:
                     yield {"status": "💰 Sales Specialist: Searching for recent comparable sales..."}
-                    sales_results = agents["equity_engine"].get_sales_analysis(property_details)
+                    sales_results = await asyncio.to_thread(agents["equity_engine"].get_sales_analysis, property_details)
                     if sales_results:
                         equity_results['sales_comps'] = sales_results.get('sales_comps', [])
                         equity_results['sales_count'] = sales_results.get('sales_count', 0)
@@ -490,10 +491,10 @@ async def run_protest_pipeline(
                 equity_comps_geo = equity_results.get('equity_5', [])
                 if equity_comps_geo and prop_address:
                     yield {"status": "🌐 Geo-Intelligence: Computing distances..."}
-                    subj_coords = geocode(prop_address)
-                    enrich_comps_with_distance(prop_address, equity_comps_geo, subj_coords)
+                    subj_coords = await asyncio.to_thread(geocode, prop_address)
+                    await asyncio.to_thread(enrich_comps_with_distance, prop_address, equity_comps_geo, subj_coords)
                     if subj_coords:
-                        obs_result = check_external_obsolescence(subj_coords['lat'], subj_coords['lng'])
+                        obs_result = await asyncio.to_thread(check_external_obsolescence, subj_coords['lat'], subj_coords['lng'])
                         if obs_result.get('factors'):
                             equity_results['external_obsolescence'] = obs_result
                             property_details['external_obsolescence'] = obs_result
@@ -532,7 +533,7 @@ async def run_protest_pipeline(
         yield {"status": "📸 Vision Agent: Analyzing property condition..."}
         search_address = property_details.get('address', '')
         flood_data = None
-        coords = agents["vision_agent"]._geocode_address(search_address)
+        coords = await asyncio.to_thread(agents["vision_agent"]._geocode_address, search_address)
         if coords:
             cached_flood = await supabase_service.get_cached_flood(current_account)
             if cached_flood:
@@ -702,7 +703,8 @@ async def run_protest_pipeline(
         combined_path = os.path.join(upload_dir, filename)
         pdf_error = None
         try:
-            agents["pdf_service"].generate_evidence_packet(
+            await asyncio.to_thread(
+                agents["pdf_service"].generate_evidence_packet,
                 narrative, property_details, equity_results, vision_detections, combined_path,
                 sales_data=equity_results.get('sales_comps', []),
                 comp_images=comp_images

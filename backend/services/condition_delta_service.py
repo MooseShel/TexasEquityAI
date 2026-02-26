@@ -209,29 +209,28 @@ async def enrich_comps_with_condition(
         subject_score = 6  # Default to "Average" if we can't determine
         logger.info("ConditionDelta: Using default subject score of 6 (Average)")
 
-    # 2. Score comps using ThreadPoolExecutor for TRUE parallelism
-    #    This bypasses asyncio entirely — works in both FastAPI and Streamlit
+    # 2. Score comps concurrently without blocking the async event loop
     comp_conditions = []
     comp_scores = []
     comps_to_score = equity_5[:5]
 
-    logger.info(f"ConditionDelta: Scoring {len(comps_to_score)} comps in parallel via ThreadPoolExecutor...")
+    logger.info(f"ConditionDelta: Scoring {len(comps_to_score)} comps in parallel via asyncio.to_thread...")
 
-    loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(_score_comp_sync, comp, vision_agent): i
-            for i, comp in enumerate(comps_to_score)
-        }
-        # Wait for all futures with a 12-second timeout
-        results = {}
-        for future in as_completed(futures, timeout=12):
-            idx = futures[future]
-            try:
-                results[idx] = future.result()
-            except Exception as e:
-                logger.warning(f"ConditionDelta: Comp {idx} thread failed: {e}")
-                results[idx] = None
+    results = {}
+    async def _safe_worker(idx, comp):
+        try:
+            res = await asyncio.to_thread(_score_comp_sync, comp, vision_agent)
+            results[idx] = res
+        except Exception as e:
+            logger.warning(f"ConditionDelta: Comp {idx} thread failed: {e}")
+            results[idx] = None
+
+    tasks = [_safe_worker(i, comp) for i, comp in enumerate(comps_to_score)]
+    
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning("ConditionDelta: comp scoring timed out after 12 seconds")
 
     # Process results in order
     for i in range(len(comps_to_score)):

@@ -643,7 +643,8 @@ class AppState(rx.State):
             env = os.environ.copy()
             env["PITCH_DECK_OUTPUT_PATH"] = pdf_path
             
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 [sys.executable, "-X", "utf8", "scripts/generate_pitch_deck.py"],
                 capture_output=True, text=True,
                 cwd=project_root, env=env
