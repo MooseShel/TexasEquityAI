@@ -39,3 +39,5 @@ hcad_*_data/
 *.txt
 !requirements.txt
 !packages.txt
+
+uploaded_files/*
