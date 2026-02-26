@@ -1,26 +1,16 @@
-name: Deploy to Reflex Cloud
+name: Deploy to Railway
+
 on:
   push:
     branches: [main]
 
+# Railway auto-deploys from GitHub pushes when connected.
+# This workflow exists only as a placeholder / for future CI steps.
+# Railway handles the Docker build and deployment automatically.
+
 jobs:
-  deploy:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          pip install reflex reflex-map
-          pip install -r requirements.txt
-          playwright install chromium
-
-      - name: Deploy to Reflex Cloud
-        run: |
-          reflex deploy --token ${{ secrets.REFLEX_AUTH_TOKEN }} --project ${{ secrets.REFLEX_PROJECT_ID }} --no-interactive
-        env:
-          REFLEX_AUTH_TOKEN: ${{ secrets.REFLEX_AUTH_TOKEN }}
+      - name: Railway auto-deploy triggered
+        run: echo "Railway will automatically build and deploy from this push."

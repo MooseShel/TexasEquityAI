@@ -2,10 +2,7 @@ import reflex as rx
 import sys
 import os
 
-import subprocess
-
 # Add project root to sys.path so 'backend' is importable
-# Now that rxconfig.py is in the root, project_root is the current directory
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -17,7 +14,6 @@ load_dotenv(env_path, override=False)
 
 # Exclude data/outputs dirs from hot-reload to prevent worker restarts
 # when files are written during protest generation
-# Use relative paths and colon separator because Reflex splits on ':' exactly
 os.environ.setdefault(
     "REFLEX_HOT_RELOAD_EXCLUDE_PATHS",
     ":".join([
@@ -26,17 +22,20 @@ os.environ.setdefault(
     ]),
 )
 
+# Determine the correct api_url for the deployment environment
+api_url = None
+if os.environ.get("RAILWAY_PUBLIC_DOMAIN"):
+    # Railway deployment: use the public domain Railway assigns
+    api_url = f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}"
+elif sys.platform == "win32":
+    # Local Windows dev: Chrome rejects 0.0.0.0, use localhost
+    api_url = "http://127.0.0.1:8000"
 
-
-# Set api_url to localhost for local Windows dev so frontend can load backend images
-# without Chrome rejecting the 0.0.0.0 binding. On Cloud, this is safely ignored.
 config_kwargs = {
     "app_name": "texas_equity_ai",
     "disable_plugins": ["reflex.plugins.sitemap.SitemapPlugin"],
 }
-
-if sys.platform == "win32" and not os.environ.get("REFLEX_ENV_MODE"):
-    config_kwargs["api_url"] = "http://127.0.0.1:8000"
+if api_url:
+    config_kwargs["api_url"] = api_url
 
 config = rx.Config(**config_kwargs)
-

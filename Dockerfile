@@ -1,26 +1,28 @@
-FROM mcr.microsoft.com/playwright/python:v1.41.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements and install python dependencies
+# Install Node.js (required by Reflex for frontend compilation)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g npm@latest
+
+# Copy and install Python dependencies first (Docker layer caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install specific Playwright browsers (already in base image, but ensuring deps)
-RUN playwright install chromium
-RUN playwright install-deps
+# Install Playwright Chromium browser
+RUN playwright install chromium && playwright install-deps chromium
 
-# Copy the rest of the application
+# Copy the entire application
 COPY . .
 
-# Expose the ports
-# 7860 is the default port for Hugging Face Spaces
-EXPOSE 7860
-EXPOSE 8000
+# Initialize Reflex and compile production frontend
+RUN reflex init
+RUN reflex export --no-zip
 
-# Grant execution permission to the entrypoint script
-RUN chmod +x run_app.sh
+# Railway sets $PORT dynamically (usually 443 behind their proxy)
+ENV PORT=8000
 
-# Run the startup script
-CMD ["./run_app.sh"]
+# Single command: run Reflex in production mode
+CMD reflex run --env prod --backend-host 0.0.0.0 --backend-port $PORT
