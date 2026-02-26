@@ -1,0 +1,21 @@
+# Application Configs
+rxconfig.py
+.env*
+
+# Old/Unused Directories
+frontend_reflex/
+dev/
+scripts/
+
+# Cached/Generated Data and Results
+uploaded_files/
+data/
+outputs/
+debug/
+.states/
+models/
+
+# Web Assets
+.web/
+__pycache__/
+*.pyc
