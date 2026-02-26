@@ -2,8 +2,11 @@ import reflex as rx
 import sys
 import os
 
+import subprocess
+
 # Add project root to sys.path so 'backend' is importable
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Now that rxconfig.py is in the root, project_root is the current directory
+project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -18,14 +21,26 @@ load_dotenv(env_path, override=False)
 os.environ.setdefault(
     "REFLEX_HOT_RELOAD_EXCLUDE_PATHS",
     ":".join([
-        "../outputs",
-        "data",
         "outputs",
+        "data",
     ]),
 )
+
+def install_playwright_browsers():
+    """Installs Playwright browsers automatically on the server."""
+    print("Installing Playwright browsers...")
+    try:
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+        print("Playwright browsers installed successfully.")
+    except Exception as e:
+        print(f"Failed to install Playwright browsers: {e}")
 
 config = rx.Config(
     app_name="texas_equity_ai",
     frontend_port=3000,
     backend_port=8001,
+    # Point the app directory to the inner folder to match previous structure
+    app_module_dir="frontend_reflex/texas_equity_ai",
+    on_load=install_playwright_browsers,
 )
+
