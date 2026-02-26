@@ -797,92 +797,14 @@ elif district_code == "CCAD": account_placeholder = "e.g. R-2815-00C-0100-1 or 2
 elif district_code == "TCAD": account_placeholder = "e.g. 123456 (select TCAD manually — not auto-detected)"
 elif district_code == "DCAD": account_placeholder = "e.g. 00000776533000000 (17 digits)"
 
-# ── Address Autocomplete / Input ──────────────────────────────────────────
-account_number = None
-
-try:
-    from streamlit_searchbox import st_searchbox
-    import asyncio
-
-    def search_addresses(query: str) -> list:
-        """Search DB for matching addresses. Falls back to geocoding if DB has no hits."""
-        if not query or len(query) < 3:
-            return []
-        if sum(c.isalpha() for c in query) < 2:
-            return []
-
-        # 1. DB search (instant, free) - Synchronous REST call to avoid asyncio loop crashes on Streamlit Cloud
-        try:
-            import os, requests
-            supa_url = os.getenv("SUPABASE_URL")
-            supa_key = os.getenv("SUPABASE_KEY")
-            if supa_url and supa_key:
-                headers = {"apikey": supa_key, "Authorization": f"Bearer {supa_key}"}
-                params = {"address": f"ilike.%{query}%", "select": "address", "limit": 5}
-                r = requests.get(f"{supa_url}/rest/v1/properties", headers=headers, params=params, timeout=2)
-                if r.status_code == 200:
-                    addrs = [row.get('address', '') for row in r.json() if row.get('address')]
-                    if addrs:
-                        logger.info(f"Autocomplete [DB] hit: {len(addrs)} results for '{query}'")
-                        return addrs
-                else:
-                    logger.warning(f"Autocomplete [DB] status {r.status_code}: {r.text}")
-        except Exception as e:
-            logger.error(f"Autocomplete [DB] error: {e}")
-
-        # 2. Nominatim fallback (only if DB returned nothing)
-        try:
-            resp = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": f"{query}, Texas", "format": "json", "addressdetails": 1, "limit": 5},
-                headers={"User-Agent": "TexasEquityAI/1.0"}, timeout=2
-            )
-            if resp.status_code == 200:
-                out = []
-                for res in resp.json():
-                    a = res.get('address', {})
-                    num = a.get('house_number', '')
-                    road = a.get('road', '')
-                    city = a.get('city', a.get('town', a.get('village', '')))
-                    zp = a.get('postcode', '')
-                    street = f"{num} {road}".strip()
-                    if street and city:
-                        out.append(f"{street}, {city}, TX {zp}".strip(" ,"))
-                return out[:5]
-        except Exception:
-            pass
-
-        return []
-
-    # Pre-populate from anomaly table
-    prefill_val = st.session_state.get('generate_account_prefill', "")
-
-    selected = st_searchbox(
-        search_addresses,
-        label=f"Enter {district_code} Account Number or Street Address",
-        placeholder=account_placeholder,
-        default=prefill_val if prefill_val else None,
-        clear_on_submit=False,
-        key="address_searchbox"
-    )
-
-    account_number = selected if selected else None
-
-except ImportError:
-    # Fallback if streamlit-searchbox not installed
-    try:
-        from st_keyup import st_keyup
-        live_input = st_keyup(
-            f"Enter {district_code} Account Number or Street Address",
-            placeholder=account_placeholder,
-            key="account_input_live",
-            debounce=400
-        )
-        account_number = live_input if live_input else None
-    except ImportError:
-        account_number = st.text_input(f"Enter {district_code} Account Number or Street Address",
-                                      placeholder=account_placeholder,
-                                      key="account_input")
+# ── Address Input ─────────────────────────────────────────────────────────
+prefill_val = st.session_state.get('generate_account_prefill', "")
+account_number = st.text_input(
+    f"Enter {district_code} Account Number or Street Address",
+    value=prefill_val if prefill_val else "",
+    placeholder=account_placeholder,
+    key="account_input"
+)
 
 async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None, force_fresh_comps=False):
     equity_results = {}
