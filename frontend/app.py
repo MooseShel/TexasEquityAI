@@ -552,6 +552,8 @@ def auto_detect_district():
         st.session_state.district_selector = target_district
         st.toast(f"📍 Auto-switched District to **{target_district}**", icon="🔄")
 
+# Initial detection for query-param prefills (e.g. from anomaly scanner links)
+# Interactive updates are handled via on_change on the account_input widget below
 auto_detect_district()
 
 # Sidebar
@@ -808,7 +810,8 @@ account_number = st.text_input(
     f"Enter {district_code} Account Number or Street Address",
     value=prefill_val if prefill_val else "",
     placeholder=account_placeholder,
-    key="account_input"
+    key="account_input",
+    on_change=auto_detect_district
 )
 
 async def protest_generator_local(account_number, manual_address=None, manual_value=None, manual_area=None, district=None, force_fresh_comps=False):
