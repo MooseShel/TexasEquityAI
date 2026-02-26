@@ -619,7 +619,8 @@ async def get_full_protest(
                 
                 # Fallback if discovery completely fails — for commercial, use sales comps as equity pool
                 if not real_neighborhood:
-                    if str(property_details.get('property_type', '')).lower() == 'commercial':
+                    if str(property_details.get('property_type', '')).lower() == 'commercial' and not is_commercial_prop:
+                        # Only try this fallback if the dedicated commercial block above didn't already run
                         logger.info("Commercial property: no district neighbors found. Building equity pool from sales comps...")
                         yield json.dumps({"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}) + "\n"
                         real_neighborhood = commercial_agent.get_equity_comp_pool(

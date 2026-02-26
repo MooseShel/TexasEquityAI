@@ -202,12 +202,31 @@ class RentCastConnector:
                 # Note: type filtering is handled by sales_agent._filter_comps_by_type
                 # (soft filter — keeps comps as fallback if all would be removed)
 
-                price = prop.get("lastSalePrice") or prop.get("price") or 0
+                # Try multiple price fields — RentCast sold properties often lack lastSalePrice
+                # but include taxAssessments or lastSaleAmount
+                price = (
+                    prop.get("lastSalePrice")
+                    or prop.get("price")
+                    or prop.get("lastSaleAmount")
+                    or 0
+                )
+                # Fallback: extract latest tax assessment value as price proxy
+                if not price or float(price) <= 0:
+                    tax_assessments = prop.get("taxAssessments", {})
+                    if isinstance(tax_assessments, dict) and tax_assessments:
+                        try:
+                            latest_year = max(tax_assessments.keys(), key=lambda x: int(x))
+                            price = float(tax_assessments[latest_year].get("value", 0) or 0)
+                        except (ValueError, TypeError):
+                            pass
+
                 sqft  = prop.get("squareFootage") or prop.get("buildingSize") or 0
                 date  = prop.get("lastSaleDate") or prop.get("soldDate")
 
                 if not price or float(price) <= 0:
                     skipped_no_price += 1
+                    if skipped_no_price <= 3:
+                        logger.debug(f"RentCast: Skipped prop (no price): keys={list(prop.keys())}, addr={prop.get('formattedAddress', '?')}")
                     continue
 
                 price_f = float(price)
