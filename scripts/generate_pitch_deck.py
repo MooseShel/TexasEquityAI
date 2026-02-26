@@ -663,8 +663,13 @@ def generate_pitch_deck():
     pdf.cell(0, 5, "CONFIDENTIAL  |  Texas Equity AI  |  2026", ln=True, align='C')
     
     # Save
-    os.makedirs("outputs", exist_ok=True)
-    output_path = "outputs/Texas_Equity_AI_Pitch_Deck.pdf"
+    output_path = os.environ.get("PITCH_DECK_OUTPUT_PATH")
+    if not output_path:
+        os.makedirs("outputs", exist_ok=True)
+        output_path = "outputs/Texas_Equity_AI_Pitch_Deck.pdf"
+    else:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
     pdf.output(output_path)
     return output_path
 

@@ -1,0 +1,26 @@
+name: Deploy to Reflex Cloud
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install reflex reflex-map
+          pip install -r requirements.txt
+
+      - name: Deploy to Reflex Cloud
+        run: |
+          cd frontend_reflex
+          reflex deploy --token ${{ secrets.REFLEX_DEPLOY_TOKEN }} --no-interactive
+        env:
+          REFLEX_DEPLOY_TOKEN: ${{ secrets.REFLEX_DEPLOY_TOKEN }}

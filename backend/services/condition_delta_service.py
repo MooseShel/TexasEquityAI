@@ -223,9 +223,9 @@ async def enrich_comps_with_condition(
             executor.submit(_score_comp_sync, comp, vision_agent): i
             for i, comp in enumerate(comps_to_score)
         }
-        # Wait for all futures with a 45-second timeout
+        # Wait for all futures with a 12-second timeout
         results = {}
-        for future in as_completed(futures, timeout=45):
+        for future in as_completed(futures, timeout=12):
             idx = futures[future]
             try:
                 results[idx] = future.result()
