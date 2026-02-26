@@ -2,9 +2,9 @@ FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
 WORKDIR /app
 
-# Install Node.js (required by Reflex for frontend compilation)
+# Install Node.js and system utils required by Reflex (bun needs unzip)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && \
+    apt-get install -y nodejs unzip && \
     npm install -g npm@latest
 
 # Copy and install Python dependencies first (Docker layer caching)
