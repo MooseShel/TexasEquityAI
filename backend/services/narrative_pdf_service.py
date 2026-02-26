@@ -1015,10 +1015,12 @@ class PDFService:
             except Exception as qr_err:
                 logger.warning(f"QR code generation failed: {qr_err}")
 
-        pdf.set_y(240)
+        pdf.set_y(235)
         pdf.set_font("Roboto", 'B', 10)
-        pdf.cell(0, 5, "CONFIDENTIAL EVIDENCE SUMMARY", ln=True, align='C')
-        pdf.cell(0, 5, "Prepared for Appraisal Review Board", ln=True, align='C')
+        pdf.cell(0, 8, "CONFIDENTIAL EVIDENCE SUMMARY", ln=True, align='C')
+        pdf.ln(2)
+        pdf.set_font("Roboto", '', 9)
+        pdf.cell(0, 7, "Prepared for Appraisal Review Board", ln=True, align='C')
 
         # Anomaly Detection Badge (if scoring data is available)
         anomaly = property_data.get('anomaly_score', {}) or (equity_data.get('anomaly_score', {}) if isinstance(equity_data, dict) else {})
@@ -1031,33 +1033,44 @@ class PDFService:
                 pdf.set_fill_color(230, 160, 50)  # Orange for elevated
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("Roboto", 'B', 8)
+            pdf.ln(3)
             badge_text = f"STATISTICAL ANOMALY: Assessed at the {pctile:.0f}th percentile in neighborhood (Z-Score: {z:.1f})"
-            pdf.cell(0, 6, clean_text(badge_text), ln=True, align='C', fill=True)
+            pdf.cell(0, 7, clean_text(badge_text), ln=True, align='C', fill=True)
             pdf.set_text_color(255, 255, 255)
 
         pdf.set_text_color(0, 0, 0)
 
-        # Savings Prediction Card (if estimator data available)
+        # ── Viability Banner: Unified with ML prediction ──────────────────
+        # Use ML win probability if available, otherwise fall back to 5-signal estimator
+        ml_pred_cover = equity_data.get('ml_prediction', {}) if isinstance(equity_data, dict) else {}
         savings_pred = equity_data.get('savings_prediction', {}) if isinstance(equity_data, dict) else {}
-        if savings_pred and savings_pred.get('signal_count', 0) > 0:
-            prob = savings_pred.get('protest_success_probability', 0)
-            strength = savings_pred.get('protest_strength', '')
-            est_savings = savings_pred.get('estimated_savings', {})
+        est_savings = savings_pred.get('estimated_savings', {}) if savings_pred else {}
 
-            # Probability badge
-            if prob >= 0.70:
+        if ml_pred_cover and ml_pred_cover.get('win_probability'):
+            cover_prob = ml_pred_cover['win_probability']
+            cover_label = ml_pred_cover.get('confidence_level', 'MODERATE').upper()
+        elif savings_pred and savings_pred.get('signal_count', 0) > 0:
+            cover_prob = savings_pred.get('protest_success_probability', 0)
+            cover_label = savings_pred.get('protest_strength', 'UNKNOWN').upper()
+        else:
+            cover_prob = None
+            cover_label = None
+
+        if cover_prob is not None:
+            if cover_prob >= 0.70:
                 pdf.set_fill_color(40, 160, 70)  # Green
-            elif prob >= 0.40:
+            elif cover_prob >= 0.40:
                 pdf.set_fill_color(220, 160, 40)  # Yellow
             else:
                 pdf.set_fill_color(200, 80, 80)  # Red
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("Roboto", 'B', 8)
-            pdf.cell(0, 6, clean_text(
-                f"PROTEST VIABILITY: {strength.upper()} ({prob:.0%}) | "
-                f"Expected Savings: ${est_savings.get('expected', 0):,}/yr | "
-                f"Range: ${est_savings.get('conservative', 0):,}-${est_savings.get('best_case', 0):,}/yr"
-            ), ln=True, align='C', fill=True)
+            pdf.ln(3)
+            banner_parts = f"PROTEST VIABILITY: {cover_label} ({cover_prob:.0%})"
+            if est_savings.get('expected', 0) > 0:
+                banner_parts += f" | Expected Tax Savings: ${est_savings.get('expected', 0):,}/yr"
+                banner_parts += f" | Range: ${est_savings.get('conservative', 0):,}-${est_savings.get('best_case', 0):,}/yr"
+            pdf.cell(0, 7, clean_text(banner_parts), ln=True, align='C', fill=True)
             pdf.set_text_color(0, 0, 0)
 
         # ── EXECUTIVE SUMMARY DASHBOARD (Enhancement #9) ═══════════════════════
@@ -1112,7 +1125,7 @@ class PDFService:
         pdf.cell(90, 15, f"Win Probability: {win_prob}", align='R')
         pdf.set_xy(20, 55)
         pdf.set_font("Roboto", '', 14)
-        pdf.cell(170, 12, f"Protest Strength: {win_label} | Estimated Savings: {self._fmt(max(equity_gap, sales_gap))} - {self._fmt(max(equity_gap, sales_gap) + condition_deduction)}", align='C')
+        pdf.cell(170, 12, f"Protest Strength: {win_label} | Est. Value Reduction: {self._fmt(max(equity_gap, sales_gap))} - {self._fmt(max(equity_gap, sales_gap) + condition_deduction)}", align='C')
         if model_note:
             pdf.set_xy(20, 68)
             pdf.set_font("Roboto", '', 7)
@@ -2849,12 +2862,12 @@ class PDFService:
                 pdf.ln()
 
             # Median Equity Value summary — render ONCE after all comp pages
-            # Keep on same page: check if enough space, reduce gap if tight
+            # Avoid blank page: only add page break if absolutely no space left
             remaining = pdf.h - pdf.get_y() - 15  # 15mm bottom margin
-            if remaining < 20:
-                pdf.ln(1)  # minimal gap when space is tight
-            else:
-                pdf.ln(3)
+            if remaining < 15:
+                pdf.add_page()
+                self._draw_header(pdf, property_data, "EQUITY COMPARISON SUMMARY")
+            pdf.ln(3)
             median_equity = equity_floor
             pdf.set_font("Roboto", 'B', 8)
             pdf.cell(90, 8, f"Median Equity Value: {self._fmt(median_equity)}", 0, 0, 'L')
