@@ -702,6 +702,8 @@ async def run_protest_pipeline(
         filename = f"ProtestPacket_{current_account}.pdf"
         combined_path = os.path.join(upload_dir, filename)
         pdf_error = None
+        
+        yield {"status": "📄 Output Generation: Saving protest packet PDF..."}
         try:
             await asyncio.to_thread(
                 agents["pdf_service"].generate_evidence_packet,
@@ -709,7 +711,7 @@ async def run_protest_pipeline(
                 sales_data=equity_results.get('sales_comps', []),
                 comp_images=comp_images
             )
-            yield {"status": "📄 Output Generation: Saving protest packet PDF..."}
+            yield {"status": "✅ Generation Complete"}
         except Exception as e:
             logger.error(f"PDF generation failed: {traceback.format_exc()}")
             pdf_error = str(e)

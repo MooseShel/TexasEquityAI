@@ -214,12 +214,16 @@ async def enrich_comps_with_condition(
     comp_scores = []
     comps_to_score = equity_5[:5]
 
-    logger.info(f"ConditionDelta: Scoring {len(comps_to_score)} comps in parallel via asyncio.to_thread...")
+    logger.info(f"ConditionDelta: Scoring {len(comps_to_score)} comps in parallel via isolated ThreadPoolExecutor...")
 
     results = {}
+    loop = asyncio.get_event_loop()
+    # Create an isolated executor so we don't starve the default asyncio thread pool
+    executor = ThreadPoolExecutor(max_workers=len(comps_to_score) if comps_to_score else 1)
+
     async def _safe_worker(idx, comp):
         try:
-            res = await asyncio.to_thread(_score_comp_sync, comp, vision_agent)
+            res = await loop.run_in_executor(executor, _score_comp_sync, comp, vision_agent)
             results[idx] = res
         except Exception as e:
             logger.warning(f"ConditionDelta: Comp {idx} thread failed: {e}")
@@ -231,6 +235,9 @@ async def enrich_comps_with_condition(
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=12.0)
     except asyncio.TimeoutError:
         logger.warning("ConditionDelta: comp scoring timed out after 12 seconds")
+    finally:
+        # Let the remaining background threads finish without blocking the event loop
+        executor.shutdown(wait=False)
 
     # Process results in order
     for i in range(len(comps_to_score)):
