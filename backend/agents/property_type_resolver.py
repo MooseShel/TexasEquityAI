@@ -68,9 +68,16 @@ async def resolve_property_type(
     account_number: str,
     address: str,
     district: str = "HCAD",
+    cached_property: dict = None,
 ) -> Tuple[str, str]:
     """
     Multi-source property type detection.
+
+    Args:
+        account_number: The property account number.
+        address: The property address (may be empty for numeric-only lookups).
+        district: The expected appraisal district.
+        cached_property: Optional pre-fetched DB record to avoid redundant Supabase calls.
 
     Returns:
         (property_type, source) where property_type is "Residential",
@@ -81,7 +88,9 @@ async def resolve_property_type(
     # ── Layer 1: HCAD Bulk DB (state_class column) ────────────────────
     try:
         from backend.db.supabase_client import supabase_service
-        prop = await supabase_service.get_property_by_account(account_number)
+        prop = cached_property  # Reuse pre-fetched record if available
+        if not prop:
+            prop = await supabase_service.get_property_by_account(account_number)
         if prop and prop.get("state_class"):
             sc = prop["state_class"]
             ptype = classify_state_class(sc)
@@ -92,21 +101,26 @@ async def resolve_property_type(
         logger.warning(f"PropertyTypeResolver: DB lookup failed: {e}")
 
     # ── Layer 2: RentCast API ─────────────────────────────────────────
-    try:
-        from backend.agents.non_disclosure_bridge import NonDisclosureBridge
-        bridge = NonDisclosureBridge()
-        rc_type = await bridge.detect_property_type(address)
-        if rc_type:
-            if rc_type in RENTCAST_RESIDENTIAL:
-                logger.info(f"PropertyTypeResolver: Residential from RentCast='{rc_type}' for {address}")
-                return "Residential", f"RentCast({rc_type})"
-            if rc_type in RENTCAST_COMMERCIAL:
-                logger.info(f"PropertyTypeResolver: Commercial from RentCast='{rc_type}' for {address}")
-                return "Commercial", f"RentCast({rc_type})"
-            # Unknown RentCast type — don't decide, fall through
-            logger.info(f"PropertyTypeResolver: RentCast returned '{rc_type}' — unrecognized, trying next source")
-    except Exception as e:
-        logger.warning(f"PropertyTypeResolver: RentCast failed: {e}")
+    # Guard: skip RentCast if address is empty or purely numeric (account number)
+    has_real_address = address and any(c.isalpha() for c in address)
+    if has_real_address:
+        try:
+            from backend.agents.non_disclosure_bridge import NonDisclosureBridge
+            bridge = NonDisclosureBridge()
+            rc_type = await bridge.detect_property_type(address)
+            if rc_type:
+                if rc_type in RENTCAST_RESIDENTIAL:
+                    logger.info(f"PropertyTypeResolver: Residential from RentCast='{rc_type}' for {address}")
+                    return "Residential", f"RentCast({rc_type})"
+                if rc_type in RENTCAST_COMMERCIAL:
+                    logger.info(f"PropertyTypeResolver: Commercial from RentCast='{rc_type}' for {address}")
+                    return "Commercial", f"RentCast({rc_type})"
+                # Unknown RentCast type — don't decide, fall through
+                logger.info(f"PropertyTypeResolver: RentCast returned '{rc_type}' — unrecognized, trying next source")
+        except Exception as e:
+            logger.warning(f"PropertyTypeResolver: RentCast failed: {e}")
+    else:
+        logger.info(f"PropertyTypeResolver: Skipping RentCast — address '{address}' is empty or numeric-only")
 
     # ── Layer 3: RealEstateAPI ────────────────────────────────────────
     try:

@@ -184,6 +184,7 @@ async def get_full_protest(
 
             # 0c. Global DB Lookup (Layer 2) — PROOF OF LIFE
             # If the user selected a district but the account exists in another known district in our DB, trust the DB.
+            db_record = None
             try:
                 # We use get_property_by_account which is district-agnostic (by account_number PK)
                 db_record = await supabase_service.get_property_by_account(current_account)
@@ -201,7 +202,7 @@ async def get_full_protest(
             from backend.agents.property_type_resolver import resolve_property_type
             original_address = account_number if any(c.isalpha() for c in account_number) else None
             lookup_addr = original_address or account_number
-            ptype, ptype_source = await resolve_property_type(current_account, lookup_addr, current_district or "HCAD")
+            ptype, ptype_source = await resolve_property_type(current_account, lookup_addr, current_district or "HCAD", cached_property=db_record)
             logger.info(f"Early Type Detection: '{ptype}' via {ptype_source}")
             
             # --- COMMERCIAL FAST PATH ---
