@@ -270,6 +270,9 @@ def geocode_address(address: str):
             pass
         return None
 
+    # Throttle to respect Nominatim rate limit (1 req/sec)
+    time.sleep(1.0)
+
     # Try full address first
     result = _try_geocode(address)
     if result:
@@ -1985,8 +1988,6 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             comp_upper = comp_addr.upper()
                             comp_has_state = any(s in comp_upper for s in [', TX', ',TX', ' TX ','TEXAS', 'HOUSTON', 'DALLAS', 'FORT WORTH', 'AUSTIN', 'PLANO'])
                             full_addr = comp_addr if comp_has_state else f"{comp_addr}, {city_suffix}"
-                            # Throttle to avoid Nominatim 429 Too Many Requests
-                            time.sleep(1.2)
                             coords = geocode_address(full_addr)
                             if coords:
                                 map_points.append({
@@ -2171,7 +2172,6 @@ if st.button("🚀 Generate Protest Packet", type="primary"):
                             sc_addr = sc.get('Address', '')
                             if not sc_addr or sc_addr.upper() == subject_addr.upper():
                                 continue
-                            time.sleep(1.2) # Nominatim throttle
                             sc_coords = geocode_address(sc_addr)
                             if sc_coords:
                                 sales_map_points.append({
