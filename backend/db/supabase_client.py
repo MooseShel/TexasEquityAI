@@ -141,8 +141,9 @@ class SupabaseService:
         Query Supabase for comparable properties by neighborhood_code and building_area.
         Returns up to `limit` records excluding the subject property.
         Tolerance controls the ±% range for building_area (default ±35%).
+        If building_area is 0/None, skips the area filter (useful for commercial properties).
         """
-        if not self.client or not neighborhood_code or not building_area:
+        if not self.client or not neighborhood_code:
             return []
         # Handle all variations of the neighborhood code (e.g. 8401, 8401.00, 8401.01, 8014A)
         base_code = str(neighborhood_code).split('.')[0].strip()
@@ -154,25 +155,26 @@ class SupabaseService:
         code_variations += [f"{base_code} {chr(i)}" for i in range(65, 91)] # With space
 
         try:
-            min_area = int(building_area * (1 - tolerance))
-            max_area = int(building_area * (1 + tolerance))
-            
             # Fetch with a larger limit to account for post-filtering
             fetch_limit = limit * 2
             
-            response = (
+            query = (
                 self.client.table("properties")
                 .select("account_number,address,appraised_value,market_value,building_area,land_area,year_built,neighborhood_code,district,building_grade,building_quality,valuation_history,land_breakdown,last_sale_date,deed_count")
                 .in_("neighborhood_code", code_variations)
                 .eq("district", district)
                 .neq("account_number", account_number)
-                .gte("building_area", min_area)
-                .lte("building_area", max_area)
                 .gt("appraised_value", 0)
-                .gt("building_area", 0)
                 .limit(fetch_limit)
-                .execute()
             )
+
+            # Only apply building_area filter if we have a valid area
+            if building_area and int(building_area) > 0:
+                min_area = int(building_area * (1 - tolerance))
+                max_area = int(building_area * (1 + tolerance))
+                query = query.gte("building_area", min_area).lte("building_area", max_area).gt("building_area", 0)
+            
+            response = query.execute()
             
             raw_results = response.data or []
             results = []
@@ -186,7 +188,8 @@ class SupabaseService:
             # Enforce the original limit
             results = results[:limit]
             
-            logger.info(f"DB neighbor lookup: {len(results)} comps for nbhd={base_code}(any decimal), area={building_area}±{int(tolerance*100)}%")
+            area_desc = f"area={building_area}±{int(tolerance*100)}%" if building_area else "no area filter"
+            logger.info(f"DB neighbor lookup: {len(results)} comps for nbhd={base_code}(any decimal), {area_desc}")
             return results
         except Exception as e:
             logger.warning(f"get_neighbors_from_db failed: {e}")

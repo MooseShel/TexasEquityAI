@@ -523,26 +523,45 @@ async def get_full_protest(
                 if is_commercial_prop:
                     property_details['ptype_source'] = ptype_source
 
-                # ── Commercial properties: use API-based comp pool directly ───────
+                # ── Commercial properties: DB-first then API comp pool ──────────
                 if is_commercial_prop:
-                    try:
-                        from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
-                        comm_agent_local = CommercialEnrichmentAgent()
-                        yield json.dumps({"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}) + "\n"
-                        comp_pool = comm_agent_local.get_equity_comp_pool(
-                            property_details.get('address', account_number), property_details
+                    # Layer 0: DB neighbors first (fastest, cheapest — same as residential)
+                    if nbhd_code:
+                        db_comps = await supabase_service.get_neighbors_from_db(
+                            current_account, nbhd_code, bld_area, district=prop_district
                         )
-                        if comp_pool:
-                            real_neighborhood = comp_pool
-                            equity_results['note'] = (
-                                "Equity analysis is based on recent sales comparables "
-                                "(commercial property — no district neighbor records available)."
+                        if len(db_comps) >= 3:
+                            real_neighborhood = db_comps
+                            yield json.dumps({"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} commercial comps from database instantly."}) + "\n"
+                            logger.info(f"Commercial DB-first: {len(real_neighborhood)} comps from nbhd={nbhd_code}")
+
+                    # Layer 0b: Cached comps
+                    if not real_neighborhood:
+                        cached_comps_comm = await supabase_service.get_cached_comps(current_account)
+                        if cached_comps_comm:
+                            real_neighborhood = cached_comps_comm
+                            yield json.dumps({"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached commercial comps."}) + "\n"
+
+                    # Layer 1: API-based sales comp pool (fallback)
+                    if not real_neighborhood:
+                        try:
+                            from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+                            comm_agent_local = CommercialEnrichmentAgent()
+                            yield json.dumps({"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}) + "\n"
+                            comp_pool = comm_agent_local.get_equity_comp_pool(
+                                property_details.get('address', account_number), property_details
                             )
-                            logger.info(f"Main: Commercial equity pool established: {len(real_neighborhood)} proxy comps.")
-                        else:
-                            logger.warning("Main: Commercial equity pool empty.")
-                    except Exception as e:
-                        logger.error(f"Main: Commercial equity fallback failed: {e}")
+                            if comp_pool:
+                                real_neighborhood = comp_pool
+                                equity_results['note'] = (
+                                    "Equity analysis is based on recent sales comparables "
+                                    "(commercial property — no district neighbor records available)."
+                                )
+                                logger.info(f"Main: Commercial equity pool established: {len(real_neighborhood)} proxy comps.")
+                            else:
+                                logger.warning("Main: Commercial equity pool empty.")
+                        except Exception as e:
+                            logger.error(f"Main: Commercial equity fallback failed: {e}")
 
                 # Layer 0: DB lookup by neighborhood_code + building_area (no browser needed)
                 if not real_neighborhood and nbhd_code and bld_area > 0:

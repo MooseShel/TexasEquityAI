@@ -1157,22 +1157,41 @@ async def protest_generator_local(account_number, manual_address=None, manual_va
             if is_commercial_prop and not property_details.get('property_type'):
                 property_details['property_type'] = 'commercial'
 
-            # ── Commercial properties: use API-based comp pool directly ───────
+            # ── Commercial properties: DB-first then API comp pool ──────────
             if is_commercial_prop:
-                try:
-                    from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
-                    commercial_agent = CommercialEnrichmentAgent()
-                    yield {"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}
-                    comp_pool = commercial_agent.get_equity_comp_pool(
-                        property_details.get('address', account_number), property_details
+                # Layer 0: Try DB neighbors first (same as residential — fastest, cheapest)
+                if nbhd_code:
+                    db_comps = await supabase_service.get_neighbors_from_db(
+                        current_account, nbhd_code, bld_area, district=prop_district
                     )
-                    if comp_pool:
-                        real_neighborhood = comp_pool
-                        yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} commercial sales comps for analysis."}
-                    else:
-                        logger.warning("Commercial: Could not build sales comp pool from API.")
-                except Exception as ce:
-                    logger.error(f"Commercial comp pool error: {ce}")
+                    if len(db_comps) >= 3:
+                        real_neighborhood = db_comps
+                        yield {"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} commercial comps from database instantly."}
+                        logger.info(f"Commercial DB-first: {len(real_neighborhood)} comps from nbhd={nbhd_code}")
+
+                # Layer 0b: Cached comps
+                if not real_neighborhood:
+                    cached = await supabase_service.get_cached_comps(current_account)
+                    if cached:
+                        real_neighborhood = cached
+                        yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} cached commercial comps."}
+
+                # Layer 1: Fall back to API-based sales comp pool
+                if not real_neighborhood:
+                    try:
+                        from backend.agents.commercial_enrichment_agent import CommercialEnrichmentAgent
+                        commercial_agent = CommercialEnrichmentAgent()
+                        yield {"status": "🏢 Commercial Equity: Building value pool from recent sales comparables..."}
+                        comp_pool = commercial_agent.get_equity_comp_pool(
+                            property_details.get('address', account_number), property_details
+                        )
+                        if comp_pool:
+                            real_neighborhood = comp_pool
+                            yield {"status": f"⚖️ Equity Specialist: Using {len(real_neighborhood)} commercial sales comps for analysis."}
+                        else:
+                            logger.warning("Commercial: Could not build sales comp pool from API.")
+                    except Exception as ce:
+                        logger.error(f"Commercial comp pool error: {ce}")
 
             # ── Residential (or commercial fallback): DB-first then scrape ─────
             if not real_neighborhood:

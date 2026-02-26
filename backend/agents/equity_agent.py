@@ -25,6 +25,42 @@ class EquityAgent:
         subj_pps = (subj_val / subj_area) if subj_area and subj_area > 0 else 0
         
         if not subj_area or subj_area == 0:
+            # Commercial properties often lack building_area.
+            # If we have neighborhood comps passed in, use them with raw appraised value comparison.
+            if neighborhood_properties and len(neighborhood_properties) >= 3:
+                logger.info(f"EquityAgent: No building_area — using {len(neighborhood_properties)} passed-in comps with value-only comparison")
+                valid_comps = []
+                for comp in neighborhood_properties:
+                    try:
+                        val = float(comp.get('appraised_value') or 0)
+                        area = float(comp.get('building_area') or 0)
+                        if val > 0:
+                            comp['value_per_sqft'] = (val / area) if area > 0 else 0
+                            comp['comp_source'] = 'local'
+                            valid_comps.append(comp)
+                    except Exception:
+                        continue
+                
+                if valid_comps:
+                    # Sort by appraised value ascending (lowest-valued neighbors first)
+                    valid_comps.sort(key=lambda x: float(x.get('appraised_value', 0)))
+                    equity_10 = valid_comps[:10]
+                    
+                    # Calculate justified value floor as median of comp appraised values
+                    comp_values = [float(c.get('appraised_value', 0)) for c in equity_10 if float(c.get('appraised_value', 0)) > 0]
+                    if comp_values:
+                        comp_values.sort()
+                        justified_value_floor = comp_values[len(comp_values) // 2]
+                    else:
+                        justified_value_floor = subj_val
+                    
+                    return {
+                        'equity_5': equity_10,
+                        'justified_value_floor': justified_value_floor,
+                        'subject_value_per_sqft': 0,
+                        'note': 'Value-only comparison (no sqft data available for subject property)'
+                    }
+            
             return {
                 'equity_5': [],
                 'justified_value_floor': subj_val,
@@ -48,13 +84,20 @@ class EquityAgent:
         wide_pool = vector_store.find_similar_properties(subject_property, limit=40)
         
         if not wide_pool or len(wide_pool) < 3:
-            logger.warning(f"Vector search returned insufficient matches ({len(wide_pool) if wide_pool else 0}). Returning baseline.")
-            return {
-                'equity_5': wide_pool or [],
-                'justified_value_floor': subj_val,
-                'subject_value_per_sqft': subj_pps,
-                'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
-            }
+            # Pgvector returned nothing — fall back to passed-in DB neighborhood comps
+            if neighborhood_properties and len(neighborhood_properties) >= 3:
+                logger.info(f"Vector search insufficient ({len(wide_pool) if wide_pool else 0}). "
+                            f"Falling back to {len(neighborhood_properties)} passed-in DB comps.")
+                wide_pool = neighborhood_properties
+            else:
+                logger.warning(f"Vector search returned insufficient matches ({len(wide_pool) if wide_pool else 0}) "
+                               f"and no DB fallback comps available. Returning baseline.")
+                return {
+                    'equity_5': wide_pool or [],
+                    'justified_value_floor': subj_val,
+                    'subject_value_per_sqft': subj_pps,
+                    'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
+                }
         
         # Partition into local (same neighborhood) and city-wide pools
         local_pool = []

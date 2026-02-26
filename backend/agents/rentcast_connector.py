@@ -196,6 +196,7 @@ class RentCastConnector:
 
         skipped_no_price = 0
         skipped_no_sqft = 0
+
         for prop in raw_props:
             try:
                 ptype = prop.get("propertyType", "")

@@ -4,7 +4,10 @@ import logging
 import time
 from typing import List, Optional
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from dotenv import load_dotenv
 from backend.models.sales_comp import SalesComparable
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
