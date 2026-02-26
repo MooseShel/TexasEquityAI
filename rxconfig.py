@@ -36,11 +36,19 @@ def install_playwright_browsers():
         print(f"Failed to install Playwright browsers: {e}")
 
 # Install browsers at startup (on cloud only)
+# Install browsers at startup (on cloud only)
 if os.environ.get("REFLEX_ENV_MODE") or not os.path.exists(os.path.join(project_root, ".env")):
     install_playwright_browsers()
 
-config = rx.Config(
-    app_name="texas_equity_ai",
-    disable_plugins=["reflex.plugins.sitemap.SitemapPlugin"],
-)
+# Set api_url to localhost for local Windows dev so frontend can load backend images
+# without Chrome rejecting the 0.0.0.0 binding. On Cloud, this is safely ignored.
+config_kwargs = {
+    "app_name": "texas_equity_ai",
+    "disable_plugins": ["reflex.plugins.sitemap.SitemapPlugin"],
+}
+
+if sys.platform == "win32" and not os.environ.get("REFLEX_ENV_MODE"):
+    config_kwargs["api_url"] = "http://127.0.0.1:8000"
+
+config = rx.Config(**config_kwargs)
 

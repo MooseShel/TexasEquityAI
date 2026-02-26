@@ -535,14 +535,13 @@ class AppState(rx.State):
                         self.evidence_image_path = data.get("evidence_image_path", "") or ""
                         self.all_image_paths = data.get("all_image_paths", [])
                         self.generation_complete = True
+                        self.is_generating = False
 
         except Exception as e:
             import traceback
             logger.error(f"Generation error: {traceback.format_exc()}")
             async with self:
                 self.error_message = f"Generation failed: {str(e)}"
-        finally:
-            async with self:
                 self.is_generating = False
 
     @rx.event(background=True)
