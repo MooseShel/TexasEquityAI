@@ -314,7 +314,7 @@ def sidebar() -> rx.Component:
                         **secondary_button_style,
                         width="100%",
                     ),
-                    href=AppState.pitch_deck_path,
+                    href=rx.get_upload_url(AppState.pitch_deck_path),
                     is_external=True,
                     width="100%",
                 ),

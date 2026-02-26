@@ -55,6 +55,9 @@ base_page_style = {
     "background": BG_DARKEST,
     "color": TEXT_PRIMARY,
     "min_height": "100vh",
+    "display": "flex",
+    "flex_direction": "column",
+    "align_items": "center",
 }
 
 sidebar_style = {
@@ -163,6 +166,9 @@ input_style = {
     "color": TEXT_PRIMARY,
     "font_size": "16px",
     "width": "100%",
+    "_placeholder": {
+        "color": "rgba(255, 255, 255, 0.5)",
+    },
     "_focus": {
         "border": f"1px solid {PRIMARY}",
         "box_shadow": f"0 0 0 3px {PRIMARY_GLOW}",

@@ -10,22 +10,20 @@ from texas_equity_ai.pages.report import report_page, ReportState
 
 
 def layout(page_content: rx.Component) -> rx.Component:
-    """Main layout with collapsible sidebar + content area."""
+    """Main layout — centered, responsive content area."""
     return rx.box(
         # Google Fonts
         rx.el.link(
             rel="stylesheet",
             href=GOOGLE_FONT_URL,
         ),
-        sidebar(),
         rx.box(
             page_content,
-            margin_left=rx.cond(AppState.sidebar_collapsed, "64px", "300px"),
-            padding="32px",
+            padding=["12px", "16px", "24px", "32px"],
             flex="1",
-            max_width="1200px",
+            max_width="1400px",
             width="100%",
-            transition="margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+            margin_x="auto",
         ),
         **base_page_style,
     )
@@ -51,9 +49,14 @@ app = rx.App(
     ),
     style={
         "font_family": FONT_FAMILY,
+        "input::placeholder": {
+            "color": "rgba(255, 255, 255, 0.5) !important",
+        },
     },
     head_components=[
         rx.el.link(rel="stylesheet", href=GOOGLE_FONT_URL),
+        rx.el.link(rel="icon", href="/logo.webp", type="image/webp"),
+        rx.el.link(rel="apple-touch-icon", href="/logo.webp"),
         rx.el.meta(name="description", content="Texas Equity AI — AI-powered property tax protest automation for Texas homeowners"),
         rx.el.meta(name="viewport", content="width=device-width, initial-scale=1"),
     ],

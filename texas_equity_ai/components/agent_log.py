@@ -71,8 +71,7 @@ def agent_log(logs: rx.Var[list[str]], is_generating: rx.Var[bool]) -> rx.Compon
                 ),
                 background=_TERM_BG,
                 padding="14px",
-                max_height="300px",
-                overflow_y="auto",
+
                 border_bottom_left_radius=RADIUS_SM,
                 border_bottom_right_radius=RADIUS_SM,
                 border=f"1px solid {BORDER}",

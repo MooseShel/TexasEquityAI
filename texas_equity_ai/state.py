@@ -10,6 +10,13 @@ import asyncio
 import logging
 import re
 
+# Configure logging so backend agent logs show in the reflex run console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 # Ensure project root is on path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -96,6 +103,9 @@ class AppState(rx.State):
     error_message: str = ""
 
     # ── Result data ─────────────────────────────────────────────────
+    # pdf_path, evidence_image_path, all_image_paths, pitch_deck_path
+    # store BASENAMES only (plain strings). Computed vars below resolve
+    # them to /_upload/<basename> URLs for the frontend.
     property_data: dict = {}
     equity_data: dict = {}
     vision_data: list[dict] = []
@@ -103,8 +113,32 @@ class AppState(rx.State):
     market_value: float = 0.0
     pdf_path: str = ""
     pdf_error: str = ""
+
+    @rx.var
+    def debug_property_json(self) -> str:
+        try:
+            return json.dumps(self.property_data, indent=2, default=str)
+        except Exception:
+            return str(self.property_data)
+
+    @rx.var
+    def debug_equity_json(self) -> str:
+        try:
+            return json.dumps(self.equity_data, indent=2, default=str)
+        except Exception:
+            return str(self.equity_data)
+
+    @rx.var
+    def debug_vision_json(self) -> str:
+        if not self.vision_data:
+            return "No vision detections available. This may mean:\n• No street view images were found for this property\n• The AI condition analysis did not detect any issues\n• The condition analysis step was skipped or timed out"
+        try:
+            return json.dumps(self.vision_data, indent=2, default=str)
+        except Exception:
+            return str(self.vision_data)
     evidence_image_path: str = ""
     all_image_paths: list[str] = []
+
 
     # ── Scan / monitor state ────────────────────────────────────────
     scan_results: dict = {}
@@ -112,6 +146,14 @@ class AppState(rx.State):
     scan_district: str = "HCAD"
     watch_list: list[dict] = []
     watch_account: str = ""
+
+    @rx.var
+    def scan_flagged(self) -> list[dict]:
+        return self.scan_results.get("flagged", []) if isinstance(self.scan_results, dict) else []
+
+    @rx.var
+    def scan_stats(self) -> dict:
+        return self.scan_results.get("stats", {}) if isinstance(self.scan_results, dict) else {}
     pitch_deck_path: str = ""
 
     # ── Report viewer state (for /report/[account]) ─────────────────
@@ -154,12 +196,123 @@ class AppState(rx.State):
         return self.equity_savings * (self.tax_rate / 100)
 
     @rx.var
+    def sales_median_price(self) -> float:
+        """Median sale price from sales comps."""
+        raw = self.equity_data.get("sales_comps", []) if isinstance(self.equity_data, dict) else []
+        prices = []
+        for sc in raw:
+            try:
+                p = float(str(sc.get("Sale Price", "0")).replace("$", "").replace(",", ""))
+                if p > 0:
+                    prices.append(p)
+            except (ValueError, TypeError):
+                continue
+        if not prices:
+            return 0.0
+        prices.sort()
+        mid = len(prices) // 2
+        return prices[mid] if len(prices) % 2 else (prices[mid - 1] + prices[mid]) / 2
+
+    @rx.var
+    def sales_savings(self) -> float:
+        return max(0, self.appraised_value - self.sales_median_price) if self.sales_median_price > 0 else 0.0
+
+    @rx.var
     def equity_comps(self) -> list[dict]:
-        return self.equity_data.get("equity_5", []) if isinstance(self.equity_data, dict) else []
+        raw = self.equity_data.get("equity_5", []) if isinstance(self.equity_data, dict) else []
+        formatted = []
+        for c in raw:
+            comp = dict(c)
+            # Round $/sqft to 2 decimals
+            try:
+                comp["value_per_sqft"] = f"{float(comp.get('value_per_sqft', 0)):,.2f}"
+            except (ValueError, TypeError):
+                comp["value_per_sqft"] = "0.00"
+            # Convert similarity (L2 distance → percentage: lower distance = higher similarity)
+            try:
+                raw_sim = float(comp.get("similarity") or comp.get("similarity_score") or 0)
+                if raw_sim > 0:
+                    # L2 distance: 0 = identical, ~2 = very different
+                    pct = max(0, (1 - raw_sim) * 100)
+                    comp["similarity_score"] = f"{pct:.0f}%"
+                else:
+                    comp["similarity_score"] = "—"
+            except (ValueError, TypeError):
+                comp["similarity_score"] = "—"
+            # Format currency values
+            try:
+                comp["appraised_value"] = f"{float(comp.get('appraised_value', 0)):,.0f}"
+            except (ValueError, TypeError):
+                comp["appraised_value"] = "0"
+            try:
+                mv = float(comp.get("market_value") or comp.get("appraised_value", "0").replace(",", ""))
+                comp["market_value"] = f"{mv:,.0f}"
+            except (ValueError, TypeError):
+                comp["market_value"] = comp.get("appraised_value", "0")
+            # Format building area
+            try:
+                comp["building_area"] = f"{int(float(comp.get('building_area', 0))):,}"
+            except (ValueError, TypeError):
+                comp["building_area"] = "0"
+            # Safe defaults
+            comp.setdefault("comp_source", "local")
+            comp.setdefault("neighborhood_code", "—")
+            comp.setdefault("address", "Unknown")
+            comp.setdefault("year_built", "—")
+            comp.setdefault("property_type", "Residential")
+            formatted.append(comp)
+        return formatted
 
     @rx.var
     def sales_comps(self) -> list[dict]:
-        return self.equity_data.get("sales_comps", []) if isinstance(self.equity_data, dict) else []
+        raw = self.equity_data.get("sales_comps", []) if isinstance(self.equity_data, dict) else []
+        formatted = []
+        for c in raw:
+            comp = dict(c)
+            # Format sale date to readable format
+            raw_date = str(comp.get("Sale Date", "") or "")
+            if raw_date and raw_date != "None":
+                try:
+                    from datetime import datetime as dt
+                    date_str = raw_date.split("T")[0]
+                    parsed = dt.strptime(date_str, "%Y-%m-%d")
+                    comp["Sale Date"] = parsed.strftime("%b %d, %Y")
+                except Exception:
+                    comp["Sale Date"] = raw_date
+            else:
+                comp["Sale Date"] = "—"
+            # Format Sale Price as currency
+            raw_price = str(comp.get("Sale Price", "") or "")
+            if raw_price and raw_price != "—":
+                try:
+                    num = float(raw_price.replace("$", "").replace(",", ""))
+                    comp["Sale Price"] = f"${num:,.0f}"
+                except (ValueError, TypeError):
+                    pass
+            # Format Price/SqFt
+            raw_pps = str(comp.get("Price/SqFt", "") or "")
+            if raw_pps and raw_pps != "—":
+                try:
+                    num = float(raw_pps.replace("$", "").replace(",", ""))
+                    comp["Price/SqFt"] = f"${num:,.2f}"
+                except (ValueError, TypeError):
+                    pass
+            # Format SqFt
+            raw_sqft = comp.get("SqFt", "")
+            if raw_sqft and raw_sqft != "—":
+                try:
+                    comp["SqFt"] = f"{int(float(str(raw_sqft).replace(',', ''))):,}"
+                except (ValueError, TypeError):
+                    pass
+            # Safe defaults
+            comp.setdefault("Address", "Unknown")
+            comp.setdefault("Sale Price", "—")
+            comp.setdefault("SqFt", "—")
+            comp.setdefault("Price/SqFt", "—")
+            comp.setdefault("Year Built", "—")
+            comp.setdefault("Distance", "—")
+            formatted.append(comp)
+        return formatted
 
     @rx.var
     def fmt_win_probability(self) -> str:
@@ -237,24 +390,24 @@ class AppState(rx.State):
 
     @rx.var
     def map_url(self) -> str:
-        """Build a Google Static Maps URL from property + comp data."""
+        """Build a Google Static Maps URL using addresses (no lat/lon needed)."""
         api_key = os.getenv("GOOGLE_STREET_VIEW_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
         if not api_key:
             return ""
 
-        markers = []
-        # Subject property
-        lat = self.property_data.get("latitude") or self.property_data.get("lat")
-        lon = self.property_data.get("longitude") or self.property_data.get("lon")
-        if lat and lon:
-            markers.append(f"markers=color:red%7Clabel:S%7C{lat},{lon}")
+        from urllib.parse import quote
 
-        # Equity comps
+        markers = []
+        # Subject property — red marker
+        subject_addr = self.property_data.get("address", "")
+        if subject_addr and subject_addr != "Unknown":
+            markers.append(f"markers=color:red%7Clabel:S%7C{quote(subject_addr)}")
+
+        # Equity comps — blue markers
         for comp in self.equity_comps:
-            clat = comp.get("latitude") or comp.get("lat")
-            clon = comp.get("longitude") or comp.get("lon")
-            if clat and clon:
-                markers.append(f"markers=color:blue%7Clabel:C%7C{clat},{clon}")
+            addr = comp.get("address", "")
+            if addr and addr != "Unknown" and addr != subject_addr:
+                markers.append(f"markers=color:blue%7Clabel:C%7C{quote(addr)}")
 
         if not markers:
             return ""
@@ -312,17 +465,20 @@ class AppState(rx.State):
         self.agent_logs = []
         self.generation_complete = False
 
+    def start_generate(self):
+        """Instantly set loading state, then kick off background task."""
+        if self.is_generating:
+            return
+        if not self.account_number:
+            self.error_message = "Please enter an account number or address."
+            return
+        self.clear_results()
+        self.is_generating = True
+        return AppState.generate_protest
+
     @rx.event(background=True)
     async def generate_protest(self):
         """Main protest generation — runs as background task."""
-        async with self:
-            if self.is_generating:
-                return
-            if not self.account_number:
-                self.error_message = "Please enter an account number or address."
-                return
-            self.clear_results()
-            self.is_generating = True
 
         # Capture state before background work
         async with self:
@@ -365,14 +521,11 @@ class AppState(rx.State):
                         self.vision_data = data.get("vision", [])
                         self.narrative = data.get("narrative", "")
                         self.market_value = float(data.get("market_value", 0) or 0)
-                        # Runtime files use upload dir — convert basename to URL
-                        pdf_basename = data.get("combined_pdf_path", "") or ""
-                        self.pdf_path = rx.get_upload_url(pdf_basename) if pdf_basename else ""
+                        # Store basenames only — resolve to URLs at render time
+                        self.pdf_path = data.get("combined_pdf_path", "") or ""
                         self.pdf_error = data.get("pdf_error", "") or ""
-                        ev_basename = data.get("evidence_image_path", "") or ""
-                        self.evidence_image_path = rx.get_upload_url(ev_basename) if ev_basename else ""
-                        img_basenames = data.get("all_image_paths", [])
-                        self.all_image_paths = [rx.get_upload_url(b) for b in img_basenames if b]
+                        self.evidence_image_path = data.get("evidence_image_path", "") or ""
+                        self.all_image_paths = data.get("all_image_paths", [])
                         self.generation_complete = True
 
         except Exception as e:
@@ -489,7 +642,7 @@ class AppState(rx.State):
             )
             async with self:
                 if result.returncode == 0 and os.path.exists(pdf_path):
-                    self.pitch_deck_path = rx.get_upload_url("Texas_Equity_AI_Pitch_Deck.pdf")
+                    self.pitch_deck_path = "Texas_Equity_AI_Pitch_Deck.pdf"
                 else:
                     self.error_message = f"Pitch deck failed: {result.stderr[:200]}"
         except Exception as e:

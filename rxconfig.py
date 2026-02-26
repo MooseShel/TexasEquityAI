@@ -41,5 +41,6 @@ if os.environ.get("REFLEX_ENV_MODE") or not os.path.exists(os.path.join(project_
 
 config = rx.Config(
     app_name="texas_equity_ai",
+    disable_plugins=["reflex.plugins.sitemap.SitemapPlugin"],
 )
 

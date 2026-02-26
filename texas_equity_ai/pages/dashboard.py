@@ -4,7 +4,7 @@ Handles account input, protest generation, and results display (5 tabs).
 """
 import reflex as rx
 import json
-from texas_equity_ai.state import AppState
+from texas_equity_ai.state import AppState, DISTRICT_OPTIONS
 from texas_equity_ai.styles import (
     main_content_style, card_style, glass_card_style, hero_banner_style,
     primary_button_style, secondary_button_style, input_style,
@@ -81,7 +81,7 @@ def _kpi_card(icon: str, label: str, value: rx.Var, color: str = "white",
         ),
         rx.text(
             value,
-            font_size="1.3rem",
+            font_size=["1rem", "1.1rem", "1.3rem"],
             font_weight="800",
             color=color,
             font_family=FONT_MONO,
@@ -203,10 +203,69 @@ def _obs_factor_card(f: dict) -> rx.Component:
     )
 
 
-# ── Tab: Comparables ──────────────────────────────────────────────
-def tab_comparables() -> rx.Component:
+# ── Tab: Equity Comps ────────────────────────────────────────────
+def tab_equity_comps() -> rx.Component:
     return rx.box(
-        # Map — rendered via computed var URL
+        # Assessment summary callout
+        rx.cond(
+            AppState.equity_comps.length() > 0,
+            rx.box(
+                # Metrics row
+                rx.hstack(
+                    rx.box(
+                        rx.text("Justified Value", font_size="0.75rem", color=TEXT_MUTED),
+                        rx.text(
+                            "$" + AppState.justified_value.to(int).to(str),
+                            font_size="1.4rem", font_weight="700", color=TEXT_PRIMARY, font_family=FONT_MONO,
+                        ),
+                        flex="1",
+                    ),
+                    rx.box(
+                        rx.text("Equity Savings", font_size="0.75rem", color=TEXT_MUTED),
+                        rx.text(
+                            "$" + AppState.equity_savings.to(int).to(str),
+                            font_size="1.4rem", font_weight="700", color=SUCCESS, font_family=FONT_MONO,
+                        ),
+                        flex="1",
+                    ),
+                    rx.box(
+                        rx.text("Est. Tax Savings", font_size="0.75rem", color=TEXT_MUTED),
+                        rx.text(
+                            "$" + AppState.tax_savings.to(int).to(str),
+                            font_size="1.4rem", font_weight="700", color=ACCENT, font_family=FONT_MONO,
+                        ),
+                        flex="1",
+                    ),
+                    spacing="4",
+                    width="100%",
+                    margin_bottom="12px",
+                ),
+                # Contextual message
+                rx.cond(
+                    AppState.equity_savings > 0,
+                    rx.callout(
+                        "Equity over-assessment detected! Your appraised value exceeds the justified value floor of comparable properties. This supports a protest under Texas Tax Code §41.43(b)(1).",
+                        icon="circle_check",
+                        color_scheme="green",
+                        margin_bottom="16px",
+                    ),
+                    rx.callout(
+                        "No equity over-assessment found. Your appraised value is at or below the justified value of comparable properties. The equity argument does not support a reduction.",
+                        icon="info",
+                        color_scheme="blue",
+                        margin_bottom="16px",
+                    ),
+                ),
+                equity_comp_table(),
+                margin_bottom="20px",
+            ),
+            rx.callout(
+                "No equity comparable data available yet.",
+                icon="info",
+                color_scheme="blue",
+            ),
+        ),
+        # Map below table
         rx.cond(
             AppState.map_url != "",
             rx.box(
@@ -218,7 +277,6 @@ def tab_comparables() -> rx.Component:
                     alt="Property location map",
                     border=f"1px solid {BORDER}",
                 ),
-                # Legend
                 rx.hstack(
                     rx.box(width="12px", height="12px", border_radius="50%", background="#EF4444"),
                     rx.text("Subject Property", font_size="0.8rem", color=TEXT_SECONDARY),
@@ -230,41 +288,97 @@ def tab_comparables() -> rx.Component:
                     align_items="center",
                 ),
                 **glass_card_style,
-                margin_bottom="20px",
             ),
         ),
+        padding_top="8px",
+    )
 
-        # Equity comps
-        rx.cond(
-            AppState.equity_comps.length() > 0,
-            rx.box(
-                equity_comp_table(),
-                margin_bottom="20px",
-            ),
-        ),
 
-        # Sales comps
+# ── Tab: Sales Comps ─────────────────────────────────────────────
+def tab_sales_comps() -> rx.Component:
+    return rx.box(
+        # Assessment summary callout
         rx.cond(
             AppState.sales_comps.length() > 0,
             rx.box(
+                # Metrics row
+                rx.hstack(
+                    rx.box(
+                        rx.text("Median Sale Price", font_size="0.75rem", color=TEXT_MUTED),
+                        rx.text(
+                            "$" + AppState.sales_median_price.to(int).to(str),
+                            font_size="1.4rem", font_weight="700", color=TEXT_PRIMARY, font_family=FONT_MONO,
+                        ),
+                        flex="1",
+                    ),
+                    rx.box(
+                        rx.text("Comps Found", font_size="0.75rem", color=TEXT_MUTED),
+                        rx.text(
+                            AppState.sales_comps.length().to(str),
+                            font_size="1.4rem", font_weight="700", color=TEXT_PRIMARY, font_family=FONT_MONO,
+                        ),
+                        flex="1",
+                    ),
+                    rx.box(
+                        rx.text("Est. Tax Savings", font_size="0.75rem", color=TEXT_MUTED),
+                        rx.text(
+                            "$" + (AppState.sales_savings * (AppState.tax_rate / 100)).to(int).to(str),
+                            font_size="1.4rem", font_weight="700", color=ACCENT, font_family=FONT_MONO,
+                        ),
+                        flex="1",
+                    ),
+                    spacing="4",
+                    width="100%",
+                    margin_bottom="12px",
+                ),
+                # Contextual message
+                rx.cond(
+                    AppState.sales_savings > 0,
+                    rx.callout(
+                        "Market over-appraisal detected! Your appraised value exceeds the median sale price of comparable sales. This supports a protest under Texas Tax Code §41.43(b)(3) and §23.01.",
+                        icon="circle_check",
+                        color_scheme="green",
+                        margin_bottom="16px",
+                    ),
+                    rx.callout(
+                        "No market over-appraisal found. Your appraised value is at or below the median sale price of comparable properties. Sales data does not independently support a reduction.",
+                        icon="info",
+                        color_scheme="blue",
+                        margin_bottom="16px",
+                    ),
+                ),
                 sales_comp_table(),
                 margin_bottom="20px",
             ),
+            rx.callout(
+                "No sales comparable data available yet.",
+                icon="info",
+                color_scheme="blue",
+            ),
         ),
-
+        # Map below table
         rx.cond(
-            (AppState.equity_comps.length() == 0) & (AppState.sales_comps.length() == 0),
+            AppState.map_url != "",
             rx.box(
+                rx.heading("🗺️ Property & Comp Locations", size="4", color=TEXT_PRIMARY, margin_bottom="8px"),
+                rx.image(
+                    src=AppState.map_url,
+                    width="100%",
+                    border_radius=RADIUS_SM,
+                    alt="Property location map",
+                    border=f"1px solid {BORDER}",
+                ),
                 rx.hstack(
-                    rx.text("ℹ️", font_size="1.2rem"),
-                    rx.text("No comparable data available. The analysis may still be running.", color=TEXT_SECONDARY),
+                    rx.box(width="12px", height="12px", border_radius="50%", background="#EF4444"),
+                    rx.text("Subject Property", font_size="0.8rem", color=TEXT_SECONDARY),
+                    rx.box(width="16px"),
+                    rx.box(width="12px", height="12px", border_radius="50%", background=PRIMARY),
+                    rx.text("Comparable Properties", font_size="0.8rem", color=TEXT_SECONDARY),
+                    margin_top="8px",
                     spacing="2",
                     align_items="center",
                 ),
-                background=INFO_BG,
-                border=f"1px solid rgba(59, 130, 246, 0.15)",
-                border_radius=RADIUS_SM,
-                padding="16px",
+                **glass_card_style,
             ),
         ),
         padding_top="8px",
@@ -274,6 +388,23 @@ def tab_comparables() -> rx.Component:
 # ── Tab: Condition ─────────────────────────────────────────────────
 def tab_condition() -> rx.Component:
     return rx.box(
+        # Status callout at top (like other tabs)
+        rx.cond(
+            AppState.condition_issues.length() > 0,
+            rx.callout(
+                "Condition issues detected. Deductions may apply based on physical deficiencies identified via street view analysis.",
+                icon="triangle_alert",
+                color_scheme="orange",
+                margin_bottom="16px",
+            ),
+            rx.callout(
+                "No condition issues detected. Property appears in good condition.",
+                icon="circle_check",
+                color_scheme="green",
+                margin_bottom="16px",
+            ),
+        ),
+
         # Condition summary
         rx.cond(
             AppState.condition_summary_item.contains("issue"),
@@ -303,7 +434,7 @@ def tab_condition() -> rx.Component:
             ),
         ),
 
-        # Image gallery — use rx.foreach since image_gallery uses Python for-loop
+        # Image gallery
         rx.cond(
             AppState.all_image_paths.length() > 0,
             rx.box(
@@ -320,22 +451,6 @@ def tab_condition() -> rx.Component:
                 ),
             ),
         ),
-
-        rx.cond(
-            AppState.condition_issues.length() == 0,
-            rx.box(
-                rx.hstack(
-                    rx.text("✅", font_size="1.2rem"),
-                    rx.text("No condition issues detected. Property appears in good condition.", color=SUCCESS),
-                    spacing="2",
-                    align_items="center",
-                ),
-                background=SUCCESS_BG,
-                border=f"1px solid rgba(16, 185, 129, 0.2)",
-                border_radius=RADIUS_SM,
-                padding="16px",
-            ),
-        ),
         padding_top="8px",
     )
 
@@ -344,7 +459,7 @@ def _street_view_image(path: rx.Var[str]) -> rx.Component:
     """Render a single street view image for rx.foreach."""
     return rx.box(
         rx.image(
-            src=path,
+            src=rx.get_upload_url(path),
             width="100%",
             border_radius=RADIUS_SM,
             border=f"1px solid {BORDER}",
@@ -461,7 +576,7 @@ def tab_protest() -> rx.Component:
                         "filter": "brightness(1.1)",
                     },
                 ),
-                href=AppState.pdf_path,
+                href=rx.get_upload_url(AppState.pdf_path),
                 is_external=True,
                 width="100%",
                 margin_bottom="16px",
@@ -482,6 +597,33 @@ def tab_protest() -> rx.Component:
                 border_radius=RADIUS_SM,
                 padding="16px",
             ),
+        ),
+
+        # Pitch Deck
+        rx.hstack(
+            rx.button(
+                "📄 Generate Pitch Deck",
+                on_click=AppState.generate_pitch_deck,
+                **secondary_button_style,
+                flex="1",
+            ),
+            rx.cond(
+                AppState.pitch_deck_path != "",
+                rx.link(
+                    rx.button(
+                        "⬇️ Download Pitch Deck",
+                        **secondary_button_style,
+                        width="100%",
+                    ),
+                    href=rx.get_upload_url(AppState.pitch_deck_path),
+                    is_external=True,
+                    flex="1",
+                ),
+            ),
+            spacing="3",
+            width="100%",
+            margin_top="12px",
+            margin_bottom="16px",
         ),
 
         # Narrative
@@ -522,29 +664,38 @@ def tab_debug() -> rx.Component:
         rx.accordion.root(
             rx.accordion.item(
                 header="Raw Property Data",
-                content=rx.code_block(
-                    AppState.property_data.to(str),
-                    language="json",
-                    show_line_numbers=True,
-                    theme="dark",
+                content=rx.box(
+                    rx.text(
+                        AppState.debug_property_json,
+                        font_family=FONT_MONO, font_size="0.75rem", color=TEXT_SECONDARY,
+                        white_space="pre-wrap", word_break="break-word",
+                    ),
+                    background=BG_ELEVATED, padding="12px", border_radius=RADIUS_SM,
+                    max_height="400px", overflow_y="auto",
                 ),
             ),
             rx.accordion.item(
                 header="Raw Equity Data",
-                content=rx.code_block(
-                    AppState.equity_data.to(str),
-                    language="json",
-                    show_line_numbers=True,
-                    theme="dark",
+                content=rx.box(
+                    rx.text(
+                        AppState.debug_equity_json,
+                        font_family=FONT_MONO, font_size="0.75rem", color=TEXT_SECONDARY,
+                        white_space="pre-wrap", word_break="break-word",
+                    ),
+                    background=BG_ELEVATED, padding="12px", border_radius=RADIUS_SM,
+                    max_height="400px", overflow_y="auto",
                 ),
             ),
             rx.accordion.item(
                 header="Vision Detections",
-                content=rx.code_block(
-                    AppState.vision_data.to(str),
-                    language="json",
-                    show_line_numbers=True,
-                    theme="dark",
+                content=rx.box(
+                    rx.text(
+                        AppState.debug_vision_json,
+                        font_family=FONT_MONO, font_size="0.75rem", color=TEXT_SECONDARY,
+                        white_space="pre-wrap", word_break="break-word",
+                    ),
+                    background=BG_ELEVATED, padding="12px", border_radius=RADIUS_SM,
+                    max_height="400px", overflow_y="auto",
                 ),
             ),
             collapsible=True,
@@ -554,28 +705,192 @@ def tab_debug() -> rx.Component:
     )
 
 
-# ── Main dashboard page ───────────────────────────────────────────
-def dashboard() -> rx.Component:
-    """The main dashboard page — dark theme."""
+# ── Monitor Tab ────────────────────────────────────────────────────
+def tab_monitor() -> rx.Component:
+    """Assessment monitor + anomaly scanner tab."""
     return rx.box(
-        # Input section
-        rx.box(
-            rx.hstack(
-                rx.text("⚡", font_size="2rem"),
-                rx.box(
-                    rx.heading("Generate Protest Packet", size="7", color=TEXT_PRIMARY, margin_bottom="2px"),
-                    rx.text(
-                        "Enter an account number to generate a comprehensive AI-powered protest packet.",
-                        color=TEXT_MUTED,
+        rx.hstack(
+            # Anomaly Scanner
+            rx.box(
+                rx.heading("🔍 Anomaly Scanner", size="4", color=TEXT_PRIMARY, margin_bottom="8px"),
+                rx.text("Find over-assessed properties in a neighborhood", font_size="0.85rem", color=TEXT_MUTED, margin_bottom="12px"),
+                rx.input(
+                    placeholder="Neighborhood code (e.g. 2604.71)",
+                    value=AppState.scan_nbhd_code,
+                    on_change=AppState.set_scan_nbhd_code,
+                    **input_style,
+                    margin_bottom="8px",
+                ),
+                rx.select(
+                    DISTRICT_OPTIONS,
+                    value=AppState.scan_district,
+                    on_change=AppState.set_scan_district,
+                    width="100%",
+                    margin_bottom="8px",
+                ),
+                rx.button(
+                    "📊 Run Scan",
+                    on_click=AppState.run_anomaly_scan,
+                    **secondary_button_style,
+                    width="100%",
+                ),
+                # Scan results
+                rx.cond(
+                    AppState.scan_flagged.length() > 0,
+                    rx.box(
+                        # Stats summary
+                        rx.hstack(
+                            rx.text(
+                                "🏘️ " + AppState.scan_stats["property_count"].to(str) + " properties scanned",
+                                font_size="0.85rem", color=TEXT_SECONDARY, font_weight="600",
+                            ),
+                            rx.text(
+                                "🚩 " + AppState.scan_flagged.length().to(str) + " flagged",
+                                font_size="0.85rem", color=DANGER, font_weight="600",
+                            ),
+                            rx.text(
+                                "Median: $" + AppState.scan_stats["median_pps"].to(str) + "/sqft",
+                                font_size="0.85rem", color=ACCENT, font_weight="600",
+                            ),
+                            spacing="4",
+                            flex_wrap="wrap",
+                            margin_top="12px",
+                            margin_bottom="8px",
+                        ),
+                        # Flagged properties table
+                        rx.box(
+                            rx.table.root(
+                                rx.table.header(
+                                    rx.table.row(
+                                        rx.table.column_header_cell("Address", color=TEXT_PRIMARY),
+                                        rx.table.column_header_cell("$/SqFt", color=TEXT_PRIMARY),
+                                        rx.table.column_header_cell("Z-Score", color=TEXT_PRIMARY),
+                                        rx.table.column_header_cell("Over-Assessment", color=TEXT_PRIMARY),
+                                    ),
+                                ),
+                                rx.table.body(
+                                    rx.foreach(AppState.scan_flagged, _scan_row),
+                                ),
+                                width="100%",
+                            ),
+                            max_height="300px",
+                            overflow_y="auto",
+                        ),
                     ),
                 ),
-                spacing="3",
-                align_items="center",
-                margin_bottom="24px",
+                **glass_card_style,
+                flex="1",
             ),
+            # Assessment Monitor
+            rx.box(
+                rx.heading("🔔 Assessment Monitor", size="4", color=TEXT_PRIMARY, margin_bottom="8px"),
+                rx.text("Track annual assessment changes for properties", font_size="0.85rem", color=TEXT_MUTED, margin_bottom="12px"),
+                rx.input(
+                    placeholder="Account (e.g. 0660460360030)",
+                    value=AppState.watch_account,
+                    on_change=AppState.set_watch_account,
+                    **input_style,
+                    margin_bottom="8px",
+                ),
+                rx.button(
+                    "➕ Add to Watch List",
+                    on_click=AppState.add_to_watch_list,
+                    **secondary_button_style,
+                    width="100%",
+                ),
+                rx.cond(
+                    AppState.watch_list.length() > 0,
+                    rx.box(
+                        rx.text(
+                            "Watching " + AppState.watch_list.length().to(str) + " properties",
+                            font_weight="600", font_size="0.85rem", color=ACCENT,
+                            margin_top="12px", margin_bottom="8px",
+                        ),
+                        rx.foreach(AppState.watch_list, _watch_item),
+                        rx.button(
+                            "🔄 Refresh All",
+                            on_click=AppState.refresh_watch_list,
+                            **secondary_button_style,
+                            width="100%",
+                            margin_top="8px",
+                        ),
+                    ),
+                ),
+                **glass_card_style,
+                flex="1",
+            ),
+            spacing="4",
+            width="100%",
+            align_items="flex-start",
+            flex_direction=["column", "column", "row"],
+        ),
+        padding_top="8px",
+    )
 
-            # Account input
+
+def _watch_item(watch: dict) -> rx.Component:
+    return rx.hstack(
+        rx.text(watch["account_number"].to(str), font_weight="600", font_size="0.8rem", color=TEXT_PRIMARY),
+        rx.cond(
+            watch.contains("change_pct"),
+            rx.text(
+                watch["change_pct"].to(str) + "%",
+                font_size="0.8rem",
+                color=rx.cond(watch["alert_triggered"], DANGER, SUCCESS),
+            ),
+        ),
+        width="100%",
+        justify="between",
+        padding_y="3px",
+        border_bottom=f"1px solid {BORDER}",
+    )
+
+
+def _scan_row(item: dict) -> rx.Component:
+    """Render one flagged property row in the anomaly scanner results."""
+    return rx.table.row(
+        rx.table.cell(
+            rx.text(item["address"].to(str), font_size="0.8rem", color=TEXT_PRIMARY, font_weight="600"),
+        ),
+        rx.table.cell(
+            rx.text("$" + item["pps"].to(str), font_size="0.8rem", color=ACCENT, font_family=FONT_MONO),
+        ),
+        rx.table.cell(
+            rx.text(item["z_score"].to(str), font_size="0.8rem", color=DANGER, font_family=FONT_MONO, font_weight="700"),
+        ),
+        rx.table.cell(
+            rx.text("$" + item["estimated_over_assessment"].to(int).to(str), font_size="0.8rem", color=DANGER, font_family=FONT_MONO),
+        ),
+        _hover={"background": "rgba(239, 68, 68, 0.06)"},
+    )
+
+
+# ── Main dashboard page ───────────────────────────────────────────
+def dashboard() -> rx.Component:
+    """The main dashboard page — full-width, no sidebar."""
+    return rx.box(
+        # Header
+        rx.hstack(
+            rx.image(src="/logo.webp", width=["36px", "48px"], border_radius=RADIUS_SM),
+            rx.box(
+                rx.heading("Texas Equity AI", size="6", color=TEXT_PRIMARY, margin_bottom="0px", font_size=["1.2rem", "1.2rem", "1.5rem"]),
+                rx.text("AI-powered property tax protest automation", color=TEXT_MUTED, font_size="0.85rem"),
+            ),
+            spacing="3",
+            align_items="center",
+            margin_bottom="24px",
+        ),
+
+        # Input section
+        rx.box(
+            # District + Account input row
             rx.hstack(
+                rx.select(
+                    DISTRICT_OPTIONS,
+                    value=AppState.district_code,
+                    on_change=AppState.set_district,
+                    width=["100%", "100%", "160px"],
+                ),
                 rx.input(
                     placeholder=AppState.account_placeholder,
                     value=AppState.account_number,
@@ -587,7 +902,12 @@ def dashboard() -> rx.Component:
                 rx.button(
                     rx.cond(
                         AppState.is_generating,
-                        rx.spinner(size="2"),
+                        rx.hstack(
+                            rx.spinner(size="2"),
+                            rx.text("Generating..."),
+                            spacing="2",
+                            align_items="center",
+                        ),
                         rx.hstack(
                             rx.icon("zap", size=16),
                             rx.text("Generate"),
@@ -595,26 +915,114 @@ def dashboard() -> rx.Component:
                             align_items="center",
                         ),
                     ),
-                    on_click=AppState.generate_protest,
+                    on_click=AppState.start_generate,
+                    loading=AppState.is_generating,
                     disabled=AppState.is_generating,
-                    background=GRADIENT_PRIMARY,
+                    background=rx.cond(AppState.is_generating, "rgba(59, 130, 246, 0.5)", GRADIENT_PRIMARY),
                     color="white",
                     border="none",
                     border_radius=RADIUS_SM,
                     font_weight="700",
                     min_height="44px",
-                    cursor="pointer",
+                    cursor=rx.cond(AppState.is_generating, "wait", "pointer"),
                     width="auto",
                     min_width="140px",
                     box_shadow=f"0 4px 14px {PRIMARY_GLOW}",
+                    opacity=rx.cond(AppState.is_generating, "0.7", "1"),
                     _hover={
                         "transform": "translateY(-2px)",
                         "box_shadow": SHADOW_GLOW,
                         "filter": "brightness(1.1)",
                     },
+                    _active={
+                        "transform": "scale(0.95)",
+                        "box_shadow": "none",
+                    },
                 ),
                 width="100%",
                 spacing="3",
+                flex_direction=["column", "column", "row"],
+                align_items=["stretch", "stretch", "center"],
+            ),
+
+            # Advanced Options accordion
+            rx.accordion.root(
+                rx.accordion.item(
+                    header="⚙️ Advanced Options",
+                    content=rx.box(
+                        rx.hstack(
+                            # Manual override fields
+                            rx.box(
+                                rx.text("Address Override", font_size="0.75rem", color="white", margin_bottom="2px"),
+                                rx.input(
+                                    placeholder="Override address",
+                                    value=AppState.manual_address,
+                                    on_change=AppState.set_manual_address,
+                                    **input_style,
+                                ),
+                                flex="1",
+                            ),
+                            rx.box(
+                                rx.text("Appraised Value", font_size="0.75rem", color="white", margin_bottom="2px"),
+                                rx.input(
+                                    placeholder="0",
+                                    value=AppState.manual_value.to(str),
+                                    on_change=AppState.set_manual_value,
+                                    type="number",
+                                    **input_style,
+                                ),
+                                flex="1",
+                            ),
+                            rx.box(
+                                rx.text("Building Area (sqft)", font_size="0.75rem", color="white", margin_bottom="2px"),
+                                rx.input(
+                                    placeholder="0",
+                                    value=AppState.manual_area.to(str),
+                                    on_change=AppState.set_manual_area,
+                                    type="number",
+                                    **input_style,
+                                ),
+                                flex="1",
+                            ),
+                            # Tax rate + force fresh
+                            rx.box(
+                                rx.text("Tax Rate: " + AppState.tax_rate.to(str) + "%", font_size="0.75rem", color="white", margin_bottom="2px"),
+                                rx.slider(
+                                    default_value=[2.5],
+                                    min=1.0,
+                                    max=4.0,
+                                    step=0.1,
+                                    on_value_commit=AppState.set_tax_rate,
+                                    width="100%",
+                                ),
+                                flex="1",
+                            ),
+                            rx.box(
+                                rx.text(" ", font_size="0.75rem", margin_bottom="2px"),
+                                rx.hstack(
+                                    rx.switch(
+                                        checked=AppState.force_fresh,
+                                        on_change=AppState.toggle_force_fresh,
+                                        size="1",
+                                    ),
+                                    rx.text("Force fresh", font_size="0.8rem", color="white"),
+                                    spacing="2",
+                                    align_items="center",
+                                    min_height="36px",
+                                ),
+                                width="auto",
+                            ),
+                            spacing="3",
+                            width="100%",
+                            align_items="flex-end",
+                            flex_wrap="wrap",
+                        ),
+                        padding="8px 0",
+                    ),
+                ),
+                collapsible=True,
+                width="100%",
+                margin_top="8px",
             ),
 
             # Error message
@@ -669,17 +1077,26 @@ def dashboard() -> rx.Component:
             rx.box(
                 hero_banner(),
                 rx.tabs.root(
-                    rx.tabs.list(
-                        rx.tabs.trigger("📊 Overview", value="overview"),
-                        rx.tabs.trigger("⚖️ Comparables", value="comps"),
-                        rx.tabs.trigger("📸 Condition", value="condition"),
-                        rx.tabs.trigger("📦 Protest Packet", value="protest"),
-                        rx.tabs.trigger("🐛 Debug", value="debug"),
+                    rx.box(
+                        rx.tabs.list(
+                            rx.tabs.trigger("📊 Overview", value="overview", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                            rx.tabs.trigger("⚖️ Equity", value="equity", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                            rx.tabs.trigger("💰 Sales", value="sales", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                            rx.tabs.trigger("📸 Condition", value="condition", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                            rx.tabs.trigger("📦 Protest", value="protest", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                            rx.tabs.trigger("📡 Monitor", value="monitor", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                            rx.tabs.trigger("🐛 Debug", value="debug", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                        ),
+                        overflow_x="auto",
+                        white_space="nowrap",
+                        width="100%",
                     ),
                     rx.tabs.content(tab_overview(), value="overview"),
-                    rx.tabs.content(tab_comparables(), value="comps"),
+                    rx.tabs.content(tab_equity_comps(), value="equity"),
+                    rx.tabs.content(tab_sales_comps(), value="sales"),
                     rx.tabs.content(tab_condition(), value="condition"),
                     rx.tabs.content(tab_protest(), value="protest"),
+                    rx.tabs.content(tab_monitor(), value="monitor"),
                     rx.tabs.content(tab_debug(), value="debug"),
                     default_value="overview",
                 ),
