@@ -86,6 +86,7 @@ class AppState(rx.State):
     manual_value: float = 0.0
     manual_area: float = 0.0
     tax_rate: float = 2.5
+    sidebar_collapsed: bool = False
     force_fresh: bool = False
 
     # ── Generation state ────────────────────────────────────────────
@@ -263,6 +264,9 @@ class AppState(rx.State):
 
     def set_district(self, value: str):
         self.district_code = value
+
+    def toggle_sidebar(self):
+        self.sidebar_collapsed = not self.sidebar_collapsed
 
     def set_manual_address(self, value: str):
         self.manual_address = value

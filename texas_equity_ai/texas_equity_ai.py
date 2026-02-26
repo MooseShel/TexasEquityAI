@@ -10,18 +10,22 @@ from texas_equity_ai.pages.report import report_page, ReportState
 
 
 def layout(page_content: rx.Component) -> rx.Component:
-    """Main layout with sidebar + content area."""
+    """Main layout with collapsible sidebar + content area."""
     return rx.box(
         # Google Fonts
         rx.el.link(
             rel="stylesheet",
             href=GOOGLE_FONT_URL,
         ),
-        rx.hstack(
-            sidebar(),
+        sidebar(),
+        rx.box(
             page_content,
-            spacing="0",
-            align_items="stretch",
+            margin_left=rx.cond(AppState.sidebar_collapsed, "64px", "300px"),
+            padding="32px",
+            flex="1",
+            max_width="1200px",
+            width="100%",
+            transition="margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
         ),
         **base_page_style,
     )

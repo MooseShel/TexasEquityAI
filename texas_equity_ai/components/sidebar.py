@@ -1,16 +1,20 @@
-"""Sidebar component — dark themed with gradient accents."""
+"""Sidebar component — collapsible dark themed with gradient accents."""
 import reflex as rx
 from texas_equity_ai.state import AppState, DISTRICT_OPTIONS
 from texas_equity_ai.styles import (
-    sidebar_style, BORDER, BORDER_GLOW, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+    BORDER, BORDER_GLOW, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     primary_button_style, secondary_button_style, input_style,
     RADIUS_SM, BG_ELEVATED, PRIMARY, PRIMARY_GLOW, ACCENT, GRADIENT_PRIMARY,
-    SUCCESS, DANGER,
+    SUCCESS, DANGER, BG_DARK, BG_DARKEST,
 )
+
+# ── Sidebar dimensions ──────────────────────────────────────────
+SIDEBAR_EXPANDED = "300px"
+SIDEBAR_COLLAPSED = "64px"
 
 
 def _section_label(text: str) -> rx.Component:
-    """Compact section label."""
+    """Compact section label — hidden when collapsed."""
     return rx.text(
         text,
         font_size="0.65rem",
@@ -20,6 +24,7 @@ def _section_label(text: str) -> rx.Component:
         color=TEXT_MUTED,
         margin_bottom="6px",
         margin_top="2px",
+        display=rx.cond(AppState.sidebar_collapsed, "none", "block"),
     )
 
 
@@ -34,38 +39,72 @@ def _glow_divider() -> rx.Component:
     )
 
 
-def sidebar() -> rx.Component:
-    """Render the application sidebar with dark theme."""
+def _toggle_button() -> rx.Component:
+    """Hamburger / collapse toggle button at top of sidebar."""
     return rx.box(
-        # ── Brand ──────────────────────────────────────────────────
-        rx.box(
-            rx.image(
-                src="/logo.webp",
-                width="80%",
-                max_width="200px",
-                margin_x="auto",
-                margin_bottom="8px",
-                border_radius=RADIUS_SM,
-                display="block",
-            ),
-            rx.heading(
-                "Texas Equity AI",
-                size="4",
-                color=TEXT_PRIMARY,
-                margin_bottom="2px",
-                text_align="center",
-            ),
-            rx.text(
-                "🤠 Automating property tax protests in Texas.",
-                color=TEXT_SECONDARY,
-                font_size="0.8rem",
-                text_align="center",
-            ),
-            flex_shrink="0",
-            margin_bottom="8px",
+        rx.icon(
+            tag=rx.cond(AppState.sidebar_collapsed, "panel-left-open", "panel-left-close"),
+            size=20,
+            color=TEXT_SECONDARY,
         ),
+        on_click=AppState.toggle_sidebar,
+        cursor="pointer",
+        padding="8px",
+        border_radius=RADIUS_SM,
+        display="flex",
+        align_items="center",
+        justify_content=rx.cond(AppState.sidebar_collapsed, "center", "flex-end"),
+        width="100%",
+        margin_bottom="8px",
+        flex_shrink="0",
+        transition="all 0.3s ease",
+        _hover={
+            "background": "rgba(59, 130, 246, 0.1)",
+        },
+    )
 
-        # ── District Selector ──────────────────────────────────────
+
+def _brand_section() -> rx.Component:
+    """Logo and brand name — adapts to collapsed state."""
+    return rx.box(
+        rx.image(
+            src="/logo.webp",
+            width=rx.cond(AppState.sidebar_collapsed, "40px", "80%"),
+            max_width="200px",
+            margin_x="auto",
+            margin_bottom="8px",
+            border_radius=RADIUS_SM,
+            display="block",
+            transition="width 0.3s ease",
+        ),
+        rx.cond(
+            ~AppState.sidebar_collapsed,
+            rx.fragment(
+                rx.heading(
+                    "Texas Equity AI",
+                    size="4",
+                    color=TEXT_PRIMARY,
+                    margin_bottom="2px",
+                    text_align="center",
+                ),
+                rx.text(
+                    "🤠 Automating property tax protests in Texas.",
+                    color=TEXT_SECONDARY,
+                    font_size="0.8rem",
+                    text_align="center",
+                ),
+            ),
+        ),
+        flex_shrink="0",
+        margin_bottom="8px",
+        text_align="center",
+    )
+
+
+def _district_section() -> rx.Component:
+    """District selector — hidden when collapsed."""
+    return rx.cond(
+        ~AppState.sidebar_collapsed,
         rx.box(
             _section_label("Appraisal District"),
             rx.select(
@@ -77,10 +116,13 @@ def sidebar() -> rx.Component:
             flex_shrink="0",
             margin_bottom="4px",
         ),
+    )
 
-        _glow_divider(),
 
-        # ── Settings ── compact group ──────────────────────────────
+def _settings_section() -> rx.Component:
+    """Settings — hidden when collapsed."""
+    return rx.cond(
+        ~AppState.sidebar_collapsed,
         rx.box(
             _section_label("Settings"),
             rx.hstack(
@@ -120,10 +162,13 @@ def sidebar() -> rx.Component:
             ),
             flex_shrink="0",
         ),
+    )
 
-        _glow_divider(),
 
-        # ── Manual Override (accordion) ────────────────────────────
+def _manual_override_section() -> rx.Component:
+    """Manual data accordion — hidden when collapsed."""
+    return rx.cond(
+        ~AppState.sidebar_collapsed,
         rx.box(
             rx.accordion.root(
                 rx.accordion.item(
@@ -162,10 +207,13 @@ def sidebar() -> rx.Component:
             ),
             flex_shrink="0",
         ),
+    )
 
-        _glow_divider(),
 
-        # ── Tools ──────────────────────────────────────────────────
+def _tools_section() -> rx.Component:
+    """Tools section — hidden when collapsed."""
+    return rx.cond(
+        ~AppState.sidebar_collapsed,
         rx.box(
             _section_label("Tools"),
 
@@ -276,20 +324,51 @@ def sidebar() -> rx.Component:
             ),
             flex_shrink="0",
         ),
+    )
+
+
+def sidebar() -> rx.Component:
+    """Render the collapsible application sidebar with dark theme."""
+    return rx.box(
+        _toggle_button(),
+        _brand_section(),
+        _district_section(),
+        _glow_divider(),
+        _settings_section(),
+        rx.cond(~AppState.sidebar_collapsed, _glow_divider()),
+        _manual_override_section(),
+        rx.cond(~AppState.sidebar_collapsed, _glow_divider()),
+        _tools_section(),
 
         # ── Footer ────────────────────────────────────────────────
         rx.box(flex="1"),  # spacer pushes footer to bottom
-        rx.text(
-            "Texas Equity AI © 2025",
-            font_size="0.65rem",
-            color=TEXT_MUTED,
-            text_align="center",
-            flex_shrink="0",
+        rx.cond(
+            ~AppState.sidebar_collapsed,
+            rx.text(
+                "Texas Equity AI © 2025",
+                font_size="0.65rem",
+                color=TEXT_MUTED,
+                text_align="center",
+                flex_shrink="0",
+            ),
         ),
 
-        **sidebar_style,
+        # ── Sidebar styles ────────────────────────────────────────
+        width=rx.cond(AppState.sidebar_collapsed, SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED),
+        min_width=rx.cond(AppState.sidebar_collapsed, SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED),
+        background=f"linear-gradient(180deg, {BG_DARK} 0%, {BG_DARKEST} 100%)",
+        border_right=f"1px solid {BORDER}",
+        padding=rx.cond(AppState.sidebar_collapsed, "16px 8px", "24px"),
+        overflow_y="auto",
+        overflow_x="hidden",
+        height="100vh",
+        position="fixed",
+        left="0",
+        top="0",
         display="flex",
         flex_direction="column",
+        transition="all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+        z_index="50",
     )
 
 

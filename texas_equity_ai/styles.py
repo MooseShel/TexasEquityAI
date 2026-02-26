@@ -71,8 +71,6 @@ sidebar_style = {
 }
 
 main_content_style = {
-    "margin_left": "320px",
-    "padding": "32px",
     "flex": "1",
     "max_width": "1200px",
     "width": "100%",
