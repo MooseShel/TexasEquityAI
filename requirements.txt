@@ -1,10 +1,13 @@
 # Core Framework
-reflex==0.6.6
+reflex==0.8.27
 
 # AI & Agents
 google-genai
 langchain
 langchain-core
+langchain-community
+langchain-google-genai
+langchain-openai
 langgraph
 openai
 tiktoken
@@ -21,8 +24,11 @@ supabase
 python-dotenv
 pillow
 fpdf2
+pypdf
 typing_extensions
 pydantic
+opencv-python-headless
+httpx
 
 # Required explicitly for Reflex Cloud Playwright deployments
 playwright
