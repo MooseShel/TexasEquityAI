@@ -35,23 +35,35 @@ from backend.agents.crime_agent import CrimeAgent
 from backend.utils.address_utils import normalize_address, is_real_address
 from backend.agents.anomaly_detector import AnomalyDetectorAgent
 import shutil
+import reflex as rx
 
 logger = logging.getLogger(__name__)
 
 
-def _copy_to_assets(src_path: str, assets_dir: str) -> str:
-    """Copy a local file into the Reflex assets dir and return the web path."""
+def _get_upload_dir() -> str:
+    """Get the Reflex upload directory (writable at runtime, served by backend)."""
+    try:
+        upload_dir = str(rx.get_upload_dir())
+    except Exception:
+        upload_dir = os.path.join(project_root, "uploaded_files")
+    os.makedirs(upload_dir, exist_ok=True)
+    return upload_dir
+
+
+def _copy_to_upload(src_path: str) -> str:
+    """Copy a local file into the Reflex upload dir and return the basename."""
     if not src_path or not os.path.isfile(src_path):
         return ""
+    upload_dir = _get_upload_dir()
     basename = os.path.basename(src_path)
-    dest = os.path.join(assets_dir, basename)
+    dest = os.path.join(upload_dir, basename)
     if not os.path.exists(dest):
         try:
             shutil.copy2(src_path, dest)
         except Exception as e:
-            logger.warning(f"Failed to copy {src_path} to assets: {e}")
+            logger.warning(f"Failed to copy {src_path} to upload dir: {e}")
             return ""
-    return f"/{basename}"
+    return basename  # return just the filename, state will use rx.get_upload_url()
 
 # ── Agent singletons ───────────────────────────────────────────────
 _agents = None
@@ -685,10 +697,9 @@ async def run_protest_pipeline(
             )
 
         # ── PDF generation ──────────────────────────────────────────
-        assets_dir = os.path.join(project_root, "assets")
-        os.makedirs(assets_dir, exist_ok=True)
+        upload_dir = _get_upload_dir()
         filename = f"ProtestPacket_{current_account}.pdf"
-        combined_path = os.path.join(assets_dir, filename)
+        combined_path = os.path.join(upload_dir, filename)
         pdf_error = None
         try:
             agents["pdf_service"].generate_evidence_packet(
@@ -702,6 +713,10 @@ async def run_protest_pipeline(
             pdf_error = str(e)
 
         # ── Final yield — deliver results to UI immediately ─────────
+        # Image paths: copy to upload dir, return basenames for rx.get_upload_url()
+        evidence_basename = _copy_to_upload(image_path) if image_path and image_path != "mock_street_view.jpg" else ""
+        image_basenames = [b for b in [_copy_to_upload(v) for v in (comp_images.values() if comp_images else [])] if b]
+
         yield {
             "status": "✅ Generation complete.",
             "data": {
@@ -710,10 +725,10 @@ async def run_protest_pipeline(
                 "vision": vision_detections,
                 "narrative": narrative,
                 "market_value": market_value,
-                "combined_pdf_path": f"/{filename}" if not pdf_error else "",
+                "combined_pdf_path": filename if not pdf_error else "",
                 "pdf_error": pdf_error,
-                "evidence_image_path": _copy_to_assets(image_path, assets_dir) if image_path and image_path != "mock_street_view.jpg" else "",
-                "all_image_paths": [p for p in [_copy_to_assets(v, assets_dir) for v in (comp_images.values() if comp_images else [])] if p]
+                "evidence_image_path": evidence_basename,
+                "all_image_paths": image_basenames
             }
         }
 

@@ -365,10 +365,14 @@ class AppState(rx.State):
                         self.vision_data = data.get("vision", [])
                         self.narrative = data.get("narrative", "")
                         self.market_value = float(data.get("market_value", 0) or 0)
-                        self.pdf_path = data.get("combined_pdf_path", "") or ""
+                        # Runtime files use upload dir — convert basename to URL
+                        pdf_basename = data.get("combined_pdf_path", "") or ""
+                        self.pdf_path = rx.get_upload_url(pdf_basename) if pdf_basename else ""
                         self.pdf_error = data.get("pdf_error", "") or ""
-                        self.evidence_image_path = data.get("evidence_image_path", "")
-                        self.all_image_paths = data.get("all_image_paths", [])
+                        ev_basename = data.get("evidence_image_path", "") or ""
+                        self.evidence_image_path = rx.get_upload_url(ev_basename) if ev_basename else ""
+                        img_basenames = data.get("all_image_paths", [])
+                        self.all_image_paths = [rx.get_upload_url(b) for b in img_basenames if b]
                         self.generation_complete = True
 
         except Exception as e:
@@ -470,8 +474,9 @@ class AppState(rx.State):
         """Generate the investor pitch deck PDF."""
         try:
             import subprocess
-            assets_dir = os.path.join(project_root, "assets")
-            pdf_path = os.path.join(assets_dir, "Texas_Equity_AI_Pitch_Deck.pdf")
+            upload_dir = str(rx.get_upload_dir())
+            os.makedirs(upload_dir, exist_ok=True)
+            pdf_path = os.path.join(upload_dir, "Texas_Equity_AI_Pitch_Deck.pdf")
             
             # Pass custom output path to script via env var
             env = os.environ.copy()
@@ -484,7 +489,7 @@ class AppState(rx.State):
             )
             async with self:
                 if result.returncode == 0 and os.path.exists(pdf_path):
-                    self.pitch_deck_path = "/Texas_Equity_AI_Pitch_Deck.pdf"
+                    self.pitch_deck_path = rx.get_upload_url("Texas_Equity_AI_Pitch_Deck.pdf")
                 else:
                     self.error_message = f"Pitch deck failed: {result.stderr[:200]}"
         except Exception as e:

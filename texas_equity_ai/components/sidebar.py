@@ -13,8 +13,19 @@ SIDEBAR_EXPANDED = "300px"
 SIDEBAR_COLLAPSED = "64px"
 
 
+def _collapsible_box(*children, **props) -> rx.Component:
+    """A box that hides its content via CSS when sidebar is collapsed.
+    Uses display:none instead of rx.cond to avoid DOM create/destroy lag.
+    """
+    return rx.box(
+        *children,
+        display=rx.cond(AppState.sidebar_collapsed, "none", "block"),
+        **props,
+    )
+
+
 def _section_label(text: str) -> rx.Component:
-    """Compact section label — hidden when collapsed."""
+    """Compact section label."""
     return rx.text(
         text,
         font_size="0.65rem",
@@ -24,7 +35,6 @@ def _section_label(text: str) -> rx.Component:
         color=TEXT_MUTED,
         margin_bottom="6px",
         margin_top="2px",
-        display=rx.cond(AppState.sidebar_collapsed, "none", "block"),
     )
 
 
@@ -57,29 +67,30 @@ def _toggle_button() -> rx.Component:
         width="100%",
         margin_bottom="8px",
         flex_shrink="0",
-        transition="all 0.3s ease",
         _hover={
             "background": "rgba(59, 130, 246, 0.1)",
         },
     )
 
 
-def _brand_section() -> rx.Component:
-    """Logo and brand name — adapts to collapsed state."""
+def sidebar() -> rx.Component:
+    """Render the collapsible application sidebar with dark theme."""
     return rx.box(
-        rx.image(
-            src="/logo.webp",
-            width=rx.cond(AppState.sidebar_collapsed, "40px", "80%"),
-            max_width="200px",
-            margin_x="auto",
-            margin_bottom="8px",
-            border_radius=RADIUS_SM,
-            display="block",
-            transition="width 0.3s ease",
-        ),
-        rx.cond(
-            ~AppState.sidebar_collapsed,
-            rx.fragment(
+        _toggle_button(),
+
+        # ── Brand ──────────────────────────────────────────────────
+        rx.box(
+            rx.image(
+                src="/logo.webp",
+                width=rx.cond(AppState.sidebar_collapsed, "40px", "80%"),
+                max_width="200px",
+                margin_x="auto",
+                margin_bottom="8px",
+                border_radius=RADIUS_SM,
+                display="block",
+                transition="width 0.2s ease",
+            ),
+            _collapsible_box(
                 rx.heading(
                     "Texas Equity AI",
                     size="4",
@@ -94,18 +105,13 @@ def _brand_section() -> rx.Component:
                     text_align="center",
                 ),
             ),
+            flex_shrink="0",
+            margin_bottom="8px",
+            text_align="center",
         ),
-        flex_shrink="0",
-        margin_bottom="8px",
-        text_align="center",
-    )
 
-
-def _district_section() -> rx.Component:
-    """District selector — hidden when collapsed."""
-    return rx.cond(
-        ~AppState.sidebar_collapsed,
-        rx.box(
+        # ── District Selector ──────────────────────────────────────
+        _collapsible_box(
             _section_label("Appraisal District"),
             rx.select(
                 DISTRICT_OPTIONS,
@@ -116,14 +122,11 @@ def _district_section() -> rx.Component:
             flex_shrink="0",
             margin_bottom="4px",
         ),
-    )
 
+        _glow_divider(),
 
-def _settings_section() -> rx.Component:
-    """Settings — hidden when collapsed."""
-    return rx.cond(
-        ~AppState.sidebar_collapsed,
-        rx.box(
+        # ── Settings ──────────────────────────────────────────────
+        _collapsible_box(
             _section_label("Settings"),
             rx.hstack(
                 rx.text("Tax Rate", font_size="0.8rem", color=TEXT_SECONDARY),
@@ -162,14 +165,11 @@ def _settings_section() -> rx.Component:
             ),
             flex_shrink="0",
         ),
-    )
 
+        _glow_divider(),
 
-def _manual_override_section() -> rx.Component:
-    """Manual data accordion — hidden when collapsed."""
-    return rx.cond(
-        ~AppState.sidebar_collapsed,
-        rx.box(
+        # ── Manual Override ────────────────────────────────────────
+        _collapsible_box(
             rx.accordion.root(
                 rx.accordion.item(
                     header="📝 Manual Data (Optional)",
@@ -207,14 +207,11 @@ def _manual_override_section() -> rx.Component:
             ),
             flex_shrink="0",
         ),
-    )
 
+        _glow_divider(),
 
-def _tools_section() -> rx.Component:
-    """Tools section — hidden when collapsed."""
-    return rx.cond(
-        ~AppState.sidebar_collapsed,
-        rx.box(
+        # ── Tools ──────────────────────────────────────────────────
+        _collapsible_box(
             _section_label("Tools"),
 
             # Anomaly Scanner
@@ -324,33 +321,17 @@ def _tools_section() -> rx.Component:
             ),
             flex_shrink="0",
         ),
-    )
-
-
-def sidebar() -> rx.Component:
-    """Render the collapsible application sidebar with dark theme."""
-    return rx.box(
-        _toggle_button(),
-        _brand_section(),
-        _district_section(),
-        _glow_divider(),
-        _settings_section(),
-        rx.cond(~AppState.sidebar_collapsed, _glow_divider()),
-        _manual_override_section(),
-        rx.cond(~AppState.sidebar_collapsed, _glow_divider()),
-        _tools_section(),
 
         # ── Footer ────────────────────────────────────────────────
         rx.box(flex="1"),  # spacer pushes footer to bottom
-        rx.cond(
-            ~AppState.sidebar_collapsed,
+        _collapsible_box(
             rx.text(
                 "Texas Equity AI © 2025",
                 font_size="0.65rem",
                 color=TEXT_MUTED,
                 text_align="center",
-                flex_shrink="0",
             ),
+            flex_shrink="0",
         ),
 
         # ── Sidebar styles ────────────────────────────────────────
@@ -367,7 +348,7 @@ def sidebar() -> rx.Component:
         top="0",
         display="flex",
         flex_direction="column",
-        transition="all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+        transition="all 0.2s ease",
         z_index="50",
     )
 
