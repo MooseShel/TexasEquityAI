@@ -14,9 +14,13 @@ tiktoken
 
 # Data & Backend Services
 pandas
+numpy
+scikit-learn
+matplotlib
 requests
 tenacity
 SQLAlchemy
+qrcode
 # Supabase connector
 supabase
 
