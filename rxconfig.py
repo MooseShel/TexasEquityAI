@@ -26,19 +26,7 @@ os.environ.setdefault(
     ]),
 )
 
-def install_playwright_browsers():
-    """Installs Playwright browsers automatically on the server."""
-    print("Installing Playwright browsers...")
-    try:
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-        print("Playwright browsers installed successfully.")
-    except Exception as e:
-        print(f"Failed to install Playwright browsers: {e}")
 
-# Install browsers at startup (on cloud only)
-# Install browsers at startup (on cloud only)
-if os.environ.get("REFLEX_ENV_MODE") or not os.path.exists(os.path.join(project_root, ".env")):
-    install_playwright_browsers()
 
 # Set api_url to localhost for local Windows dev so frontend can load backend images
 # without Chrome rejecting the 0.0.0.0 binding. On Cloud, this is safely ignored.
