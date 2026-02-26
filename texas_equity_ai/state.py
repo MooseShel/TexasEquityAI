@@ -462,7 +462,7 @@ class AppState(rx.State):
         """Generate the investor pitch deck PDF."""
         try:
             import subprocess
-            assets_dir = os.path.join(project_root, "frontend_reflex", "assets")
+            assets_dir = os.path.join(project_root, "assets")
             pdf_path = os.path.join(assets_dir, "Texas_Equity_AI_Pitch_Deck.pdf")
             
             # Pass custom output path to script via env var
