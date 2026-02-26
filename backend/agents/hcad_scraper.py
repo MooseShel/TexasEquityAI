@@ -714,11 +714,35 @@ class HCADScraper(AppraisalDistrictConnector):
         """
         HCAD does NOT support neighborhood code searches via the public portal.
         Codes like '8014.02' are internal HCAD market area codes not exposed in
-        the search UI. Street-level search is the correct discovery path for HCAD.
+        the search UI.
+
+        However, the ETL pipeline (scripts/hcad_bulk_import.py) populates Supabase
+        with neighborhood codes from HCAD's annual data files. We query that first
+        for instant neighborhood discovery.
         """
+        if not neighborhood_code or neighborhood_code == "Unknown":
+            return []
+
+        if self.is_commercial_neighborhood_code(neighborhood_code):
+            logger.info(f"HCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
+            return []
+
+        # Supabase DB-powered neighborhood search (ETL data)
+        try:
+            from backend.db.supabase_client import supabase_service
+            db_neighbors = await supabase_service.get_neighbors_from_db(
+                account_number="", neighborhood_code=neighborhood_code,
+                building_area=1, district="HCAD", tolerance=10.0, limit=50
+            )
+            if db_neighbors:
+                logger.info(f"HCAD: Returning {len(db_neighbors)} neighbors from Supabase for nbhd '{neighborhood_code}'")
+                return db_neighbors
+        except Exception as e:
+            logger.warning(f"HCAD: Supabase neighbor lookup failed: {e}")
+
         logger.info(
-            f"HCAD: Neighborhood code search not supported for '{neighborhood_code}' "
-            f"(HCAD portal does not expose market area codes). "
+            f"HCAD: No DB neighbors found for '{neighborhood_code}'. "
+            f"Portal does not support market area code search. "
             f"Relying on street-level discovery only."
         )
         return []

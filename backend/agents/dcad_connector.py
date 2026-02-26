@@ -21,7 +21,20 @@ class DCADConnector(AppraisalDistrictConnector):
     async def get_property_details(self, account_number: str, address: Optional[str] = None) -> Dict:
         """
         Scrapes property details from DCAD given an account number.
+        Step 0: Check Supabase bulk-data first — instant lookup, no browser needed.
+        Step 1: Fall back to Playwright scraping if not in DB.
         """
+        # 0. Supabase cache-first lookup
+        try:
+            from backend.db.supabase_client import supabase_service
+            cached = await supabase_service.get_property_by_account(account_number)
+            if cached and cached.get('address') and cached.get('district') == 'DCAD':
+                logger.info(f"DCAD: Returning cached record for {account_number} (no scraping needed).")
+                return cached
+        except Exception as e:
+            logger.warning(f"DCAD: Supabase cache lookup failed: {e}")
+
+        # 1. Playwright scraping fallback
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
@@ -166,6 +179,15 @@ class DCADConnector(AppraisalDistrictConnector):
                     details['neighborhood_code'] = (await nbhd_locator.inner_text()).strip()
 
                 details['district'] = "DCAD"
+
+                # Self-healing write-back to Supabase
+                try:
+                    from backend.db.supabase_client import supabase_service
+                    cache_record = {k: v for k, v in details.items() if v is not None}
+                    await supabase_service.upsert_property(cache_record)
+                    logger.info(f"DCAD: Cached scraped data for {account_number} to Supabase.")
+                except Exception as e:
+                    logger.warning(f"DCAD: Failed to cache scraped data: {e}")
                 
                 return details
 
@@ -246,12 +268,26 @@ class DCADConnector(AppraisalDistrictConnector):
     async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
         """
         Searches DCAD for all properties in a neighborhood code.
-        DCAD has a neighborhood search at /SearchNbhd.aspx.
+        Step 0: Try Supabase DB first (instant, no browser needed).
+        Step 1: Fall back to Playwright on /SearchNbhd.aspx.
         """
         if self.is_commercial_neighborhood_code(neighborhood_code):
             logger.info(f"DCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
             return []
         
+        # 0. Supabase DB-first lookup
+        try:
+            from backend.db.supabase_client import supabase_service
+            db_neighbors = await supabase_service.get_neighbors_from_db(
+                account_number="", neighborhood_code=neighborhood_code,
+                building_area=1, district="DCAD", tolerance=10.0, limit=50
+            )
+            if db_neighbors and len(db_neighbors) >= 5:
+                logger.info(f"DCAD: Returning {len(db_neighbors)} neighbors from Supabase for nbhd '{neighborhood_code}'")
+                return db_neighbors
+        except Exception as e:
+            logger.warning(f"DCAD: Supabase neighbor lookup failed: {e}")
+
         logger.info(f"DCAD: Searching for neighborhood code: {neighborhood_code}")
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)

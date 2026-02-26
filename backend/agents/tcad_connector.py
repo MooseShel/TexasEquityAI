@@ -186,8 +186,24 @@ class TCADConnector(AppraisalDistrictConnector):
     async def get_neighbors_by_street(self, street_name: str) -> List[Dict]:
         """
         Fetches neighbors by searching for the street name.
-        Uses smart polling instead of fixed sleeps.
+        Step 0: Try Supabase DB first (instant, no browser needed).
+        Step 1: Fall back to Playwright scraping.
         """
+        # 0. Supabase DB-first lookup
+        try:
+            from backend.db.supabase_client import supabase_service
+            # Use global address search to find properties on this street
+            candidates = await supabase_service.search_address_globally(street_name, limit=50)
+            if candidates and len(candidates) >= 3:
+                # Filter to TCAD district and ensure they have valid data
+                tcad_neighbors = [c for c in candidates if c.get('district') == 'TCAD']
+                if len(tcad_neighbors) >= 3:
+                    logger.info(f"TCAD: Returning {len(tcad_neighbors)} neighbors from Supabase for street '{street_name}'")
+                    return tcad_neighbors
+        except Exception as e:
+            logger.warning(f"TCAD: Supabase street lookup failed: {e}")
+
+        # 1. Playwright scraping fallback
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
@@ -244,11 +260,25 @@ class TCADConnector(AppraisalDistrictConnector):
     async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
         """
         Searches TCAD for all properties in a neighborhood code.
-        ProdigyCad supports neighborhood code filtering in the search.
+        Step 0: Try Supabase DB first (instant, no browser needed).
+        Step 1: Fall back to Playwright on ProdigyCad.
         """
         if self.is_commercial_neighborhood_code(neighborhood_code):
             logger.info(f"TCAD: Skipping neighborhood search for commercial code '{neighborhood_code}'")
             return []
+
+        # 0. Supabase DB-first lookup
+        try:
+            from backend.db.supabase_client import supabase_service
+            db_neighbors = await supabase_service.get_neighbors_from_db(
+                account_number="", neighborhood_code=neighborhood_code,
+                building_area=1, district="TCAD", tolerance=10.0, limit=50
+            )
+            if db_neighbors and len(db_neighbors) >= 5:
+                logger.info(f"TCAD: Returning {len(db_neighbors)} neighbors from Supabase for nbhd '{neighborhood_code}'")
+                return db_neighbors
+        except Exception as e:
+            logger.warning(f"TCAD: Supabase neighbor lookup failed: {e}")
         
         logger.info(f"TCAD: Searching for neighborhood code: {neighborhood_code}")
         async with async_playwright() as p:

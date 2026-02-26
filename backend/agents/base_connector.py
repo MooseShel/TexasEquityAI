@@ -68,6 +68,19 @@ class AppraisalDistrictConnector(ABC):
         """
         return []
 
+    async def search_by_address(self, address: str) -> Optional[Dict]:
+        """
+        Searches for a property by street address and returns basic details.
+        Default returns None — override in connectors that support address search.
+        
+        Args:
+            address: Street address to search for.
+            
+        Returns:
+            Dict with at minimum {account_number, address, district}, or None.
+        """
+        return None
+
     @abstractmethod
     def check_service_status(self) -> bool:
         """

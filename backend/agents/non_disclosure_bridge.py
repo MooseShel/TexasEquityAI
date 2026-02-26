@@ -235,5 +235,26 @@ class NonDisclosureBridge:
         except Exception as e:
             logger.warning(f"resolve_account_id: RealEstateAPI layer failed ({e}) — continuing")
 
+        # ── Layer 4: District Connector search_by_address ─────────────────────
+        # Last resort: use the district connector's API-based address search
+        # (e.g. CCAD Socrata). Only non-scraper connectors have this.
+        try:
+            target_district = district or "HCAD"
+            connector = DistrictConnectorFactory.get_connector(target_district)
+            result = await connector.search_by_address(normalized or raw_address)
+            if result and result.get('account_number'):
+                acc = result['account_number']
+                dist = result.get('district') or target_district
+                logger.info(f"resolve_account_id [Connector]: resolved '{raw_address}' → '{acc}' (district={dist})")
+                return {
+                    "account_number": acc,
+                    "district":       dist,
+                    "source":         "Connector",
+                    "rentcast_data":  None,
+                    "confidence":     0.9,
+                }
+        except Exception as e:
+            logger.warning(f"resolve_account_id: Connector search_by_address failed ({e}) — continuing")
+
         logger.info(f"resolve_account_id: all layers exhausted for '{raw_address}' — caller should scrape with normalized address: '{normalized}'")
         return None

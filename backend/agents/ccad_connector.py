@@ -109,7 +109,7 @@ class CCADConnector(AppraisalDistrictConnector):
         
         params = {
             "$where": f"upper(nbhdcode) = '{nbhd_upper}'",
-            "$limit": 100
+            "$limit": 200
         }
         
         try:
@@ -137,6 +137,16 @@ class CCADConnector(AppraisalDistrictConnector):
         def _safe_int(val, default=0):
             try: return int(float(val)) if val else default
             except (ValueError, TypeError): return default
+        
+        # Build mailing address from components
+        mail_parts = [
+            item.get("owneraddrline1", ""),
+            item.get("owneraddrcity", ""),
+            item.get("owneraddrstate", ""),
+            item.get("owneraddrzip", ""),
+        ]
+        mailing_address = ", ".join([p for p in mail_parts if p]).strip().strip(",")
+
         return {
             "account_number": item.get("geoid", ""),
             "address": item.get("situsconcat", "Unknown"),
@@ -146,8 +156,35 @@ class CCADConnector(AppraisalDistrictConnector):
             "year_built": _safe_int(item.get("imprvyearbuilt")),
             "neighborhood_code": item.get("nbhdcode", "Unknown"),
             "legal_description": item.get("legaldescription", ""),
+            "owner_name": item.get("ownername", ""),
+            "mailing_address": mailing_address if mailing_address else None,
+            "land_area": _safe_float(item.get("landsizesqft")),
+            "land_area_acres": _safe_float(item.get("landsizeacres")),
+            "property_type": item.get("propsubtype", ""),
+            "last_sale_date": (item.get("deedeffdate", "") or "")[:10] or None,
             "district": "CCAD"
         }
 
     def check_service_status(self) -> bool:
         return True
+
+    async def search_by_address(self, address: str):
+        """Resolves a street address to an account number via Socrata API."""
+        if not address:
+            return None
+        addr_upper = address.upper().split(",")[0].strip()
+        params = {
+            "$where": f"upper(situsconcat) like '%{addr_upper}%'",
+            "$limit": 1
+        }
+        try:
+            resp = await self.client.get(f"{self.BASE_URL}/{self.DATASET_ID}.json", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            if data:
+                norm = self._normalize_data(data[0])
+                logger.info(f"CCAD: Address search resolved '{address}' -> {norm.get('account_number')}")
+                return norm
+        except Exception as e:
+            logger.warning(f"CCAD: Address search failed: {e}")
+        return None

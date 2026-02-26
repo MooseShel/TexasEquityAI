@@ -18,7 +18,20 @@ class TADConnector(AppraisalDistrictConnector):
     async def get_property_details(self, account_number: str, address: Optional[str] = None) -> Dict:
         """
         Scrapes property details from TAD.org given an account number.
+        Step 0: Check Supabase bulk-data first — instant lookup, no browser needed.
+        Step 1: Fall back to Playwright scraping if not in DB.
         """
+        # 0. Supabase cache-first lookup
+        try:
+            from backend.db.supabase_client import supabase_service
+            cached = await supabase_service.get_property_by_account(account_number)
+            if cached and cached.get('address') and cached.get('district') == 'TAD':
+                logger.info(f"TAD: Returning cached record for {account_number} (no scraping needed).")
+                return cached
+        except Exception as e:
+            logger.warning(f"TAD: Supabase cache lookup failed: {e}")
+
+        # 1. Playwright scraping fallback
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
@@ -200,6 +213,15 @@ class TADConnector(AppraisalDistrictConnector):
                 # and let the equity agent decide.
                 
                 details['district'] = "TAD"
+
+                # Self-healing write-back to Supabase
+                try:
+                    from backend.db.supabase_client import supabase_service
+                    cache_record = {k: v for k, v in details.items() if v is not None}
+                    await supabase_service.upsert_property(cache_record)
+                    logger.info(f"TAD: Cached scraped data for {account_number} to Supabase.")
+                except Exception as e:
+                    logger.warning(f"TAD: Failed to cache scraped data: {e}")
                 
                 return details
 
@@ -212,6 +234,8 @@ class TADConnector(AppraisalDistrictConnector):
     async def get_neighbors(self, neighborhood_code: str) -> List[Dict]:
         """
         Fetches neighbors by searching for the same Neighborhood Code.
+        Step 0: Try Supabase DB first (instant, no browser needed).
+        Step 1: Fall back to Playwright scraping.
         Skips commercial codes (e.g. 'Food Service General') which have no residential comps.
         """
         if not neighborhood_code or neighborhood_code == "Unknown":
@@ -220,6 +244,19 @@ class TADConnector(AppraisalDistrictConnector):
         if self.is_commercial_neighborhood_code(neighborhood_code):
             logger.info(f"TAD: Skipping neighborhood search for commercial code '{neighborhood_code}' — no residential comps expected.")
             return []
+
+        # 0. Supabase DB-first lookup
+        try:
+            from backend.db.supabase_client import supabase_service
+            db_neighbors = await supabase_service.get_neighbors_from_db(
+                account_number="", neighborhood_code=neighborhood_code,
+                building_area=1, district="TAD", tolerance=10.0, limit=50
+            )
+            if db_neighbors and len(db_neighbors) >= 5:
+                logger.info(f"TAD: Returning {len(db_neighbors)} neighbors from Supabase for nbhd '{neighborhood_code}'")
+                return db_neighbors
+        except Exception as e:
+            logger.warning(f"TAD: Supabase neighbor lookup failed: {e}")
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
