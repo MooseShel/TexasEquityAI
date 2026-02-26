@@ -98,6 +98,7 @@ class AppState(rx.State):
 
     # ── Generation state ────────────────────────────────────────────
     is_generating: bool = False
+    _generation_started_at: float = 0.0
     generation_complete: bool = False
     agent_logs: list[str] = []
     error_message: str = ""
@@ -472,16 +473,24 @@ class AppState(rx.State):
         self.error_message = ""
         self.agent_logs = []
         self.generation_complete = False
+        self._generation_started_at = 0.0
 
     def start_generate(self):
         """Instantly set loading state, then kick off background task."""
+        import time
+        # Auto-recover from stale locks (background task died silently)
         if self.is_generating:
-            return
+            if self._generation_started_at > 0 and (time.time() - self._generation_started_at) > 300:
+                logger.warning("Stale is_generating lock detected (>5 min), auto-resetting")
+                self.is_generating = False
+            else:
+                return
         if not self.account_number:
             self.error_message = "Please enter an account number or address."
             return
         self.clear_results()
         self.is_generating = True
+        self._generation_started_at = time.time()
         return AppState.generate_protest
 
     @rx.event(background=True)
@@ -543,6 +552,12 @@ class AppState(rx.State):
             async with self:
                 self.error_message = f"Generation failed: {str(e)}"
                 self.is_generating = False
+        finally:
+            # Absolute last-resort safety net: guarantee is_generating is always reset
+            async with self:
+                if self.is_generating:
+                    logger.warning("generate_protest finally block: force-resetting is_generating")
+                    self.is_generating = False
 
     @rx.event(background=True)
     async def run_anomaly_scan(self):
