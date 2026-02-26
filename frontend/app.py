@@ -250,14 +250,14 @@ class StreamlitLogCapture(logging.Handler):
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode_address(address: str):
-    """Geocode an address using OpenStreetMap Nominatim (free, no API key needed).
+    """Geocode an address using Nominatim first, then Google Geocoding API as fallback.
     Automatically strips unit/suite numbers and retries if the full address fails.
     """
     import re, time
     if not address or len(address) < 5:
         return None
 
-    def _try_geocode(addr: str):
+    def _try_nominatim(addr: str):
         try:
             resp = requests.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -272,11 +272,29 @@ def geocode_address(address: str):
             pass
         return None
 
+    def _try_google(addr: str):
+        api_key = os.getenv("GOOGLE_STREET_VIEW_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return None
+        try:
+            resp = requests.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={"address": addr, "key": api_key},
+                timeout=5,
+            )
+            data = resp.json()
+            if data.get("status") == "OK" and data.get("results"):
+                loc = data["results"][0]["geometry"]["location"]
+                return {"lat": loc["lat"], "lon": loc["lng"]}
+        except Exception:
+            pass
+        return None
+
     # Throttle to respect Nominatim rate limit (1 req/sec)
     time.sleep(1.0)
 
-    # Try full address first
-    result = _try_geocode(address)
+    # Try Nominatim first (free, no API key)
+    result = _try_nominatim(address)
     if result:
         return result
 
@@ -286,9 +304,14 @@ def geocode_address(address: str):
     # Strip unit/suite suffix (e.g. "# 198", "Suite 4", "Ste B", "Apt 2", "Unit 5") and retry
     cleaned = re.sub(r'\s*(#|Suite|Ste|Apt|Unit)\s*\S+', '', address, flags=re.IGNORECASE).strip().strip(',')
     if cleaned != address:
-        result = _try_geocode(cleaned)
+        result = _try_nominatim(cleaned)
         if result:
             return result
+
+    # Fallback: Google Geocoding API (uses GOOGLE_STREET_VIEW_API_KEY)
+    result = _try_google(address)
+    if result:
+        return result
 
     return None
 

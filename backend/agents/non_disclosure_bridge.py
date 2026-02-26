@@ -242,25 +242,50 @@ class NonDisclosureBridge:
             logger.warning(f"resolve_account_id: RealEstateAPI layer failed ({e}) — continuing")
 
         # ── Layer 4: District Connector search_by_address ─────────────────────
-        # Last resort: use the district connector's API-based address search
-        # (e.g. CCAD Socrata). Only non-scraper connectors have this.
-        try:
-            target_district = district or "HCAD"
-            connector = DistrictConnectorFactory.get_connector(target_district)
-            result = await connector.search_by_address(normalized or raw_address)
-            if result and result.get('account_number'):
-                acc = result['account_number']
-                dist = result.get('district') or target_district
-                logger.info(f"resolve_account_id [Connector]: resolved '{raw_address}' → '{acc}' (district={dist})")
-                return {
-                    "account_number": acc,
-                    "district":       dist,
-                    "source":         "Connector",
-                    "rentcast_data":  None,
-                    "confidence":     0.9,
-                }
-        except Exception as e:
-            logger.warning(f"resolve_account_id: Connector search_by_address failed ({e}) — continuing")
+        # Infer district from city name in address when no explicit district given
+        inferred_district = district
+        if not inferred_district and normalized:
+            addr_lower = normalized.lower()
+            CITY_TO_DISTRICT = {
+                "plano": "CCAD", "mckinney": "CCAD", "frisco": "CCAD", "allen": "CCAD",
+                "dallas": "DCAD", "irving": "DCAD", "garland": "DCAD",
+                "austin": "TCAD", "round rock": "TCAD",
+                "fort worth": "TAD", "arlington": "TAD",
+                "houston": "HCAD", "katy": "HCAD", "sugar land": "HCAD",
+            }
+            for city, dist in CITY_TO_DISTRICT.items():
+                if city in addr_lower:
+                    inferred_district = dist
+                    logger.info(f"resolve_account_id: inferred district '{dist}' from city '{city}' in address")
+                    break
+
+        # Try inferred district first, then sweep API-based connectors
+        districts_to_try = []
+        if inferred_district:
+            districts_to_try.append(inferred_district)
+        for d in ["CCAD", "DCAD", "TAD", "TCAD"]:
+            if d not in districts_to_try:
+                districts_to_try.append(d)
+
+        for try_dist in districts_to_try:
+            try:
+                connector = DistrictConnectorFactory.get_connector(try_dist)
+                result = await connector.search_by_address(normalized or raw_address)
+                if result and result.get('account_number'):
+                    acc = result['account_number']
+                    dist = result.get('district') or try_dist
+                    logger.info(f"resolve_account_id [Connector/{try_dist}]: resolved '{raw_address}' → '{acc}' (district={dist})")
+                    return {
+                        "account_number": acc,
+                        "district":       dist,
+                        "source":         "Connector",
+                        "rentcast_data":  None,
+                        "confidence":     0.9,
+                    }
+                else:
+                    logger.info(f"resolve_account_id [Connector/{try_dist}]: no match for '{raw_address}'")
+            except Exception as e:
+                logger.warning(f"resolve_account_id: {try_dist} search_by_address failed ({e}) — continuing")
 
         logger.info(f"resolve_account_id: all layers exhausted for '{raw_address}' — caller should scrape with normalized address: '{normalized}'")
         return None

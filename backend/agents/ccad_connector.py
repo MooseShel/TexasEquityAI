@@ -22,8 +22,16 @@ class CCADConnector(AppraisalDistrictConnector):
     async def get_property_details(self, account_number: str, address: Optional[str] = None) -> Optional[Dict]:
         logger.info(f"CCAD Lookup: {account_number}")
         
+        # Detect address-as-account: if the "account number" contains spaces and
+        # letters, it's actually an address string — search situsconcat, not geoid
+        is_address_input = (
+            account_number
+            and " " in account_number
+            and any(c.isalpha() for c in account_number)
+        )
+
         where = ""
-        if account_number:
+        if account_number and not is_address_input:
             clean_acc = account_number.upper().strip()
             # R numbers in CCAD are usually R-XXXX-XXX-XXXX-X
             if clean_acc.startswith("R") and "-" not in clean_acc:
@@ -31,8 +39,9 @@ class CCADConnector(AppraisalDistrictConnector):
             else:
                 where = f"geoid = '{clean_acc}'"
         
-        if not where and address:
-             addr_upper = address.upper().split(",")[0].strip()
+        if not where and (address or is_address_input):
+             addr_to_search = address or account_number
+             addr_upper = addr_to_search.upper().split(",")[0].strip()
              where = f"upper(situsconcat) like '%{addr_upper}%'"
 
         if not where:
