@@ -14,7 +14,7 @@ import traceback
 from typing import Optional, AsyncGenerator
 
 # Ensure project root on path
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -34,8 +34,24 @@ from backend.agents.permit_agent import PermitAgent
 from backend.agents.crime_agent import CrimeAgent
 from backend.utils.address_utils import normalize_address, is_real_address
 from backend.agents.anomaly_detector import AnomalyDetectorAgent
+import shutil
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_to_assets(src_path: str, assets_dir: str) -> str:
+    """Copy a local file into the Reflex assets dir and return the web path."""
+    if not src_path or not os.path.isfile(src_path):
+        return ""
+    basename = os.path.basename(src_path)
+    dest = os.path.join(assets_dir, basename)
+    if not os.path.exists(dest):
+        try:
+            shutil.copy2(src_path, dest)
+        except Exception as e:
+            logger.warning(f"Failed to copy {src_path} to assets: {e}")
+            return ""
+    return f"/{basename}"
 
 # ── Agent singletons ───────────────────────────────────────────────
 _agents = None
@@ -669,7 +685,7 @@ async def run_protest_pipeline(
             )
 
         # ── PDF generation ──────────────────────────────────────────
-        assets_dir = os.path.join(project_root, "frontend_reflex", "assets")
+        assets_dir = os.path.join(project_root, "assets")
         os.makedirs(assets_dir, exist_ok=True)
         filename = f"ProtestPacket_{current_account}.pdf"
         combined_path = os.path.join(assets_dir, filename)
@@ -696,8 +712,8 @@ async def run_protest_pipeline(
                 "market_value": market_value,
                 "combined_pdf_path": f"/{filename}" if not pdf_error else "",
                 "pdf_error": pdf_error,
-                "evidence_image_path": f"/images/{os.path.basename(image_path)}" if image_path and image_path != "mock_street_view.jpg" else "",
-                "all_image_paths": list(comp_images.values()) if comp_images else []
+                "evidence_image_path": _copy_to_assets(image_path, assets_dir) if image_path and image_path != "mock_street_view.jpg" else "",
+                "all_image_paths": [p for p in [_copy_to_assets(v, assets_dir) for v in (comp_images.values() if comp_images else [])] if p]
             }
         }
 
