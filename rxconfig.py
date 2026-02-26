@@ -39,8 +39,6 @@ config = rx.Config(
     app_name="texas_equity_ai",
     frontend_port=3000,
     backend_port=8001,
-    # Point the app directory to the inner folder to match previous structure
-    app_module_dir="frontend_reflex/texas_equity_ai",
     on_load=install_playwright_browsers,
 )
 
