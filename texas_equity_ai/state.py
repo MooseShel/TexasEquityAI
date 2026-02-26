@@ -162,6 +162,14 @@ class AppState(rx.State):
         return self.equity_data.get("sales_comps", []) if isinstance(self.equity_data, dict) else []
 
     @rx.var
+    def fmt_win_probability(self) -> str:
+        """AI Win Predictor percentage from ML prediction."""
+        ml = self.equity_data.get("ml_prediction", {}) if isinstance(self.equity_data, dict) else {}
+        if not ml:
+            return "—"
+        return str(ml.get("win_probability_pct", "—"))
+
+    @rx.var
     def condition_issues(self) -> list[dict]:
         """Vision items excluding the CONDITION_SUMMARY meta-entry."""
         if not isinstance(self.vision_data, list):
