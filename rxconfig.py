@@ -35,10 +35,11 @@ def install_playwright_browsers():
     except Exception as e:
         print(f"Failed to install Playwright browsers: {e}")
 
+# Install browsers at startup (on cloud only)
+if os.environ.get("REFLEX_ENV_MODE") or not os.path.exists(os.path.join(project_root, ".env")):
+    install_playwright_browsers()
+
 config = rx.Config(
     app_name="texas_equity_ai",
-    frontend_port=3000,
-    backend_port=8001,
-    on_load=install_playwright_browsers,
 )
 
