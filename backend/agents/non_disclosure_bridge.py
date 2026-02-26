@@ -20,6 +20,10 @@ class RentCastAgent:
         """
         if not self.api_key:
             return None
+        # Guard: reject empty, whitespace-only, or purely numeric addresses
+        if not address or not address.strip() or not any(c.isalpha() for c in address):
+            logger.info(f"RentCast: Skipping fetch — address is empty or numeric-only: '{address}'")
+            return None
         try:
             headers = {"X-Api-Key": self.api_key, "accept": "application/json"}
             resp = requests.get(self.base_url, headers=headers,
@@ -43,6 +47,8 @@ class RentCastAgent:
         Quick RentCast lookup to determine property type.
         Reuses _fetch_property — NO extra API call.
         """
+        if not address or not address.strip() or not any(c.isalpha() for c in address):
+            return None
         logger.info(f"Resolving Address via RentCast: {address}")
         prop = self._fetch_property(address)
         if prop:
