@@ -14,7 +14,7 @@ from texas_equity_ai.styles import (
     SUCCESS, SUCCESS_BG, WARNING, WARNING_BG, DANGER, DANGER_BG,
     INFO_BG, INFO_TEXT, SEVERITY_COLORS, SEVERITY_EMOJI,
     PRIMARY, PRIMARY_GLOW, ACCENT, GRADIENT_PRIMARY, GRADIENT_SUBTLE,
-    FONT_MONO, SHADOW_SM, SHADOW_MD, SHADOW_GLOW,
+    FONT_MONO, FONT_SERIF, SHADOW_SM, SHADOW_MD, SHADOW_GLOW,
     terminal_style,
 )
 from texas_equity_ai.components.metric_card import metric_card
@@ -23,6 +23,7 @@ from texas_equity_ai.components.comp_table import equity_comp_table, sales_comp_
 from texas_equity_ai.components.agent_log import agent_log
 from texas_equity_ai.components.map_view import map_view
 from texas_equity_ai.components.image_gallery import image_gallery
+from texas_equity_ai.components.skeleton_loader import skeleton_loader
 
 
 # ── Hero Banner ────────────────────────────────────────────────────
@@ -113,10 +114,28 @@ def _kpi_card(icon: str, label: str, value: rx.Var, color: str = "white",
 # ── Tab: Overview ──────────────────────────────────────────────────
 def tab_overview() -> rx.Component:
     return rx.box(
+        rx.heading("📊 Property Overview", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Property details card
         rx.cond(
             AppState.property_data.contains("address"),
-            property_card(),
+            rx.grid(
+                rx.cond(
+                    AppState.evidence_image_path != "",
+                    rx.image(
+                        src=rx.get_upload_url(AppState.evidence_image_path),
+                        width="100%",
+                        height="260px",
+                        object_fit="cover",
+                        border_radius=RADIUS_SM,
+                        border=f"1px solid {BORDER}",
+                        box_shadow=SHADOW_SM,
+                    ),
+                ),
+                property_card(),
+                columns=rx.cond(AppState.evidence_image_path != "", rx.breakpoints(initial="1", md="2"), "1"),
+                spacing="6",
+                align_items="stretch",
+            )
         ),
 
         # Metric grid
@@ -206,6 +225,7 @@ def _obs_factor_card(f: dict) -> rx.Component:
 # ── Tab: Equity Comps ────────────────────────────────────────────
 def tab_equity_comps() -> rx.Component:
     return rx.box(
+        rx.heading("⚖️ Equity Comparables", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Assessment summary callout
         rx.cond(
             AppState.equity_comps.length() > 0,
@@ -215,7 +235,7 @@ def tab_equity_comps() -> rx.Component:
                     rx.box(
                         rx.text("Justified Value", font_size="0.75rem", color=TEXT_MUTED),
                         rx.text(
-                            "$" + AppState.justified_value.to(int).to(str),
+                            AppState.fmt_justified,
                             font_size="1.4rem", font_weight="700", color=TEXT_PRIMARY, font_family=FONT_MONO,
                         ),
                         flex="1",
@@ -223,7 +243,7 @@ def tab_equity_comps() -> rx.Component:
                     rx.box(
                         rx.text("Equity Savings", font_size="0.75rem", color=TEXT_MUTED),
                         rx.text(
-                            "$" + AppState.equity_savings.to(int).to(str),
+                            AppState.fmt_equity_savings,
                             font_size="1.4rem", font_weight="700", color=SUCCESS, font_family=FONT_MONO,
                         ),
                         flex="1",
@@ -231,7 +251,7 @@ def tab_equity_comps() -> rx.Component:
                     rx.box(
                         rx.text("Est. Tax Savings", font_size="0.75rem", color=TEXT_MUTED),
                         rx.text(
-                            "$" + AppState.tax_savings.to(int).to(str),
+                            AppState.fmt_tax_savings,
                             font_size="1.4rem", font_weight="700", color=ACCENT, font_family=FONT_MONO,
                         ),
                         flex="1",
@@ -297,6 +317,7 @@ def tab_equity_comps() -> rx.Component:
 # ── Tab: Sales Comps ─────────────────────────────────────────────
 def tab_sales_comps() -> rx.Component:
     return rx.box(
+        rx.heading("💰 Sales Comparables", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Assessment summary callout
         rx.cond(
             AppState.sales_comps.length() > 0,
@@ -306,7 +327,7 @@ def tab_sales_comps() -> rx.Component:
                     rx.box(
                         rx.text("Median Sale Price", font_size="0.75rem", color=TEXT_MUTED),
                         rx.text(
-                            "$" + AppState.sales_median_price.to(int).to(str),
+                            AppState.fmt_sales_median_price,
                             font_size="1.4rem", font_weight="700", color=TEXT_PRIMARY, font_family=FONT_MONO,
                         ),
                         flex="1",
@@ -322,7 +343,7 @@ def tab_sales_comps() -> rx.Component:
                     rx.box(
                         rx.text("Est. Tax Savings", font_size="0.75rem", color=TEXT_MUTED),
                         rx.text(
-                            "$" + (AppState.sales_savings * (AppState.tax_rate / 100)).to(int).to(str),
+                            AppState.fmt_tax_savings,
                             font_size="1.4rem", font_weight="700", color=ACCENT, font_family=FONT_MONO,
                         ),
                         flex="1",
@@ -388,6 +409,7 @@ def tab_sales_comps() -> rx.Component:
 # ── Tab: Condition ─────────────────────────────────────────────────
 def tab_condition() -> rx.Component:
     return rx.box(
+        rx.heading("📸 Condition Assessment", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Status callout at top (like other tabs)
         rx.cond(
             AppState.condition_issues.length() > 0,
@@ -487,7 +509,7 @@ def _condition_issue_card(issue: dict) -> rx.Component:
             justify="between",
             margin_bottom="8px",
         ),
-        rx.text(issue["description"].to(str), color=TEXT_SECONDARY, font_size="0.9rem", margin_bottom="8px"),
+        rx.text(issue["description"].to(str), color=TEXT_SECONDARY, font_size="0.85rem", margin_top="4px"),
         rx.hstack(
             rx.text("Deduction:", font_weight="500", color=TEXT_MUTED),
             rx.text(
@@ -506,6 +528,7 @@ def _condition_issue_card(issue: dict) -> rx.Component:
 # ── Tab: Protest Packet ────────────────────────────────────────────
 def tab_protest() -> rx.Component:
     return rx.box(
+        rx.heading("📦 Protest Packet", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Value explanation
         rx.box(
             rx.hstack(
@@ -648,19 +671,6 @@ def tab_protest() -> rx.Component:
 # ── Tab: Debug ─────────────────────────────────────────────────────
 def tab_debug() -> rx.Component:
     return rx.box(
-        rx.box(
-            rx.hstack(
-                rx.text("🐛", font_size="1.1rem"),
-                rx.text("Raw generation data for debugging.", color=TEXT_SECONDARY, font_size="0.9rem"),
-                spacing="2",
-                align_items="center",
-            ),
-            background=INFO_BG,
-            border=f"1px solid rgba(59, 130, 246, 0.15)",
-            border_radius=RADIUS_SM,
-            padding="12px",
-            margin_bottom="16px",
-        ),
         rx.accordion.root(
             rx.accordion.item(
                 header="Raw Property Data",
@@ -702,6 +712,7 @@ def tab_debug() -> rx.Component:
             width="100%",
         ),
         padding_top="8px",
+        width="100%",
     )
 
 
@@ -825,6 +836,7 @@ def tab_monitor() -> rx.Component:
             flex_direction=["column", "column", "row"],
         ),
         padding_top="8px",
+        width="100%",
     )
 
 
@@ -1071,34 +1083,48 @@ def dashboard() -> rx.Component:
             margin_bottom="24px",
         ),
 
+        # Loading Skeleton
+        rx.cond(
+            AppState.is_generating,
+            skeleton_loader(),
+        ),
+
         # Results
         rx.cond(
             AppState.generation_complete,
             rx.box(
                 hero_banner(),
-                rx.tabs.root(
-                    rx.box(
-                        rx.tabs.list(
-                            rx.tabs.trigger("📊 Overview", value="overview", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
-                            rx.tabs.trigger("⚖️ Equity", value="equity", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
-                            rx.tabs.trigger("💰 Sales", value="sales", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
-                            rx.tabs.trigger("📸 Condition", value="condition", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
-                            rx.tabs.trigger("📦 Protest", value="protest", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
-                            rx.tabs.trigger("📡 Monitor", value="monitor", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
-                            rx.tabs.trigger("🐛 Debug", value="debug", color=TEXT_PRIMARY, font_size=["0.7rem", "0.8rem", "0.875rem"]),
+                rx.vstack(
+                    tab_overview(),
+                    rx.divider(margin_y="0", border_color=BORDER),
+                    tab_equity_comps(),
+                    rx.divider(margin_y="0", border_color=BORDER),
+                    tab_sales_comps(),
+                    rx.divider(margin_y="0", border_color=BORDER),
+                    tab_condition(),
+                    rx.divider(margin_y="0", border_color=BORDER),
+                    tab_protest(),
+                    rx.divider(margin_y="0", border_color=BORDER),
+                    rx.accordion.root(
+                        rx.accordion.item(
+                            header=rx.hstack(
+                                rx.icon("wrench", size=18, color=TEXT_SECONDARY),
+                                rx.text("Administrative & Debug Tools", font_weight="600"),
+                                spacing="2",
+                                align_items="center",
+                            ),
+                            content=rx.vstack(
+                                tab_monitor(),
+                                tab_debug(),
+                                spacing="4",
+                            ),
                         ),
-                        overflow_x="auto",
-                        white_space="nowrap",
+                        collapsible=True,
                         width="100%",
+                        margin_top="0",
                     ),
-                    rx.tabs.content(tab_overview(), value="overview"),
-                    rx.tabs.content(tab_equity_comps(), value="equity"),
-                    rx.tabs.content(tab_sales_comps(), value="sales"),
-                    rx.tabs.content(tab_condition(), value="condition"),
-                    rx.tabs.content(tab_protest(), value="protest"),
-                    rx.tabs.content(tab_monitor(), value="monitor"),
-                    rx.tabs.content(tab_debug(), value="debug"),
-                    default_value="overview",
+                    width="100%",
+                    spacing="4",
                 ),
             ),
         ),

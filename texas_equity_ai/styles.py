@@ -2,51 +2,52 @@
 Design system for Texas Equity AI — Premium dark theme with glassmorphism.
 """
 
-# ── Colour palette — Dark Navy Theme ────────────────────────────────
-BG_DARKEST = "#050A18"
-BG_DARK = "#0B1120"
-BG_SURFACE = "#111827"
-BG_ELEVATED = "#1A2332"
-BG_CARD = "rgba(17, 24, 39, 0.6)"  # glass card base
+# ── Colour palette — Light Theme ────────────────────────────────
+BG_DARKEST = "#F8FAFC"
+BG_DARK = "#F1F5F9"
+BG_SURFACE = "#FFFFFF"
+BG_ELEVATED = "#FFFFFF"
+BG_CARD = "rgba(255, 255, 255, 0.8)"  # glass card base
 
-PRIMARY = "#3B82F6"
-PRIMARY_HOVER = "#2563EB"
-PRIMARY_GLOW = "rgba(59, 130, 246, 0.25)"
-ACCENT = "#38BDF8"
-ACCENT_GLOW = "rgba(56, 189, 248, 0.2)"
-GRADIENT_PRIMARY = "linear-gradient(135deg, #3B82F6 0%, #38BDF8 100%)"
-GRADIENT_SUBTLE = "linear-gradient(135deg, rgba(59,130,246,0.15) 0%, rgba(56,189,248,0.08) 100%)"
+PRIMARY = "#2563EB"
+PRIMARY_HOVER = "#1D4ED8"
+PRIMARY_GLOW = "rgba(37, 99, 235, 0.15)"
+ACCENT = "#0EA5E9"
+ACCENT_GLOW = "rgba(14, 165, 233, 0.15)"
+GRADIENT_PRIMARY = "linear-gradient(135deg, #2563EB 0%, #0EA5E9 100%)"
+GRADIENT_SUBTLE = "linear-gradient(135deg, rgba(37,99,235,0.08) 0%, rgba(14,165,233,0.05) 100%)"
 
-TEXT_PRIMARY = "#F1F5F9"
-TEXT_SECONDARY = "#94A3B8"
+TEXT_PRIMARY = "#0F172A"
+TEXT_SECONDARY = "#475569"
 TEXT_MUTED = "#64748B"
-TEXT_MAIN = TEXT_PRIMARY  # alias for backward compat
+TEXT_MAIN = TEXT_PRIMARY  
 
-BORDER = "rgba(148, 163, 184, 0.12)"
-BORDER_GLOW = "rgba(59, 130, 246, 0.3)"
-SURFACE = BG_SURFACE  # backward compat alias
+BORDER = "rgba(15, 23, 42, 0.1)"
+BORDER_GLOW = "rgba(37, 99, 235, 0.2)"
+SURFACE = BG_SURFACE  
 
-SUCCESS = "#10B981"
-SUCCESS_BG = "rgba(16, 185, 129, 0.1)"
-WARNING = "#F59E0B"
-WARNING_BG = "rgba(245, 158, 11, 0.1)"
-DANGER = "#EF4444"
-DANGER_BG = "rgba(239, 68, 68, 0.1)"
-INFO_BG = "rgba(59, 130, 246, 0.08)"
-INFO_TEXT = "#93C5FD"
-BACKGROUND = BG_DARK
+SUCCESS = "#059669"
+SUCCESS_BG = "rgba(5, 150, 105, 0.1)"
+WARNING = "#D97706"
+WARNING_BG = "rgba(217, 119, 6, 0.1)"
+DANGER = "#DC2626"
+DANGER_BG = "rgba(220, 38, 38, 0.1)"
+INFO_BG = "rgba(37, 99, 235, 0.08)"
+INFO_TEXT = "#2563EB"
+BACKGROUND = BG_DARKEST
 
 RADIUS = "16px"
 RADIUS_SM = "10px"
 RADIUS_LG = "20px"
-SHADOW_SM = "0 2px 8px rgba(0,0,0,0.3)"
-SHADOW_MD = "0 8px 24px rgba(0,0,0,0.4)"
-SHADOW_GLOW = f"0 0 20px {PRIMARY_GLOW}, 0 8px 24px rgba(0,0,0,0.3)"
+SHADOW_SM = "0 2px 4px rgba(15, 23, 42, 0.05)"
+SHADOW_MD = "0 4px 12px rgba(15, 23, 42, 0.08)"
+SHADOW_GLOW = f"0 0 15px {PRIMARY_GLOW}, 0 4px 12px rgba(15, 23, 42, 0.05)"
 
 # ── Font stack ──────────────────────────────────────────────────────
 FONT_FAMILY = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+FONT_SERIF = "'Playfair Display', Georgia, serif"
 FONT_MONO = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace"
-GOOGLE_FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+GOOGLE_FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Playfair+Display:wght@600;700&display=swap"
 
 # ── Reusable style dictionaries ─────────────────────────────────────
 
@@ -94,7 +95,7 @@ card_style = {
 }
 
 glass_card_style = {
-    "background": "rgba(15, 23, 42, 0.5)",
+    "background": "rgba(255, 255, 255, 0.6)",
     "backdrop_filter": "blur(16px)",
     "border": f"1px solid {BORDER}",
     "border_radius": RADIUS,

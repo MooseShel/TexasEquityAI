@@ -42,7 +42,7 @@ def report_view() -> rx.Component:
 # ── Create app ─────────────────────────────────────────────────────
 app = rx.App(
     theme=rx.theme(
-        appearance="dark",
+        appearance="light",
         has_background=True,
         radius="medium",
         accent_color="blue",
@@ -50,7 +50,7 @@ app = rx.App(
     style={
         "font_family": FONT_FAMILY,
         "input::placeholder": {
-            "color": "rgba(255, 255, 255, 0.5) !important",
+            "color": "rgba(15, 23, 42, 0.4) !important",
         },
     },
     head_components=[

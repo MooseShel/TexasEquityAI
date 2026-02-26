@@ -377,6 +377,14 @@ class AppState(rx.State):
         return f"-${self.total_savings:,.0f}" if self.total_savings > 0 else ""
 
     @rx.var
+    def fmt_equity_savings(self) -> str:
+        return f"${self.equity_savings:,.0f}" if self.equity_savings > 0 else "$0"
+
+    @rx.var
+    def fmt_sales_median_price(self) -> str:
+        return f"${self.sales_median_price:,.0f}" if self.sales_median_price > 0 else "$0"
+
+    @rx.var
     def fmt_tax_savings(self) -> str:
         s = self.total_savings * (self.tax_rate / 100)
         return f"${s:,.0f}" if s > 0 else "$0"

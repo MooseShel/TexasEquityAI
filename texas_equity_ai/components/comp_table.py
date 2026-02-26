@@ -4,6 +4,7 @@ from texas_equity_ai.state import AppState
 from texas_equity_ai.styles import (
     glass_card_style, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER, BG_ELEVATED, ACCENT, FONT_MONO, SUCCESS, DANGER,
+    SHADOW_SM,
 )
 
 
@@ -48,7 +49,13 @@ def _equity_row(comp: dict) -> rx.Component:
         _cell(comp["similarity_score"].to(str)),
         _cell(comp["neighborhood_code"].to(str)),
         _cell(comp["comp_source"].to(str)),
-        _hover={"background": "rgba(59, 130, 246, 0.06)"},
+        _hover={
+            "background": "rgba(37, 99, 235, 0.05)",
+            "box_shadow": SHADOW_SM,
+            "transform": "translateY(-1px)",
+            "transition": "all 0.2s ease",
+            "cursor": "pointer"
+        },
     )
 
 
@@ -98,7 +105,13 @@ def _sales_row(comp: dict) -> rx.Component:
         _cell(comp["Price/SqFt"].to(str), mono=True),
         _cell(comp["Year Built"].to(str)),
         _cell(comp["Distance"].to(str)),
-        _hover={"background": "rgba(59, 130, 246, 0.06)"},
+        _hover={
+            "background": "rgba(37, 99, 235, 0.05)",
+            "box_shadow": SHADOW_SM,
+            "transform": "translateY(-1px)",
+            "transition": "all 0.2s ease",
+            "cursor": "pointer"
+        },
     )
 
 
