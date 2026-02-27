@@ -1,15 +1,32 @@
 :{$PORT}
 
-# Serve static frontend files first
+# API and WebSocket routes -> Reflex backend
+handle /ping {
+	reverse_proxy localhost:8001
+}
+handle /_event {
+	reverse_proxy localhost:8001
+}
+handle /_event/* {
+	reverse_proxy localhost:8001
+}
+handle /_upload {
+	reverse_proxy localhost:8001
+}
+handle /_upload/* {
+	reverse_proxy localhost:8001
+}
+handle /api/* {
+	reverse_proxy localhost:8001
+}
+# Legacy/alternative reflex endpoints
+handle /_reflex/* {
+	reverse_proxy localhost:8001
+}
+
+# Everything else -> static frontend
 handle {
 	root * /app/.web/build/client
-	@static file
-	handle @static {
-		file_server
-	}
-
-	# If not a static file, proxy to Reflex backend (API, WebSocket, etc.)
-	handle {
-		reverse_proxy localhost:8001
-	}
+	try_files {path} {path}.html /index.html
+	file_server
 }
