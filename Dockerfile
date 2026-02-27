@@ -23,5 +23,5 @@ RUN reflex export --no-zip
 
 ENV PORT=8000
 
-# backend-only mode serves BOTH the compiled static frontend and the API on one port
-CMD reflex run --env prod --backend-only --loglevel debug --backend-host 0.0.0.0 --backend-port $PORT
+# Reflex prod mode serves both compiled frontend + API on the backend port
+CMD reflex run --env prod --loglevel debug --backend-host 0.0.0.0 --backend-port $PORT
