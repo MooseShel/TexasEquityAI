@@ -24,47 +24,11 @@ COPY . .
 RUN reflex init
 RUN reflex export --no-zip
 
-# Create Caddyfile that serves frontend static files + proxies backend
-RUN echo ':${PORT}\n\
-    \n\
-    # API and WebSocket routes -> Reflex backend\n\
-    handle /ping {\n\
-    reverse_proxy localhost:8001\n\
-    }\n\
-    handle /_event {\n\
-    reverse_proxy localhost:8001\n\
-    }\n\
-    handle /_upload {\n\
-    reverse_proxy localhost:8001\n\
-    }\n\
-    handle /_upload/* {\n\
-    reverse_proxy localhost:8001\n\
-    }\n\
-    handle /api/* {\n\
-    reverse_proxy localhost:8001\n\
-    }\n\
-    \n\
-    # Everything else -> static frontend\n\
-    handle {\n\
-    root * /app/.web/_static\n\
-    try_files {path} {path}.html /index.html\n\
-    file_server\n\
-    }\n\
-    ' > /app/Caddyfile
+# Copy Caddyfile (already in project root)
+# Uses {$PORT} syntax for Caddy env var expansion
 
 # Create startup script
-RUN echo '#!/bin/bash\n\
-    set -e\n\
-    \n\
-    echo "Starting Reflex backend on port 8001..."\n\
-    reflex run --env prod --backend-only --loglevel info --backend-host 0.0.0.0 --backend-port 8001 &\n\
-    \n\
-    echo "Waiting for backend..."\n\
-    sleep 3\n\
-    \n\
-    echo "Starting Caddy reverse proxy on port $PORT..."\n\
-    caddy run --config /app/Caddyfile --adapter caddyfile\n\
-    ' > /app/start.sh && chmod +x /app/start.sh
+RUN printf '#!/bin/bash\nset -e\necho "Starting Reflex backend on port 8001..."\nreflex run --env prod --backend-only --loglevel info --backend-host 0.0.0.0 --backend-port 8001 &\necho "Waiting for backend..."\nsleep 3\necho "Starting Caddy on port $PORT..."\ncaddy run --config /app/Caddyfile --adapter caddyfile\n' > /app/start.sh && chmod +x /app/start.sh
 
 ENV PORT=8080
 
