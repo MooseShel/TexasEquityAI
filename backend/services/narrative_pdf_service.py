@@ -999,8 +999,8 @@ class PDFService:
         if HAS_QRCODE:
             try:
                 acct = property_data.get('account_number', '').replace('-', '')
-                # Use query param for Streamlit routing
-                qr_url = f"https://texasequityai.streamlit.app/?account={acct}"
+                # Use query param for the new Railway routing
+                qr_url = f"https://texasequityai.up.railway.app/?account={acct}"
                 qr = qrcode.QRCode(version=1, box_size=6, border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
                 qr.add_data(qr_url)
                 qr.make(fit=True)
@@ -1008,14 +1008,18 @@ class PDFService:
                 qr_path = f"data/qr_{acct}.png"
                 os.makedirs("data", exist_ok=True)
                 qr_img.save(qr_path)
-                pdf.image(qr_path, x=82, y=195, w=45)
-                pdf.set_y(243)
+                
+                # Draw QR code higher up
+                pdf.image(qr_path, x=82, y=185, w=45)
+                # Draw the scan prompt just below the QR code
+                pdf.set_y(232)
                 pdf.set_font("Roboto", '', 8)
                 pdf.cell(0, 5, "Scan for interactive digital evidence", ln=True, align='C')
             except Exception as qr_err:
                 logger.warning(f"QR code generation failed: {qr_err}")
 
-        pdf.set_y(235)
+        # Push the Evidence Summary down below the QR block
+        pdf.set_y(245)
         pdf.set_font("Roboto", 'B', 10)
         pdf.cell(0, 8, "CONFIDENTIAL EVIDENCE SUMMARY", ln=True, align='C')
         pdf.ln(2)
