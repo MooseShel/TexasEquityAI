@@ -22,14 +22,21 @@ if sys.platform == 'win32':
 logger = logging.getLogger(__name__)
 
 async def _launch_browser(p):
-    """Launch Chromium with Windows-safe flags to avoid [WinError 6] invalid handle."""
+    """Launch Chromium with robust stealth flags to bypass Cloudflare."""
     kwargs = dict(
         headless=True,
         args=[
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--mute-audio",
+            "--disable-extensions",
+            "--disable-infobars",
+            "--window-size=1920,1080",
         ],
+        ignore_default_args=["--enable-automation"]
     )
     if sys.platform == 'win32':
         kwargs['handle_sigint'] = False
@@ -168,12 +175,24 @@ class HCADScraper(AppraisalDistrictConnector):
                 browser = await _launch_browser(p)
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                    viewport={'width': 1280, 'height': 800},
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+                    viewport={'width': 1920, 'height': 1080},
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                    locale="en-US",
+                    timezone_id="America/Chicago",
+                    color_scheme="dark",
                 )
+                
+                # Defeat simple webdriver detection properties
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    window.chrome = { runtime: {} };
+                    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                """)
+                
                 page = await context.new_page()
                 
-                # Apply stealth patches to evade Cloudflare bot detection
+                # Apply playwright-stealth patches to evade Cloudflare
                 if HAS_STEALTH:
                     await stealth_async(page)
                     logger.info("Playwright stealth mode applied.")
