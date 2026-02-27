@@ -84,6 +84,8 @@ def equity_comp_table() -> rx.Component:
             overflow_x="auto",
             width="100%",
         ),
+        width="100%",
+        overflow="hidden",
         **glass_card_style,
     )
 
@@ -140,5 +142,7 @@ def sales_comp_table() -> rx.Component:
             overflow_x="auto",
             width="100%",
         ),
+        width="100%",
+        overflow="hidden",
         **glass_card_style,
     )
