@@ -2712,6 +2712,13 @@ class PDFService:
                 pdf.set_text_color(0, 0, 0)
                 pdf.ln(2)
 
+                if page_idx == 0:
+                    pdf.set_fill_color(241, 245, 249)
+                    pdf.set_font("Roboto", 'B', 9)
+                    pdf.cell(94, 8, f"  Median Equity Value: {self._fmt(equity_floor)}", 0, 0, 'L', fill=True)
+                    pdf.cell(96, 8, f"Median Equity Value / SQFT: {self._pps(equity_floor, subj_area)}  ", 0, 1, 'R', fill=True)
+                    pdf.ln(3)
+
                 n_comps = len(page_comps)
                 factor_w = 36
                 data_w = int((190 - factor_w) / max(1 + n_comps, 1))
@@ -2865,17 +2872,7 @@ class PDFService:
                     pdf.cell(col_w[i], 8, clean_text(str(v)), 1, 0, 'C' if i > 0 else 'L', True)
                 pdf.ln()
 
-            # Median Equity Value summary — render ONCE after all comp pages
-            # Avoid blank page: only add page break if absolutely no space left
-            remaining = pdf.h - pdf.get_y() - 15  # 15mm bottom margin
-            if remaining < 15:
-                pdf.add_page()
-                self._draw_header(pdf, property_data, "EQUITY COMPARISON SUMMARY")
-            pdf.ln(3)
-            median_equity = equity_floor
-            pdf.set_font("Roboto", 'B', 8)
-            pdf.cell(90, 8, f"Median Equity Value: {self._fmt(median_equity)}", 0, 0, 'L')
-            pdf.cell(90, 8, f"Median Equity Value / SQFT: {self._pps(median_equity, subj_area)}", 0, 1, 'R')
+                # Empty block: removed orphaned summary logic
 
         # ── EQUITY MAP PAGE (appendix) ════════════════════════════════════════
         if comps:
