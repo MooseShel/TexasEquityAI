@@ -20,6 +20,9 @@ RUN playwright install chromium && playwright install-deps chromium
 # Copy the application
 COPY . .
 
+# Set the Railway domain so rxconfig.py can bake the correct api_url into the frontend
+ENV RAILWAY_PUBLIC_DOMAIN=texasequityai.up.railway.app
+
 # Initialize Reflex and export static frontend
 RUN reflex init
 RUN reflex export --no-zip
