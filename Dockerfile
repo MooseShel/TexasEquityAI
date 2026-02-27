@@ -21,8 +21,7 @@ COPY . .
 RUN reflex init
 RUN reflex export --no-zip
 
-# Railway sets $PORT dynamically (usually 443 behind their proxy)
 ENV PORT=8000
 
-# Single command: run Reflex in production mode
-CMD reflex run --env prod --backend-host 0.0.0.0 --backend-port $PORT
+# backend-only mode serves BOTH the compiled static frontend and the API on one port
+CMD reflex run --env prod --backend-only --loglevel debug --backend-host 0.0.0.0 --backend-port $PORT
