@@ -968,33 +968,6 @@ class PDFService:
         pdf.rect(0, 0, 210, 297, 'F')
         pdf.set_text_color(255, 255, 255)
 
-        pdf.set_font("Montserrat", 'B', 32)
-        pdf.ln(60)
-        pdf.cell(0, 20, "PROPERTY TAX", ln=True, align='C')
-        pdf.set_font("Montserrat", 'B', 36)
-        pdf.cell(0, 20, "EVIDENCE PACKET", ln=True, align='C')
-
-        pdf.ln(15)
-        pdf.set_font("Roboto", '', 16)
-        pdf.cell(0, 10, clean_text(f"Tax Year {property_data.get('tax_year', '2025')} Protest Submission"), ln=True, align='C')
-
-        pdf.set_draw_color(29, 78, 216)
-        pdf.set_line_width(1.5)
-        pdf.line(40, 130, 170, 130)
-
-        pdf.ln(40)
-        pdf.set_font("Montserrat", 'B', 14)
-        pdf.cell(0, 10, clean_text(f"SUBJECT: {property_data.get('address', 'Unknown')}"), ln=True, align='C')
-        pdf.set_font("Roboto", '', 14)
-        pdf.cell(0, 10, f"Account Number: {property_data.get('account_number', 'N/A')}", ln=True, align='C')
-
-        # Property Type Classification
-        ptype_source = property_data.get('ptype_source', '')
-        ptype_label = property_data.get('property_type', '')
-        if ptype_label and ptype_label != 'Unknown':
-            pdf.set_font("Roboto", '', 10)
-            pdf.cell(0, 8, clean_text(f"Classification: {ptype_label} (Source: {ptype_source})"), ln=True, align='C')
-
         # ── QR Code (Enhancement #10) ────────────────────────────────────────
         if HAS_QRCODE:
             try:
@@ -1009,16 +982,44 @@ class PDFService:
                 os.makedirs("data", exist_ok=True)
                 qr_img.save(qr_path)
                 
-                # Draw QR code higher up
-                pdf.image(qr_path, x=82, y=185, w=45)
+                # Draw QR code at the very top
+                pdf.image(qr_path, x=85, y=30, w=40)
                 # Draw the scan prompt just below the QR code
-                pdf.set_y(232)
+                pdf.set_y(72)
                 pdf.set_font("Roboto", '', 8)
                 pdf.cell(0, 5, "Scan for interactive digital evidence", ln=True, align='C')
             except Exception as qr_err:
                 logger.warning(f"QR code generation failed: {qr_err}")
 
-        # Push the Evidence Summary down below the QR block
+        # Push main text down below QR
+        pdf.set_y(85)
+        pdf.set_font("Montserrat", 'B', 32)
+        pdf.cell(0, 20, "PROPERTY TAX", ln=True, align='C')
+        pdf.set_font("Montserrat", 'B', 36)
+        pdf.cell(0, 20, "EVIDENCE PACKET", ln=True, align='C')
+
+        pdf.ln(10)
+        pdf.set_font("Roboto", '', 16)
+        pdf.cell(0, 10, clean_text(f"Tax Year {property_data.get('tax_year', '2025')} Protest Submission"), ln=True, align='C')
+
+        pdf.set_draw_color(29, 78, 216)
+        pdf.set_line_width(1.5)
+        pdf.line(40, 155, 170, 155)
+
+        pdf.set_y(175)
+        pdf.set_font("Montserrat", 'B', 14)
+        pdf.cell(0, 10, clean_text(f"SUBJECT: {property_data.get('address', 'Unknown')}"), ln=True, align='C')
+        pdf.set_font("Roboto", '', 14)
+        pdf.cell(0, 10, f"Account Number: {property_data.get('account_number', 'N/A')}", ln=True, align='C')
+
+        # Property Type Classification
+        ptype_source = property_data.get('ptype_source', '')
+        ptype_label = property_data.get('property_type', '')
+        if ptype_label and ptype_label != 'Unknown':
+            pdf.set_font("Roboto", '', 10)
+            pdf.cell(0, 8, clean_text(f"Classification: {ptype_label} (Source: {ptype_source})"), ln=True, align='C')
+
+        # Push the Evidence Summary down towards the bottom
         pdf.set_y(245)
         pdf.set_font("Roboto", 'B', 10)
         pdf.cell(0, 8, "CONFIDENTIAL EVIDENCE SUMMARY", ln=True, align='C')

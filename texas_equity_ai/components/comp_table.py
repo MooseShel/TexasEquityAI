@@ -70,7 +70,7 @@ def equity_comp_table() -> rx.Component:
             AppState.equity_comps.length().to(str) + " comparable properties found",
             font_size="0.85rem", color=TEXT_MUTED, margin_bottom="12px",
         ),
-        rx.box(
+        rx.scroll_area(
             rx.table.root(
                 _header(
                     "Address", "Type", "Appraised", "Market",
@@ -81,7 +81,8 @@ def equity_comp_table() -> rx.Component:
                 ),
                 width="100%",
             ),
-            overflow_x="auto",
+            type="always",
+            scrollbars="horizontal",
             width="100%",
         ),
         width="100%",
@@ -128,7 +129,7 @@ def sales_comp_table() -> rx.Component:
             AppState.sales_comps.length().to(str) + " recent sales found",
             font_size="0.85rem", color=TEXT_MUTED, margin_bottom="12px",
         ),
-        rx.box(
+        rx.scroll_area(
             rx.table.root(
                 _header(
                     "Address", "Sale Price", "Sale Date",
@@ -139,7 +140,8 @@ def sales_comp_table() -> rx.Component:
                 ),
                 width="100%",
             ),
-            overflow_x="auto",
+            type="always",
+            scrollbars="horizontal",
             width="100%",
         ),
         width="100%",
