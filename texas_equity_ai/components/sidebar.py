@@ -115,7 +115,7 @@ def sidebar() -> rx.Component:
             _section_label("Appraisal District"),
             rx.select(
                 DISTRICT_OPTIONS,
-                value=AppState.district_code,
+                value=AppState.district_name,
                 on_change=AppState.set_district,
                 width="100%",
             ),
@@ -229,8 +229,8 @@ def sidebar() -> rx.Component:
                         ),
                         rx.select(
                             DISTRICT_OPTIONS,
-                            value=AppState.scan_district,
-                            on_change=AppState.set_scan_district,
+                            value=AppState.district_name,
+                            on_change=AppState.set_district,
                             width="100%",
                             margin_bottom="6px",
                         ),

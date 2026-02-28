@@ -30,12 +30,24 @@ logger = logging.getLogger(__name__)
 
 # ── District detection helper (ported from app.py lines 530-576) ────
 DISTRICT_OPTIONS = [
-    ["Harris County (HCAD)", "HCAD"],
-    ["Tarrant County (TAD)", "TAD"],
-    ["Collin County (CCAD)", "CCAD"],
-    ["Dallas County (DCAD)", "DCAD"],
-    ["Travis County (TCAD)", "TCAD"]
+    "Harris County (HCAD)",
+    "Tarrant County (TAD)",
+    "Collin County (CCAD)",
+    "Dallas County (DCAD)",
+    "Travis County (TCAD)"
 ]
+
+# Map display names back to codes for backend use
+DISTRICT_CODE_MAP = {
+    "Harris County (HCAD)": "HCAD",
+    "Tarrant County (TAD)": "TAD",
+    "Collin County (CCAD)": "CCAD",
+    "Dallas County (DCAD)": "DCAD",
+    "Travis County (TCAD)": "TCAD"
+}
+
+# Map codes to display names for UI state initialization
+CODE_TO_DISTRICT_MAP = {v: k for k, v in DISTRICT_CODE_MAP.items()}
 
 ACCOUNT_PLACEHOLDERS = {
     "HCAD": "Enter Address or Account ID",
@@ -94,6 +106,7 @@ class AppState(rx.State):
 
     # ── Input state ─────────────────────────────────────────────────
     account_number: str = ""
+    district_name: str = "Harris County (HCAD)"
     district_code: str = "HCAD"
     manual_address: str = ""
     manual_value: float = 0.0
@@ -437,9 +450,11 @@ class AppState(rx.State):
         detected = detect_district(value)
         if detected and detected != self.district_code:
             self.district_code = detected
+            self.district_name = CODE_TO_DISTRICT_MAP.get(detected, "Harris County (HCAD)")
 
     def set_district(self, value: str):
-        self.district_code = value
+        self.district_name = value
+        self.district_code = DISTRICT_CODE_MAP.get(value, "HCAD")
 
     def toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed

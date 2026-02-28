@@ -746,8 +746,8 @@ def tab_monitor() -> rx.Component:
                 ),
                 rx.select(
                     DISTRICT_OPTIONS,
-                    value=AppState.scan_district,
-                    on_change=AppState.set_scan_district,
+                    value=AppState.district_name,
+                    on_change=AppState.set_district,
                     width="100%",
                     margin_bottom="8px",
                 ),
@@ -911,7 +911,7 @@ def dashboard() -> rx.Component:
             rx.hstack(
                 rx.select(
                     DISTRICT_OPTIONS,
-                    value=AppState.district_code,
+                    value=AppState.district_name,
                     on_change=AppState.set_district,
                     width=["100%", "100%", "160px"],
                 ),
