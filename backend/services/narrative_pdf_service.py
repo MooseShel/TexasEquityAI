@@ -2919,10 +2919,10 @@ class PDFService:
         ))
         pdf.ln(1)
         pdf.multi_cell(0, 3.5, clean_text(
-            "3. Comparable property values are sourced from public records and third-party APIs. Sales "
-            "comparables presented as 'unadjusted' represent raw transaction data and have not been adjusted "
-            "for individual property differences per USPAP Standards Rule 1-4. Equity comparables are adjusted "
-            "using ML-derived rates from local market data."
+            "3. Comparable property values are sourced from public records and third-party APIs. Both sales "
+            "and equity comparables are professionally adjusted for size, age, grade, depreciation, and land "
+            "differences using ML-derived rates from local market data per USPAP Standards Rule 1-4. "
+            "Sales comps are enriched via database cross-reference where available."
         ))
         pdf.ln(1)
         pdf.multi_cell(0, 3.5, clean_text(
