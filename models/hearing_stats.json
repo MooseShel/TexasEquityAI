@@ -1,0 +1,36 @@
+{
+  "model_version": "xgboost_v1",
+  "training_records": 544583,
+  "overall_win_rate": 71.0,
+  "test_accuracy": 0.821,
+  "test_auc_roc": 0.815,
+  "feature_importance": {
+    "market_appraised_gap": 0.238,
+    "is_agent": 0.0,
+    "value_bucket": 0.16,
+    "numeric_class": 0.353,
+    "is_formal": 0.249,
+    "tax_year": 0.0
+  },
+  "class_win_rates": {
+    "A1": 75.3,
+    "A2": 28.8,
+    "B1": 80.3,
+    "B2": 59.8,
+    "B3": 58.3,
+    "B4": 48.6,
+    "C1": 18.1,
+    "C2": 13.8,
+    "C3": 10.8,
+    "D1": 4.2,
+    "D2": 19.1,
+    "E1": 30.4,
+    "F1": 71.9,
+    "F2": 48.6,
+    "G1": 51.5,
+    "M3": 34.4,
+    "O1": 87.0,
+    "O2": 98.5,
+    "XV": 21.0
+  }
+}

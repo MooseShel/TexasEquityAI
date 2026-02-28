@@ -15,7 +15,11 @@ outputs/
 # Debug Artifacts
 *.html
 *.png
-*.json
+# Ignore root json files but allow models/
+/*.json
+data/*.json
+outputs/*.json
+!models/*.json
 *.log
 # Allow Streamlit Cloud config files explicitly
 !requirements.txt
