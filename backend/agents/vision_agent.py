@@ -100,13 +100,12 @@ class VisionAgent:
             return []
             
         try:
-            # 1. Geocode the property (used for heading calculation only)
+            # 1. Geocode the property to get precise coordinates
             prop_coords = self._geocode_address(address)
             
-            # 2. Get Street View Metadata to find the camera location for heading
+            # 2. Get Street View Metadata to find the camera pano + location
             base_heading = 0
-            # Use address string directly for Street View — avoids snapping to wrong nearby panorama
-            location_param = address  # e.g. "843 LAMONTE LN HOUSTON TX 77018"
+            pano_id = None
             
             if prop_coords:
                 meta_url = "https://maps.googleapis.com/maps/api/streetview/metadata"
@@ -117,15 +116,18 @@ class VisionAgent:
                     meta_data = meta_resp.json()
                     if meta_data.get("status") == "OK":
                         cam_loc = meta_data["location"]
+                        pano_id = meta_data.get("pano_id")
                         # Calculate bearing from camera to property
                         base_heading = self._calculate_bearing(cam_loc['lat'], cam_loc['lng'], prop_coords['lat'], prop_coords['lng'])
-                        logger.info(f"Calculated base heading: {base_heading}")
+                        logger.info(f"Street View: pano_id={pano_id}, cam=({cam_loc['lat']:.6f},{cam_loc['lng']:.6f}), heading={base_heading:.1f}°")
                     else:
                         logger.warning(f"Metadata Status not OK: {meta_data.get('status')}")
             else:
                 logger.warning(f"Could not geocode {address} for heading — using default heading 0.")
 
-            # 3. Fetch images from 3 angles, using address string as location
+            # 3. Fetch images from 3 angles
+            #    Use pano_id to lock to the EXACT same camera position used for heading calc.
+            #    This prevents Google from snapping to a different nearby panorama.
             angles = [
                 ("front", base_heading),
                 ("left", (base_heading - 35) % 360),
@@ -137,7 +139,11 @@ class VisionAgent:
             
             image_paths = []
             for suffix, heading in angles:
-                path = await self._fetch_single_image(location_param, slug, suffix, heading)
+                path = await self._fetch_single_image(
+                    pano_id if pano_id else address,
+                    slug, suffix, heading,
+                    use_pano=bool(pano_id)
+                )
                 if path:
                     image_paths.append(path)
             
@@ -147,16 +153,20 @@ class VisionAgent:
             logger.error(f"Error in multi-angle acquisition: {e}")
             return []
 
-    async def _fetch_single_image(self, location: str, slug: str, suffix: str, heading: Optional[float] = None) -> Optional[str]:
+    async def _fetch_single_image(self, location: str, slug: str, suffix: str, heading: Optional[float] = None, use_pano: bool = False) -> Optional[str]:
         import asyncio
         params = {
             "size": "1024x768", # Higher resolution for better Gemini analysis
-            "location": location,
             "key": self.google_api_key,
             "fov": 80,
             "pitch": 0,
             "source": "outdoor"
         }
+        # Use pano ID to lock to exact camera position, or address/coords as fallback
+        if use_pano:
+            params["pano"] = location
+        else:
+            params["location"] = location
         if heading is not None:
             params["heading"] = heading
             
