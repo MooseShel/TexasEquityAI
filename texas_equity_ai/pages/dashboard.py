@@ -59,7 +59,7 @@ def hero_banner() -> rx.Component:
             _kpi_card("💰", "SALES TARGET", AppState.fmt_market, color="#A78BFA"),
             # AI Win Predictor
             _kpi_card("🤖", "AI WIN PREDICTOR", AppState.fmt_win_probability, color="#34D399"),
-            columns=rx.breakpoints(initial="2", md="5"),
+            columns=rx.breakpoints(initial="1", sm="2", md="5"),
             spacing="3",
             position="relative",
         ),

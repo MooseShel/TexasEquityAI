@@ -29,14 +29,20 @@ load_dotenv(os.path.join(project_root, ".env"), override=False)
 logger = logging.getLogger(__name__)
 
 # ── District detection helper (ported from app.py lines 530-576) ────
-DISTRICT_OPTIONS = ["HCAD", "TAD", "CCAD", "DCAD", "TCAD"]
+DISTRICT_OPTIONS = [
+    ["Harris County (HCAD)", "HCAD"],
+    ["Tarrant County (TAD)", "TAD"],
+    ["Collin County (CCAD)", "CCAD"],
+    ["Dallas County (DCAD)", "DCAD"],
+    ["Travis County (TCAD)", "TCAD"]
+]
 
 ACCOUNT_PLACEHOLDERS = {
-    "HCAD": "e.g. 0660460360030 (13 digits)",
-    "TAD": "e.g. 04657837 (8 digits)",
-    "CCAD": "e.g. R-2815-00C-0100-1 or 2787425",
-    "TCAD": "e.g. 123456 (select TCAD manually)",
-    "DCAD": "e.g. 00000776533000000 (17 digits)",
+    "HCAD": "Enter Address or Account ID",
+    "TAD": "Enter Address or Account ID",
+    "CCAD": "Enter Address or Account ID",
+    "TCAD": "Enter Address or Account ID",
+    "DCAD": "Enter Address or Account ID",
 }
 
 
@@ -166,7 +172,7 @@ class AppState(rx.State):
     # ── Computed properties ─────────────────────────────────────────
     @rx.var
     def account_placeholder(self) -> str:
-        return ACCOUNT_PLACEHOLDERS.get(self.district_code, "Enter account number")
+        return ACCOUNT_PLACEHOLDERS.get(self.district_code, "Enter Address or Account ID")
 
     @rx.var
     def has_results(self) -> bool:

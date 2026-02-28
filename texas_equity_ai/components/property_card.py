@@ -70,5 +70,7 @@ def property_card() -> rx.Component:
             columns=rx.breakpoints(initial="2", sm="3", md="4"),
             spacing="3",
         ),
+        width="100%",
+        overflow="hidden",
         **glass_card_style,
     )

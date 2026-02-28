@@ -59,6 +59,8 @@ base_page_style = {
     "display": "flex",
     "flex_direction": "column",
     "align_items": "center",
+    "width": "100%",
+    "overflow_x": "hidden",
 }
 
 sidebar_style = {
