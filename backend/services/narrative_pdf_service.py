@@ -183,7 +183,7 @@ INSTRUCTIONS:
         # 1. Try Gemini first (fastest with Ultra plan, no rate limits)
         if self.gemini_client:
             import time
-            for gemini_model in ["gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+            for gemini_model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
                 for attempt in range(2):  # 2 attempts per model
                     try:
                         response = self.gemini_client.models.generate_content(

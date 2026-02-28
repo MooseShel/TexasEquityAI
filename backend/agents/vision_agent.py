@@ -337,7 +337,7 @@ class VisionAgent:
                     if imgs:
                         def _run_gemini_full():
                             return self.gemini_client.models.generate_content(
-                                model='gemini-2.0-flash',
+                                model='gemini-2.5-flash',
                                 contents=[prompt] + imgs
                             )
                         response = await asyncio.to_thread(_run_gemini_full)
