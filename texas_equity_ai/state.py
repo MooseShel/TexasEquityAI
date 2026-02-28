@@ -391,8 +391,8 @@ class AppState(rx.State):
         candidates = [self.appraised_value]
         if self.justified_value > 0:
             candidates.append(self.justified_value)
-        if self.market_value > 0:
-            candidates.append(self.market_value)
+        if self.sales_median_price > 0:
+            candidates.append(self.sales_median_price)
         base = min(candidates)
         return max(0, base - self.total_vision_deduction)
 
@@ -414,7 +414,7 @@ class AppState(rx.State):
 
     @rx.var
     def fmt_market(self) -> str:
-        return f"${self.market_value:,.0f}" if self.market_value > 0 else "N/A"
+        return f"${self.sales_median_price:,.0f}" if self.sales_median_price > 0 else "N/A"
 
     @rx.var
     def fmt_savings(self) -> str:
