@@ -447,97 +447,99 @@ async def run_protest_pipeline(
 
             if not real_neighborhood:
                 yield {"error": "Could not find sufficient comparable properties. Try manual address override."}
-                return
-
-            equity_results = await asyncio.to_thread(agents["equity_engine"].find_equity_5, property_details, real_neighborhood)
-
-            # Sales comps
-            try:
-                cached_sales = await supabase_service.get_cached_sales(current_account)
-                if cached_sales:
-                    yield {"status": "💰 Sales Specialist: Using cached sales comparables..."}
-                    equity_results['sales_comps'] = cached_sales
-                    equity_results['sales_count'] = len(cached_sales)
-                else:
-                    yield {"status": "💰 Sales Specialist: Searching for recent comparable sales..."}
-                    sales_results = await asyncio.to_thread(agents["equity_engine"].get_sales_analysis, property_details)
-                    if sales_results:
-                        equity_results['sales_comps'] = sales_results.get('sales_comps', [])
-                        equity_results['sales_count'] = sales_results.get('sales_count', 0)
-                        raw_sales = sales_results.get('sales_comps', [])
-                        serializable = []
-                        for sc in raw_sales:
-                            if hasattr(sc, '__dict__'):
-                                serializable.append({k: v for k, v in sc.__dict__.items() if not k.startswith('_')})
-                            elif isinstance(sc, dict):
-                                serializable.append(sc)
-                        if serializable:
-                            await supabase_service.save_cached_sales(current_account, serializable)
-            except Exception as e:
-                logger.error(f"Sales error: {e}")
-
-            property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
-
-            # Anomaly detection
-            try:
-                nbhd_for_anomaly = property_details.get('neighborhood_code')
-                dist_for_anomaly = property_details.get('district', 'HCAD')
-                if nbhd_for_anomaly:
-                    yield {"status": "📊 Anomaly Detector: Scoring property against neighborhood..."}
-                    anomaly_score = await agents["anomaly_agent"].score_property(current_account, nbhd_for_anomaly, dist_for_anomaly)
-                    if anomaly_score and not anomaly_score.get('error'):
-                        equity_results['anomaly_score'] = anomaly_score
-                        property_details['anomaly_score'] = anomaly_score
-                        z = anomaly_score.get('z_score', 0)
-                        pctile = anomaly_score.get('percentile', 0)
-                        if z > 1.5:
-                            yield {"status": f"🚨 Anomaly Detected: {pctile:.0f}th percentile (Z={z:.1f})"}
-            except Exception:
-                pass
-
-            # Geo-intelligence
-            try:
-                from backend.services.geo_intelligence_service import enrich_comps_with_distance, check_external_obsolescence, geocode
-                equity_comps_geo = equity_results.get('equity_5', [])
-                if equity_comps_geo and prop_address:
-                    yield {"status": "🌐 Geo-Intelligence: Computing distances..."}
-                    subj_coords = await asyncio.to_thread(geocode, prop_address)
-                    await asyncio.to_thread(enrich_comps_with_distance, prop_address, equity_comps_geo, subj_coords)
-                    if subj_coords:
-                        obs_result = await asyncio.to_thread(check_external_obsolescence, subj_coords['lat'], subj_coords['lng'])
-                        if obs_result.get('factors'):
-                            equity_results['external_obsolescence'] = obs_result
-                            property_details['external_obsolescence'] = obs_result
-            except Exception:
-                pass
-
-            # Crime analysis
-            try:
-                crime_address = property_details.get('address', '')
-                detected_d = property_details.get('district', prop_district or 'HCAD')
-                if crime_address and is_real_address(crime_address) and detected_d in ('HCAD',):
-                    yield {"status": "🚨 Intelligence Agent: Checking neighborhood crime..."}
-                    crime_stats = await agents["crime_agent"].get_local_crime_data(crime_address)
-                    if crime_stats and crime_stats.get('count', 0) > 0:
-                        obs = property_details.get('external_obsolescence', {'factors': []})
-                        if 'factors' not in obs:
-                            obs['factors'] = []
-                        severity_impact = 5.0 if crime_stats['count'] > 15 else (2.5 if crime_stats['count'] > 5 else 1.0)
-                        crime_factor = {"description": crime_stats.get('message', ''), "impact_pct": severity_impact}
-                        obs['factors'].append(crime_factor)
-                        property_details['external_obsolescence'] = obs
-                        if 'external_obsolescence' not in equity_results:
-                            equity_results['external_obsolescence'] = {'factors': []}
-                        if 'factors' not in equity_results['external_obsolescence']:
-                            equity_results['external_obsolescence']['factors'] = []
-                        equity_results['external_obsolescence']['factors'].append(crime_factor)
-                        yield {"status": f"🚨 Intelligence Agent: Elevated crime risk (+{severity_impact}% obsolescence)"}
-            except Exception:
-                pass
+                equity_results = {"error": "Insufficient Comps"}
+            else:
+                equity_results = await asyncio.to_thread(agents["equity_engine"].find_equity_5, property_details, real_neighborhood)
 
         except Exception as e:
             logger.error(f"Equity analysis failed: {e}\n{traceback.format_exc()}")
             equity_results = {"error": str(e)}
+
+        # ── Sales comps ─────────────────────────────────────────────
+        if is_cancelled_func and is_cancelled_func(): return
+
+        try:
+            cached_sales = await supabase_service.get_cached_sales(current_account)
+            if cached_sales:
+                yield {"status": "💰 Sales Specialist: Using cached sales comparables..."}
+                equity_results['sales_comps'] = cached_sales
+                equity_results['sales_count'] = len(cached_sales)
+            else:
+                yield {"status": "💰 Sales Specialist: Searching for recent comparable sales..."}
+                sales_results = await asyncio.to_thread(agents["equity_engine"].get_sales_analysis, property_details)
+                if sales_results:
+                    equity_results['sales_comps'] = sales_results.get('sales_comps', [])
+                    equity_results['sales_count'] = sales_results.get('sales_count', 0)
+                    raw_sales = sales_results.get('sales_comps', [])
+                    serializable = []
+                    for sc in raw_sales:
+                        if hasattr(sc, '__dict__'):
+                            serializable.append({k: v for k, v in sc.__dict__.items() if not k.startswith('_')})
+                        elif isinstance(sc, dict):
+                            serializable.append(sc)
+                    if serializable:
+                        await supabase_service.save_cached_sales(current_account, serializable)
+        except Exception as e:
+            logger.error(f"Sales error: {e}")
+
+        property_details['comp_renovations'] = await agents["permit_agent"].summarize_comp_renovations(equity_results.get('equity_5', []))
+
+        # Anomaly detection
+        try:
+            nbhd_for_anomaly = property_details.get('neighborhood_code')
+            dist_for_anomaly = property_details.get('district', 'HCAD')
+            if nbhd_for_anomaly:
+                yield {"status": "📊 Anomaly Detector: Scoring property against neighborhood..."}
+                anomaly_score = await agents["anomaly_agent"].score_property(current_account, nbhd_for_anomaly, dist_for_anomaly)
+                if anomaly_score and not anomaly_score.get('error'):
+                    equity_results['anomaly_score'] = anomaly_score
+                    property_details['anomaly_score'] = anomaly_score
+                    z = anomaly_score.get('z_score', 0)
+                    pctile = anomaly_score.get('percentile', 0)
+                    if z > 1.5:
+                        yield {"status": f"🚨 Anomaly Detected: {pctile:.0f}th percentile (Z={z:.1f})"}
+        except Exception:
+            pass
+
+        # Geo-intelligence
+        try:
+            from backend.services.geo_intelligence_service import enrich_comps_with_distance, check_external_obsolescence, geocode
+            equity_comps_geo = equity_results.get('equity_5', [])
+            if equity_comps_geo and prop_address:
+                yield {"status": "🌐 Geo-Intelligence: Computing distances..."}
+                subj_coords = await asyncio.to_thread(geocode, prop_address)
+                await asyncio.to_thread(enrich_comps_with_distance, prop_address, equity_comps_geo, subj_coords)
+                if subj_coords:
+                    obs_result = await asyncio.to_thread(check_external_obsolescence, subj_coords['lat'], subj_coords['lng'])
+                    if obs_result.get('factors'):
+                        equity_results['external_obsolescence'] = obs_result
+                        property_details['external_obsolescence'] = obs_result
+        except Exception:
+            pass
+
+        # Crime analysis
+        try:
+            crime_address = property_details.get('address', '')
+            detected_d = property_details.get('district', prop_district or 'HCAD')
+            if crime_address and is_real_address(crime_address) and detected_d in ('HCAD',):
+                yield {"status": "🚨 Intelligence Agent: Checking neighborhood crime..."}
+                crime_stats = await agents["crime_agent"].get_local_crime_data(crime_address)
+                if crime_stats and crime_stats.get('count', 0) > 0:
+                    obs = property_details.get('external_obsolescence', {'factors': []})
+                    if 'factors' not in obs:
+                        obs['factors'] = []
+                    severity_impact = 5.0 if crime_stats['count'] > 15 else (2.5 if crime_stats['count'] > 5 else 1.0)
+                    crime_factor = {"description": crime_stats.get('message', ''), "impact_pct": severity_impact}
+                    obs['factors'].append(crime_factor)
+                    property_details['external_obsolescence'] = obs
+                    if 'external_obsolescence' not in equity_results:
+                        equity_results['external_obsolescence'] = {'factors': []}
+                    if 'factors' not in equity_results['external_obsolescence']:
+                        equity_results['external_obsolescence']['factors'] = []
+                    equity_results['external_obsolescence']['factors'].append(crime_factor)
+                    yield {"status": f"🚨 Intelligence Agent: Elevated crime risk (+{severity_impact}% obsolescence)"}
+        except Exception:
+            pass
 
         # ── Vision analysis ─────────────────────────────────────────
         if is_cancelled_func and is_cancelled_func(): return
