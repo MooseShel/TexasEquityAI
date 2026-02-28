@@ -97,37 +97,51 @@ class EquityAgent:
         
         wide_pool = vector_store.find_similar_properties(subject_property, limit=40)
         
-        if not wide_pool or len(wide_pool) < 3:
-            # Pgvector returned nothing — fall back to passed-in DB neighborhood comps
-            if neighborhood_properties and len(neighborhood_properties) >= 3:
-                logger.info(f"Vector search insufficient ({len(wide_pool) if wide_pool else 0}). "
-                            f"Falling back to {len(neighborhood_properties)} passed-in DB comps.")
-                # We need to compute a heuristic similarity since Supabase didn't supply one
-                subj_year = int(str(subject_property.get('year_built', 0))[:4]) if subject_property.get('year_built') else 0
+        # ALWAYS merge passed-in DB neighborhood comps into the pgvector pool.
+        # pgvector embedding coverage may be incomplete (backfill is incremental),
+        # but get_neighbors_from_db always returns full local neighborhood results.
+        # Without this merge, local comps get discarded and city-wide comps dominate.
+        if neighborhood_properties and len(neighborhood_properties) >= 3:
+            existing_accts = {c.get('account_number') for c in (wide_pool or [])}
+            subj_year = int(str(subject_property.get('year_built', 0))[:4]) if subject_property.get('year_built') else 0
+            
+            merged_count = 0
+            for comp in neighborhood_properties:
+                if comp.get('account_number') in existing_accts:
+                    continue  # Already in pgvector results — skip duplicate
                 
-                for comp in neighborhood_properties:
-                    area = float(comp.get('building_area') or 0)
-                    sim_penalty = 0.0
-                    if area > 0 and subj_area > 0:
-                        sim_penalty += abs(area - subj_area) / max(area, subj_area)
+                # Compute heuristic similarity for DB-only comps (pgvector didn't return these)
+                area = float(comp.get('building_area') or 0)
+                sim_penalty = 0.0
+                if area > 0 and subj_area > 0:
+                    sim_penalty += abs(area - subj_area) / max(area, subj_area)
+                
+                comp_year = int(str(comp.get('year_built', 0))[:4]) if comp.get('year_built') else 0
+                if comp_year and subj_year:
+                    age_diff = abs(subj_year - comp_year)
+                    sim_penalty += min(0.3, age_diff * 0.01)
                     
-                    comp_year = int(str(comp.get('year_built', 0))[:4]) if comp.get('year_built') else 0
-                    if comp_year and subj_year:
-                        age_diff = abs(subj_year - comp_year)
-                        sim_penalty += min(0.3, age_diff * 0.01) # 1% penalty per year difference, max 30%
-                        
-                    comp['similarity'] = max(0.01, min(1.0, 1.0 - sim_penalty))
-                    
-                wide_pool = neighborhood_properties
-            else:
-                logger.warning(f"Vector search returned insufficient matches ({len(wide_pool) if wide_pool else 0}) "
-                               f"and no DB fallback comps available. Returning baseline.")
-                return {
-                    'equity_5': wide_pool or [],
-                    'justified_value_floor': subj_val,
-                    'subject_value_per_sqft': subj_pps,
-                    'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
-                }
+                comp['similarity'] = max(0.01, min(1.0, 1.0 - sim_penalty))
+                
+                if wide_pool is None:
+                    wide_pool = []
+                wide_pool.append(comp)
+                existing_accts.add(comp.get('account_number'))
+                merged_count += 1
+            
+            if merged_count:
+                logger.info(f"EquityAgent: Merged {merged_count} DB neighborhood comps into pgvector pool "
+                            f"(total pool now {len(wide_pool)})")
+        
+        if not wide_pool or len(wide_pool) < 3:
+            logger.warning(f"Vector search + DB merge returned insufficient matches ({len(wide_pool) if wide_pool else 0}). "
+                           f"Returning baseline.")
+            return {
+                'equity_5': wide_pool or [],
+                'justified_value_floor': subj_val,
+                'subject_value_per_sqft': subj_pps,
+                'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
+            }
         
         # Partition into local (same neighborhood) and city-wide pools
         local_pool = []

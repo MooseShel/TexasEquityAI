@@ -332,6 +332,7 @@ async def run_protest_pipeline(
             nbhd_code = property_details.get('neighborhood_code')
             bld_area = int(property_details.get('building_area') or 0)
             prop_district = property_details.get('district', 'HCAD')
+            logger.info(f"EQUITY DEBUG: nbhd_code={nbhd_code}, bld_area={bld_area}, prop_district={prop_district}, force_fresh={force_fresh_comps}")
 
             def _detect_commercial(prop: dict) -> bool:
                 pt = str(prop.get('property_type', '') or '').lower().strip()
@@ -348,6 +349,7 @@ async def run_protest_pipeline(
                 return False
 
             is_commercial_prop = _detect_commercial(property_details) or ptype == "Commercial"
+            logger.info(f"EQUITY DEBUG: is_commercial_prop={is_commercial_prop}, ptype='{ptype}'")
             if is_commercial_prop and not property_details.get('property_type'):
                 property_details['property_type'] = 'commercial'
 
@@ -373,10 +375,11 @@ async def run_protest_pipeline(
                     except Exception as ce:
                         logger.error(f"Commercial comp pool error: {ce}")
 
-            # Residential (or fallback)
             if not real_neighborhood:
+                logger.info(f"EQUITY DEBUG: Residential path entered. force_fresh={force_fresh_comps}, nbhd_code={nbhd_code}, bld_area={bld_area}")
                 if not force_fresh_comps and nbhd_code and bld_area > 0:
                     db_comps = await supabase_service.get_neighbors_from_db(current_account, nbhd_code, bld_area, district=prop_district)
+                    logger.info(f"EQUITY DEBUG: DB returned {len(db_comps)} comps")
                     if len(db_comps) >= 3:
                         real_neighborhood = db_comps
                         yield {"status": f"⚖️ Equity Specialist: Found {len(real_neighborhood)} comps from database."}
@@ -403,7 +406,6 @@ async def run_protest_pipeline(
                 
                 # Strip trailing street suffixes for CAD portal compatibility
                 # CADs often fail if you search "Caudill Ln" instead of just "Caudill"
-                import re
                 suffix_pattern = r'\b(?:ST|STREET|AVE|AVENUE|BLVD|BOULEVARD|DR|DRIVE|LN|LANE|RD|ROAD|CT|COURT|PL|PLACE|PKWY|PARKWAY|FWY|FREEWAY|HWY|HIGHWAY|CIR|CIRCLE|TRL|TRAIL|SQ|SQUARE)\b\.?$'
                 street_name = re.sub(suffix_pattern, '', street_name, flags=re.IGNORECASE).strip()
 
@@ -691,10 +693,10 @@ async def run_protest_pipeline(
                         agents["narrative_agent"].generate_protest_narrative,
                         property_details, equity_results, vision_detections, market_value
                     ),
-                    timeout=30
+                    timeout=45
                 )
             except asyncio.TimeoutError:
-                logger.warning("Narrative generation timed out after 30s")
+                logger.warning("Narrative generation timed out after 45s")
                 narrative = "⚠️ Narrative generation timed out. Please refer to the raw data sections for details."
                 yield {"status": "⚠️ Legal Narrator: Timed out — proceeding with raw data..."}
             except Exception as e:
