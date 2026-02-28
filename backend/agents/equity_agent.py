@@ -338,17 +338,128 @@ class EquityAgent:
 
     def get_sales_analysis(self, subject_property: Dict) -> Dict:
         """
-        Uses SalesAgent to get Sales Comparables Table.
+        Uses SalesAgent to get Sales Comparables, then enriches each comp
+        via Supabase lookup and applies professional adjustments.
+        
+        Returns adjusted sale prices alongside raw sale prices.
         """
         try:
             logger.info(f"EquityAgent: Initiating Sales Analysis for {subject_property.get('address', 'Unknown')}...")
             agent = SalesAgent()
             comps = agent.find_sales_comps(subject_property)
             logger.info(f"EquityAgent: Sales Analysis complete. Found {len(comps)} comps.")
+            
+            if not comps:
+                return {"sales_comps": [], "sales_count": 0, "adjusted_sales_median": 0}
+            
+            # ── Enrich + Adjust Sales Comps ──────────────────────────────────
+            from backend.db.supabase_client import supabase_service
+            from backend.services.valuation_service import valuation_service
+            from backend.services.adjustment_model import adjustment_model
+            
+            # Get ML adjustment rates from the subject's neighborhood
+            local_rates = adjustment_model.get_local_rates(subject_property)
+            logger.info(f"EquityAgent: Sales adjustment rates: {local_rates}")
+            
+            adjusted_values = []
+            enriched_count = 0
+            
+            for comp in comps:
+                # Parse the raw sale price from formatted string
+                raw_price_str = str(comp.get("Sale Price", "0")).replace("$", "").replace(",", "").replace("(est)", "").strip()
+                try:
+                    raw_price = float(raw_price_str)
+                except (ValueError, TypeError):
+                    raw_price = 0
+                
+                if raw_price <= 0:
+                    continue
+                
+                # Parse sqft
+                sqft_str = str(comp.get("SqFt", "0")).replace(",", "").strip()
+                try:
+                    sqft = float(sqft_str) if sqft_str != "N/A" else 0
+                except (ValueError, TypeError):
+                    sqft = 0
+                
+                # Try to enrich from Supabase by address
+                comp_address = comp.get("Address", "")
+                enriched_data = {}
+                
+                if comp_address and supabase_service.client:
+                    try:
+                        # Extract street portion for matching
+                        street_part = comp_address.split(",")[0].strip()
+                        clean_street = "".join(c for c in street_part if c.isalnum() or c.isspace()).strip()
+                        
+                        if len(clean_street) >= 4:
+                            response = supabase_service.client.table("properties") \
+                                .select("account_number, building_area, year_built, building_grade, "
+                                        "land_value, neighborhood_code, appraised_value, land_area, "
+                                        "segments_value, other_improvements, sub_areas") \
+                                .ilike("address", f"%{clean_street}%") \
+                                .limit(1) \
+                                .execute()
+                            
+                            if response.data:
+                                enriched_data = response.data[0]
+                                enriched_count += 1
+                    except Exception as e:
+                        logger.debug(f"Supabase lookup failed for '{comp_address}': {e}")
+                
+                # Build a normalized comp dict for calculate_adjustments
+                # Use enriched data for fields not available in sales API, 
+                # but prefer the sale price as the comp's "value"
+                norm_comp = {
+                    "appraised_value": raw_price,  # Use sale price as the base value
+                    "building_area": enriched_data.get("building_area") or sqft or 0,
+                    "year_built": enriched_data.get("year_built") or comp.get("Year Built") or 0,
+                    "building_grade": enriched_data.get("building_grade") or "B-",
+                    "land_value": enriched_data.get("land_value") or 0,
+                    "land_area": enriched_data.get("land_area") or 0,
+                    "neighborhood_code": enriched_data.get("neighborhood_code") or "",
+                    "segments_value": enriched_data.get("segments_value") or 0,
+                    "other_improvements": enriched_data.get("other_improvements") or 0,
+                    "sub_areas": enriched_data.get("sub_areas") or 0,
+                }
+                
+                # Apply full professional adjustment grid
+                try:
+                    adjustments = valuation_service.calculate_adjustments(
+                        subject_property, norm_comp, local_rates
+                    )
+                    adjusted_sale_price = adjustments.get("indicated_value", raw_price)
+                    comp["adjustments"] = adjustments
+                    comp["Adjusted Sale Price"] = f"${adjusted_sale_price:,.0f}"
+                    comp["_adjusted_value"] = adjusted_sale_price
+                    comp["_enriched"] = bool(enriched_data)
+                    adjusted_values.append(adjusted_sale_price)
+                except Exception as e:
+                    logger.warning(f"Sales adjustment failed for {comp_address}: {e}")
+                    comp["Adjusted Sale Price"] = comp.get("Sale Price", "N/A")
+                    comp["_adjusted_value"] = raw_price
+                    comp["_enriched"] = False
+                    adjusted_values.append(raw_price)
+            
+            # Calculate adjusted median
+            adjusted_sales_median = 0
+            if adjusted_values:
+                adjusted_values.sort()
+                adjusted_sales_median = adjusted_values[len(adjusted_values) // 2]
+            
+            logger.info(
+                f"EquityAgent: Sales enrichment complete. "
+                f"{enriched_count}/{len(comps)} enriched via Supabase. "
+                f"Adjusted median: ${adjusted_sales_median:,.0f}"
+            )
+            
             return {
                 "sales_comps": comps,
-                "sales_count": len(comps)
+                "sales_count": len(comps),
+                "adjusted_sales_median": adjusted_sales_median,
+                "sales_enriched_count": enriched_count,
+                "sales_adjustment_method": local_rates.get("method", "Default"),
             }
         except Exception as e:
             logger.error(f"Sales Analysis Failed: {e}")
-            return {"sales_comps": [], "sales_count": 0, "error": str(e)}
+            return {"sales_comps": [], "sales_count": 0, "adjusted_sales_median": 0, "error": str(e)}

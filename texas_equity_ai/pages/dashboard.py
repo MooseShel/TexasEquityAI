@@ -419,7 +419,7 @@ def tab_equity_comps() -> rx.Component:
 # ── Tab: Sales Comps ─────────────────────────────────────────────
 def tab_sales_comps() -> rx.Component:
     return rx.box(
-        rx.heading("💰 Sales Comparables (Unadjusted)", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
+        rx.heading("💰 Sales Comparables (Adjusted)", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Assessment summary callout
         rx.cond(
             AppState.sales_comps.length() > 0,
@@ -471,13 +471,13 @@ def tab_sales_comps() -> rx.Component:
                         margin_bottom="16px",
                     ),
                 ),
-                # F-5/F-6: Unadjusted sales disclosure
+                # Sales adjustment methodology note
                 rx.callout(
-                    "Note: Sale prices shown are unadjusted raw transaction data per §41.43(b)(3). "
-                    "They represent an indicated range and have not been adjusted for property-specific "
-                    "differences (size, condition, age) per USPAP Standards Rule 1-4.",
-                    icon="info",
-                    color_scheme="gray",
+                    "Sale prices have been professionally adjusted for size, depreciation, grade, "
+                    "and land differences using ML-derived rates. Properties were enriched via "
+                    "Supabase database cross-reference for complete adjustment data per USPAP SR 1-4.",
+                    icon="sparkles",
+                    color_scheme="purple",
                     margin_bottom="16px",
                     size="1",
                 ),

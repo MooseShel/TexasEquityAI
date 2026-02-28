@@ -241,8 +241,17 @@ class AppState(rx.State):
 
     @rx.var
     def sales_median_price(self) -> float:
-        """Median sale price from sales comps."""
-        raw = self.equity_data.get("sales_comps", []) if isinstance(self.equity_data, dict) else []
+        """Adjusted median sale price from sales comps (enriched via Supabase + ML adjustments)."""
+        if not isinstance(self.equity_data, dict):
+            return 0.0
+        
+        # Prefer pre-computed adjusted median from the enrichment pipeline
+        adj_median = self.equity_data.get("adjusted_sales_median", 0)
+        if adj_median and float(adj_median) > 0:
+            return float(adj_median)
+        
+        # Fallback: compute raw median from sale prices (backward compatibility)
+        raw = self.equity_data.get("sales_comps", [])
         prices = []
         for sc in raw:
             try:
