@@ -282,7 +282,7 @@ async def get_full_protest(
                     # District-aware City Mapping
                     district_map = {
                         "HCAD": "Houston, TX", "TCAD": "Austin, TX", "DCAD": "Dallas, TX",
-                        "CCAD": "Plano, TX", "TAD": "Fort Worth, TX"
+                        "CCAD": "Plano, TX", "TAD": "Fort Worth, TX", "BCAD": "Angleton, TX"
                     }
                     district_city = district_map.get(current_district, "Houston, TX")
 
@@ -752,7 +752,7 @@ async def get_full_protest(
             # 5. Vision & Location Analysis (Flood Zones)
             search_address = property_details.get('address', '')
             district_key = property_details.get('district', 'HCAD')
-            known_cities = ["Houston, TX", "Austin, TX", "Dallas, TX", "Plano, TX", "Fort Worth, TX"]
+            known_cities = ["Houston, TX", "Austin, TX", "Dallas, TX", "Plano, TX", "Fort Worth, TX", "Angleton, TX", "Pearland, TX"]
             
             # Smart Append: Only append city if none of the known major cities are present
             if not any(city in search_address for city in known_cities):
@@ -761,7 +761,8 @@ async def get_full_protest(
                     "TCAD": ", Austin, TX",
                     "DCAD": ", Dallas, TX",
                     "CCAD": ", Plano, TX",
-                    "TAD": ", Fort Worth, TX"
+                    "TAD": ", Fort Worth, TX",
+                    "BCAD": ", Angleton, TX"
                  }
                  suffix = d_map.get(district_key, ", Houston, TX")
                  search_address += suffix

@@ -34,7 +34,8 @@ DISTRICT_OPTIONS = [
     "Tarrant County (TAD)",
     "Collin County (CCAD)",
     "Dallas County (DCAD)",
-    "Travis County (TCAD)"
+    "Travis County (TCAD)",
+    "Brazoria County (BCAD)"
 ]
 
 # Map display names back to codes for backend use
@@ -43,7 +44,8 @@ DISTRICT_CODE_MAP = {
     "Tarrant County (TAD)": "TAD",
     "Collin County (CCAD)": "CCAD",
     "Dallas County (DCAD)": "DCAD",
-    "Travis County (TCAD)": "TCAD"
+    "Travis County (TCAD)": "TCAD",
+    "Brazoria County (BCAD)": "BCAD"
 }
 
 # Map codes to display names for UI state initialization
@@ -55,7 +57,8 @@ DISTRICT_TAX_RATES = {
     "TAD": 2.4,    # Tarrant County
     "CCAD": 2.0,   # Collin County
     "DCAD": 2.5,   # Dallas County
-    "TCAD": 1.8    # Travis County
+    "TCAD": 1.8,   # Travis County
+    "BCAD": 2.2    # Brazoria County
 }
 
 ACCOUNT_PLACEHOLDERS = {
@@ -64,6 +67,7 @@ ACCOUNT_PLACEHOLDERS = {
     "CCAD": "Enter Address or Account ID",
     "TCAD": "Enter Address or Account ID",
     "DCAD": "Enter Address or Account ID",
+    "BCAD": "Enter Address or Account ID",
 }
 
 
@@ -90,7 +94,7 @@ def detect_district(raw_acc: str) -> str | None:
         city_map = {
             "dallas": "DCAD", "austin": "TCAD", "fort worth": "TAD",
             "plano": "CCAD", "houston": "HCAD", "travis": "TCAD",
-            "tarrant": "TAD", "harris": "HCAD",
+            "tarrant": "TAD", "harris": "HCAD", "brazoria": "BCAD",
         }
         for city, dist in city_map.items():
             if city in lower:
