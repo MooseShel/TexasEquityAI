@@ -37,6 +37,20 @@ class EquityAgent:
                         if val > 0:
                             comp['value_per_sqft'] = (val / area) if area > 0 else 0
                             comp['comp_source'] = 'local'
+                            
+                            # Calculate a heuristic similarity score based on value and area
+                            # since we don't have embeddings for these comps.
+                            sim_penalty = 0.0
+                            if area > 0 and subj_area > 0:
+                                sim_penalty += abs(area - subj_area) / max(area, subj_area)
+                            else:
+                                sim_penalty += 0.5 # Unknown building area penalty
+                                
+                            val_diff = abs(val - subj_val) / max(val, subj_val, 1)
+                            sim_penalty += val_diff * 0.5
+                            
+                            comp['similarity'] = max(0.01, min(1.0, 1.0 - sim_penalty))
+                                
                             valid_comps.append(comp)
                     except Exception:
                         continue
@@ -88,6 +102,22 @@ class EquityAgent:
             if neighborhood_properties and len(neighborhood_properties) >= 3:
                 logger.info(f"Vector search insufficient ({len(wide_pool) if wide_pool else 0}). "
                             f"Falling back to {len(neighborhood_properties)} passed-in DB comps.")
+                # We need to compute a heuristic similarity since Supabase didn't supply one
+                subj_year = int(str(subject_property.get('year_built', 0))[:4]) if subject_property.get('year_built') else 0
+                
+                for comp in neighborhood_properties:
+                    area = float(comp.get('building_area') or 0)
+                    sim_penalty = 0.0
+                    if area > 0 and subj_area > 0:
+                        sim_penalty += abs(area - subj_area) / max(area, subj_area)
+                    
+                    comp_year = int(str(comp.get('year_built', 0))[:4]) if comp.get('year_built') else 0
+                    if comp_year and subj_year:
+                        age_diff = abs(subj_year - comp_year)
+                        sim_penalty += min(0.3, age_diff * 0.01) # 1% penalty per year difference, max 30%
+                        
+                    comp['similarity'] = max(0.01, min(1.0, 1.0 - sim_penalty))
+                    
                 wide_pool = neighborhood_properties
             else:
                 logger.warning(f"Vector search returned insufficient matches ({len(wide_pool) if wide_pool else 0}) "
