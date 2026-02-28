@@ -142,7 +142,7 @@ def sidebar() -> rx.Component:
             ),
             rx.box(
                 rx.slider(
-                    default_value=[2.5],
+                    value=[AppState.tax_rate],
                     min=1.0,
                     max=4.0,
                     step=0.1,

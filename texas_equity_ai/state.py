@@ -49,6 +49,15 @@ DISTRICT_CODE_MAP = {
 # Map codes to display names for UI state initialization
 CODE_TO_DISTRICT_MAP = {v: k for k, v in DISTRICT_CODE_MAP.items()}
 
+# Typical tax rates per county
+DISTRICT_TAX_RATES = {
+    "HCAD": 2.5,   # Harris County
+    "TAD": 2.4,    # Tarrant County
+    "CCAD": 2.0,   # Collin County
+    "DCAD": 2.5,   # Dallas County
+    "TCAD": 1.8    # Travis County
+}
+
 ACCOUNT_PLACEHOLDERS = {
     "HCAD": "Enter Address or Account ID",
     "TAD": "Enter Address or Account ID",
@@ -451,10 +460,14 @@ class AppState(rx.State):
         if detected and detected != self.district_code:
             self.district_code = detected
             self.district_name = CODE_TO_DISTRICT_MAP.get(detected, "Harris County (HCAD)")
+            self.tax_rate = DISTRICT_TAX_RATES.get(detected, 2.5)
 
     def set_district(self, value: str):
         self.district_name = value
-        self.district_code = DISTRICT_CODE_MAP.get(value, "HCAD")
+        new_code = DISTRICT_CODE_MAP.get(value, "HCAD")
+        if new_code != self.district_code:
+            self.district_code = new_code
+            self.tax_rate = DISTRICT_TAX_RATES.get(new_code, 2.5)
 
     def toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed

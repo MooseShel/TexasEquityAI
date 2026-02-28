@@ -1024,7 +1024,7 @@ def dashboard() -> rx.Component:
                             rx.box(
                                 rx.text("Tax Rate: " + AppState.tax_rate.to(str) + "%", font_size="0.75rem", color="white", margin_bottom="2px"),
                                 rx.slider(
-                                    default_value=[2.5],
+                                    value=[AppState.tax_rate],
                                     min=1.0,
                                     max=4.0,
                                     step=0.1,
