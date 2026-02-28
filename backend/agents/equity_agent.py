@@ -101,6 +101,15 @@ class EquityAgent:
         
         wide_pool = vector_store.find_similar_properties(subject_property, limit=40)
         
+        # Exclude the subject property itself from the comp pool.
+        # pgvector returns the subject as its own nearest neighbor (similarity ≈ 1.0).
+        subj_acct = str(subject_property.get('account_number', '')).strip()
+        if wide_pool and subj_acct:
+            before_len = len(wide_pool)
+            wide_pool = [c for c in wide_pool if str(c.get('account_number', '')).strip() != subj_acct]
+            if len(wide_pool) < before_len:
+                logger.info(f"EquityAgent: Excluded subject property ({subj_acct}) from its own comp pool")
+        
         # ALWAYS merge passed-in DB neighborhood comps into the pgvector pool.
         # pgvector embedding coverage may be incomplete (backfill is incremental),
         # but get_neighbors_from_db always returns full local neighborhood results.

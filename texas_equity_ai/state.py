@@ -474,8 +474,8 @@ class AppState(rx.State):
         return obs.get("factors", []) if isinstance(obs, dict) else []
 
     @rx.var
-    def map_url(self) -> str:
-        """Build a Google Static Maps URL using addresses (no lat/lon needed)."""
+    def equity_map_url(self) -> str:
+        """Build a Google Static Maps URL for equity comps (blue markers)."""
         api_key = os.getenv("GOOGLE_STREET_VIEW_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
         if not api_key:
             return ""
@@ -495,6 +495,33 @@ class AppState(rx.State):
                 markers.append(f"markers=color:blue%7Clabel:C%7C{quote(addr)}")
 
         if not markers:
+            return ""
+
+        marker_str = "&".join(markers)
+        return f"https://maps.googleapis.com/maps/api/staticmap?size=640x400&maptype=roadmap&{marker_str}&key={api_key}"
+
+    @rx.var
+    def sales_map_url(self) -> str:
+        """Build a Google Static Maps URL for sales comps (green markers)."""
+        api_key = os.getenv("GOOGLE_STREET_VIEW_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+        if not api_key:
+            return ""
+
+        from urllib.parse import quote
+
+        markers = []
+        # Subject property — red marker
+        subject_addr = self.property_data.get("address", "")
+        if subject_addr and subject_addr != "Unknown":
+            markers.append(f"markers=color:red%7Clabel:S%7C{quote(subject_addr)}")
+
+        # Sales comps — green markers
+        for comp in self.sales_comps:
+            addr = comp.get("Address", comp.get("address", ""))
+            if addr and addr != "Unknown" and addr != subject_addr:
+                markers.append(f"markers=color:green%7Clabel:C%7C{quote(addr)}")
+
+        if not markers or len(markers) < 2:  # Need at least subject + 1 comp
             return ""
 
         marker_str = "&".join(markers)

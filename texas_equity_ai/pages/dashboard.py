@@ -382,11 +382,11 @@ def tab_equity_comps() -> rx.Component:
         ),
         # Map below table
         rx.cond(
-            AppState.map_url != "",
+            AppState.equity_map_url != "",
             rx.box(
                 rx.heading("🗺️ Property & Comp Locations", size="4", color=TEXT_PRIMARY, margin_bottom="8px"),
                 rx.image(
-                    src=AppState.map_url,
+                    src=AppState.equity_map_url,
                     width="100%",
                     max_width="100%",
                     height="auto",
@@ -494,11 +494,11 @@ def tab_sales_comps() -> rx.Component:
         ),
         # Map below table
         rx.cond(
-            AppState.map_url != "",
+            AppState.sales_map_url != "",
             rx.box(
                 rx.heading("🗺️ Property & Comp Locations", size="4", color=TEXT_PRIMARY, margin_bottom="8px"),
                 rx.image(
-                    src=AppState.map_url,
+                    src=AppState.sales_map_url,
                     width="100%",
                     max_width="100%",
                     height="auto",
