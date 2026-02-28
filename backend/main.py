@@ -279,10 +279,11 @@ async def get_full_protest(
                         current_account = scraped_acc
 
                 if not property_details:
-                    # District-aware City Mapping
+                    # District-aware City Mapping (Only used if RentCast falsely returns Houston for another county)
                     district_map = {
                         "HCAD": "Houston, TX", "TCAD": "Austin, TX", "DCAD": "Dallas, TX",
-                        "CCAD": "Plano, TX", "TAD": "Fort Worth, TX", "BCAD": "Angleton, TX"
+                        "CCAD": "Plano, TX", "TAD": "Fort Worth, TX"
+                        # Note: Multi-city counties like BCAD are excluded so we don't accidentally override Pearland to Angleton
                     }
                     district_city = district_map.get(current_district, "Houston, TX")
 
@@ -752,19 +753,22 @@ async def get_full_protest(
             # 5. Vision & Location Analysis (Flood Zones)
             search_address = property_details.get('address', '')
             district_key = property_details.get('district', 'HCAD')
-            known_cities = ["Houston, TX", "Austin, TX", "Dallas, TX", "Plano, TX", "Fort Worth, TX", "Angleton, TX", "Pearland, TX"]
             
-            # Smart Append: Only append city if none of the known major cities are present
-            if not any(city in search_address for city in known_cities):
+            # Smart Append: Check if address already appears to have a city/state/zip
+            import re
+            has_state_or_zip = re.search(r'(,\s*TX|\bTX\b|\bTexas\b|\d{5}(?:-\d{4})?$)', search_address, re.IGNORECASE)
+            has_comma = ',' in search_address
+            
+            if not has_state_or_zip and not has_comma:
                  d_map = {
                     "HCAD": ", Houston, TX",
                     "TCAD": ", Austin, TX",
                     "DCAD": ", Dallas, TX",
                     "CCAD": ", Plano, TX",
                     "TAD": ", Fort Worth, TX",
-                    "BCAD": ", Angleton, TX"
+                    "BCAD": ", Brazoria County, TX" # Safest generic fallback for a multi-city county
                  }
-                 suffix = d_map.get(district_key, ", Houston, TX")
+                 suffix = d_map.get(district_key, ", TX")
                  search_address += suffix
             
             # Geocode once for both Vision and FEMA
