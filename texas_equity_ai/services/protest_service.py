@@ -11,7 +11,7 @@ import asyncio
 import logging
 import re
 import traceback
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, Callable
 
 # Ensure project root on path
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,11 +96,13 @@ async def run_protest_pipeline(
     manual_area: Optional[float] = None,
     force_fresh_comps: bool = False,
     tax_rate: float = 2.5,
+    is_cancelled_func: Optional[Callable[[], bool]] = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Async generator that mirrors the original protest_generator_local().
     Yields dicts with keys: 'status', 'warning', 'error', or 'data'.
     """
+    if is_cancelled_func and is_cancelled_func(): return
     agents = _get_agents()
     equity_results = {}
 
@@ -205,6 +207,7 @@ async def run_protest_pipeline(
                     ptype_source = f"RentCast_Cached({rc_ptype})"
 
             if not rentcast_fallback_data or ptype_source == "Unknown":
+                if is_cancelled_func and is_cancelled_func(): return
                 yield {"status": "🏢 Property Type Check: Resolving via multi-source chain..."}
                 ptype2, src2 = await resolve_property_type(
                     account_number=current_account,
@@ -318,6 +321,7 @@ async def run_protest_pipeline(
         property_details['permit_summary'] = permit_summary
 
         # ── Equity analysis ─────────────────────────────────────────
+        if is_cancelled_func and is_cancelled_func(): return
         yield {"status": "⚖️ Equity Specialist: Discovering comparable properties..."}
         try:
             if not is_real_address(prop_address):
@@ -530,6 +534,7 @@ async def run_protest_pipeline(
             equity_results = {"error": str(e)}
 
         # ── Vision analysis ─────────────────────────────────────────
+        if is_cancelled_func and is_cancelled_func(): return
         yield {"status": "📸 Vision Agent: Analyzing property condition..."}
         search_address = property_details.get('address', '')
         flood_data = None
@@ -629,6 +634,7 @@ async def run_protest_pipeline(
             pass
 
         # ── Narrative generation ────────────────────────────────────
+        if is_cancelled_func and is_cancelled_func(): return
         yield {"status": "✍️ Legal Narrator: Evaluating protest viability..."}
 
         def _safe_flt(v):
@@ -698,6 +704,7 @@ async def run_protest_pipeline(
             )
 
         # ── PDF generation ──────────────────────────────────────────
+        if is_cancelled_func and is_cancelled_func(): return
         upload_dir = _get_upload_dir()
         filename = f"ProtestPacket_{current_account}.pdf"
         combined_path = os.path.join(upload_dir, filename)

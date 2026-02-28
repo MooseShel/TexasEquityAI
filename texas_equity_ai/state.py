@@ -581,7 +581,10 @@ class AppState(rx.State):
                 manual_area=m_area,
                 force_fresh_comps=fresh,
                 tax_rate=rate,
+                is_cancelled_func=lambda: self.is_cancelling,
             ):
+                if self.is_cancelling:
+                    break
                 if "status" in update:
                     async with self:
                         self.agent_logs = self.agent_logs + [update["status"]]
