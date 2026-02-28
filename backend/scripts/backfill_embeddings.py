@@ -17,30 +17,39 @@ def backfill():
         logger.error("Supabase client not initialized")
         return
 
-    logger.info("Fetching properties without embeddings...")
-    # Get properties without embeddings
-    # Pagination might be needed if there are many, but let's try a bulk fetch first
-    response = supabase_service.client.table('properties').select('*').is_('embedding', 'null').limit(1000).execute()
-    
-    properties = response.data
-    if not properties:
-        logger.info("No properties found missing embeddings.")
-        return
+    logger.info("Fetching properties without embeddings in chunks of 1000...")
+    total_updated = 0
+    total_batches = 0
 
-    logger.info(f"Found {len(properties)} properties to backfill. Calculating vectors...")
-    
-    success_count = 0
-    for prop in properties:
-        account_number = prop.get('account_number')
-        if not account_number:
-            continue
-            
-        if vector_store.update_property_embedding(account_number, prop):
-            success_count += 1
-            if success_count % 100 == 0:
-                logger.info(f"Updated {success_count} properties...")
+    while True:
+        # Get up to 1000 properties without embeddings
+        response = supabase_service.client.table('properties').select('*').is_('embedding', 'null').limit(1000).execute()
+        
+        properties = response.data
+        if not properties:
+            if total_batches == 0:
+                logger.info("No properties found missing embeddings.")
+            else:
+                logger.info(f"Backfill complete! Successfully updated {total_updated} total records.")
+            break
+
+        total_batches += 1
+        logger.info(f"--- Batch {total_batches} ---")
+        logger.info(f"Found {len(properties)} properties to backfill. Calculating vectors...")
+        
+        batch_success_count = 0
+        for prop in properties:
+            account_number = prop.get('account_number')
+            if not account_number:
+                continue
                 
-    logger.info(f"Backfill complete! Successfully updated {success_count}/{len(properties)} records.")
+            if vector_store.update_property_embedding(account_number, prop):
+                batch_success_count += 1
+                total_updated += 1
+                if batch_success_count % 200 == 0:
+                    logger.info(f"  Updated {batch_success_count} / {len(properties)} in current batch...")
+                    
+        logger.info(f"Finished Batch {total_batches}. Updated {batch_success_count}/{len(properties)} records.")
 
 if __name__ == "__main__":
     backfill()
