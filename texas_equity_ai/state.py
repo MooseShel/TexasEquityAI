@@ -379,7 +379,12 @@ class AppState(rx.State):
     def win_predictor_model(self) -> str:
         """Model version used for win prediction (e.g., 'xgboost_hybrid_v1')."""
         ml = self.equity_data.get("ml_prediction", {}) if isinstance(self.equity_data, dict) else {}
-        return str(ml.get("model_version", ""))
+        version = str(ml.get("model_version", ""))
+        if not version:
+            return ""
+        if "xgboost" in version.lower():
+            return "Win Predictor: Hybrid ML (544K HCAD records)"
+        return "Win Predictor: Calibrated Heuristic Model"
 
     @rx.var
     def equity_analysis_status(self) -> str:

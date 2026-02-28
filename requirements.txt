@@ -16,6 +16,7 @@ tiktoken
 pandas
 numpy
 scikit-learn
+xgboost
 matplotlib
 requests
 tenacity

@@ -79,7 +79,8 @@ def hero_banner() -> rx.Component:
                     AppState.win_predictor_model != "",
                     rx.badge(
                         rx.icon("brain", size=12),
-                        " Win Predictor: Hybrid ML (544K HCAD records)",
+                        " ",
+                        AppState.win_predictor_model,
                         color_scheme="green",
                         variant="surface",
                         size="1",
