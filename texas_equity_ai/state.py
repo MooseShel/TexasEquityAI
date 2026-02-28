@@ -92,9 +92,18 @@ def detect_district(raw_acc: str) -> str | None:
     if not target and any(c.isalpha() for c in raw_acc):
         lower = raw_acc.lower()
         city_map = {
-            "dallas": "DCAD", "austin": "TCAD", "fort worth": "TAD",
-            "plano": "CCAD", "houston": "HCAD", "travis": "TCAD",
-            "tarrant": "TAD", "harris": "HCAD", "brazoria": "BCAD",
+            # Dallas County (DCAD)
+            "dallas": "DCAD", "irving": "DCAD", "garland": "DCAD", "grand prairie": "DCAD", "richardson": "DCAD", "mesquite": "DCAD", "carrollton": "DCAD", "coppell": "DCAD", "duncanville": "DCAD", "desoto": "DCAD", "cedar hill": "DCAD",
+            # Travis County (TCAD)
+            "austin": "TCAD", "pflugerville": "TCAD", "lakeway": "TCAD", "manor": "TCAD", "bee cave": "TCAD", "travis": "TCAD",
+            # Tarrant County (TAD)
+            "fort worth": "TAD", "arlington": "TAD", "euless": "TAD", "bedford": "TAD", "hurst": "TAD", "haltom city": "TAD", "keller": "TAD", "southlake": "TAD", "grapevine": "TAD", "colleyville": "TAD", "tarrant": "TAD",
+            # Collin County (CCAD)
+            "plano": "CCAD", "frisco": "CCAD", "mckinney": "CCAD", "allen": "CCAD", "wylie": "CCAD", "prosper": "CCAD", "celina": "CCAD", "melissa": "CCAD", "collin": "CCAD",
+            # Harris County (HCAD)
+            "houston": "HCAD", "katy": "HCAD", "cypress": "HCAD", "spring": "HCAD", "tomball": "HCAD", "humble": "HCAD", "bellaire": "HCAD", "pasadena": "HCAD", "baytown": "HCAD", "deer park": "HCAD", "la porte": "HCAD", "harris": "HCAD",
+            # Brazoria County (BCAD)
+            "brazoria": "BCAD", "pearland": "BCAD", "angleton": "BCAD", "alvin": "BCAD", "manvel": "BCAD", "freeport": "BCAD", "lake jackson": "BCAD"
         }
         for city, dist in city_map.items():
             if city in lower:
@@ -103,7 +112,8 @@ def detect_district(raw_acc: str) -> str | None:
 
     # 3. ZIP code fallback
     if not target:
-        zip_map = {"750": "CCAD", "77": "HCAD", "75": "DCAD", "76": "TAD", "787": "TCAD", "786": "TCAD"}
+        # Longest prefixes first (7757=Manvel/Pearland) so 77 doesn't override them
+        zip_map = {"750": "CCAD", "7757": "BCAD", "775": "BCAD", "77": "HCAD", "75": "DCAD", "76": "TAD", "787": "TCAD", "786": "TCAD"}
         zip_match = re.search(r'\b(7\d{4})\b', raw_acc)
         if zip_match:
             z = zip_match.group(1)

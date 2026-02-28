@@ -167,11 +167,12 @@ async def get_full_protest(
                     # Infer district from resolved address to ensure correct connector usage
                     if not current_district:
                         res_addr = resolved.get('address', '').lower()
-                        if "dallas" in res_addr: current_district = "DCAD"
-                        elif "austin" in res_addr: current_district = "TCAD"
-                        elif "fort worth" in res_addr: current_district = "TAD"
-                        elif "plano" in res_addr: current_district = "CCAD"
-                        elif "houston" in res_addr: current_district = "HCAD"
+                        if any(c in res_addr for c in ["plano", "frisco", "mckinney", "allen", "wylie", "prosper"]): current_district = "CCAD"
+                        elif any(c in res_addr for c in ["dallas", "irving", "garland", "richardson", "mesquite", "carrollton"]): current_district = "DCAD"
+                        elif any(c in res_addr for c in ["austin", "pflugerville", "lakeway", "manor", "bee cave"]): current_district = "TCAD"
+                        elif any(c in res_addr for c in ["fort worth", "arlington", "euless", "bedford", "keller", "southlake", "grapevine"]): current_district = "TAD"
+                        elif any(bc in res_addr for bc in ["brazoria", "pearland", "angleton", "alvin", "freeport", "lake jackson", "manvel"]): current_district = "BCAD"
+                        elif any(hc in res_addr for hc in ["houston", "harris", "katy", "cypress", "spring", "tomball", "humble"]): current_district = "HCAD"
                         if current_district:
                             logger.info(f"Inferred district from RentCast address: {current_district}")
 
