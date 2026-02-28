@@ -83,6 +83,8 @@ def detect_district(raw_acc: str) -> str | None:
         target = "DCAD"
     elif len(clean) == 13 and clean.isdigit():
         target = "HCAD"
+    elif len(clean) <= 12 and clean.isdigit():
+        target = "BCAD"
     elif raw_acc.upper().strip().startswith("R") and len(clean) <= 10:
         target = "CCAD"
     elif len(clean) == 8 and clean.isdigit():
@@ -674,6 +676,14 @@ class AppState(rx.State):
                     data = update["data"]
                     async with self:
                         self.property_data = data.get("property", {})
+                        
+                        # Fix: Sync district dropdown if backend found property in a different county
+                        actual_dist = self.property_data.get("district")
+                        if actual_dist and actual_dist != self.district_code:
+                            self.district_code = actual_dist
+                            self.district_name = CODE_TO_DISTRICT_MAP.get(actual_dist, "Harris County (HCAD)")
+                            self.tax_rate = DISTRICT_TAX_RATES.get(actual_dist, 2.5)
+
                         self.equity_data = data.get("equity", {})
                         self.vision_data = data.get("vision", [])
                         self.narrative = data.get("narrative", "")

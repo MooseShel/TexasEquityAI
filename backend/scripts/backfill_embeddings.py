@@ -22,10 +22,20 @@ def backfill():
     total_batches = 0
 
     while True:
-        # Get up to 1000 properties without embeddings
-        response = supabase_service.client.table('properties').select('*').is_('embedding', 'null').limit(1000).execute()
-        
+        # 1. Prioritize HCAD first
+        response = supabase_service.client.table('properties').select('*').eq('district', 'HCAD').is_('embedding', 'null').limit(1000).execute()
         properties = response.data
+        
+        # 2. Try BCAD if HCAD is complete
+        if not properties:
+            response = supabase_service.client.table('properties').select('*').eq('district', 'BCAD').is_('embedding', 'null').limit(1000).execute()
+            properties = response.data
+            
+        # 3. Get any remaining if both are complete
+        if not properties:
+            response = supabase_service.client.table('properties').select('*').is_('embedding', 'null').limit(1000).execute()
+            properties = response.data
+
         if not properties:
             if total_batches == 0:
                 logger.info("No properties found missing embeddings.")
