@@ -761,11 +761,11 @@ async def get_full_protest(
             
             if not has_state_or_zip and not has_comma:
                  d_map = {
-                    "HCAD": ", Houston, TX",
-                    "TCAD": ", Austin, TX",
-                    "DCAD": ", Dallas, TX",
-                    "CCAD": ", Plano, TX",
-                    "TAD": ", Fort Worth, TX",
+                    "HCAD": ", Harris County, TX",
+                    "TCAD": ", Travis County, TX",
+                    "DCAD": ", Dallas County, TX",
+                    "CCAD": ", Collin County, TX",
+                    "TAD": ", Tarrant County, TX",
                     "BCAD": ", Brazoria County, TX" # Safest generic fallback for a multi-city county
                  }
                  suffix = d_map.get(district_key, ", TX")
