@@ -975,6 +975,32 @@ def dashboard() -> rx.Component:
                         "box_shadow": "none",
                     },
                 ),
+                # ── Cancel Search Button ──
+                rx.cond(
+                    AppState.is_generating,
+                    rx.button(
+                        rx.hstack(
+                            rx.icon("x", size=16),
+                            rx.text("Abort"),
+                            spacing="2",
+                            align_items="center",
+                        ),
+                        on_click=AppState.cancel_analysis,
+                        background=DANGER_BG,
+                        color=DANGER,
+                        border=f"1px solid {DANGER}",
+                        border_radius=RADIUS_SM,
+                        font_weight="700",
+                        min_height="44px",
+                        cursor="pointer",
+                        width="auto",
+                        _hover={
+                            "background": "rgba(239, 68, 68, 0.2)",
+                            "transform": "translateY(-2px)",
+                        },
+                        _active={"transform": "scale(0.95)"},
+                    ),
+                ),
                 width="100%",
                 spacing="3",
                 flex_direction=["column", "column", "row"],

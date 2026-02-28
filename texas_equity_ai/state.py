@@ -140,6 +140,7 @@ class AppState(rx.State):
 
     # ── Generation state ────────────────────────────────────────────
     is_generating: bool = False
+    is_cancelling: bool = False
     _generation_started_at: float = 0.0
     generation_complete: bool = False
     agent_logs: list[str] = []
@@ -522,6 +523,20 @@ class AppState(rx.State):
         self.agent_logs = []
         self.generation_complete = False
         self._generation_started_at = 0.0
+
+    is_cancelling: bool = False
+
+    @rx.event
+    async def cancel_analysis(self):
+        """Immediately unlocks the UI and signals the backend stream to disconnect."""
+        if not self.is_generating:
+            return
+            
+        self.is_cancelling = True
+        self.is_generating = False
+        self.generation_complete = False
+        self.agent_logs.append("⚠️ Analysis cancelled by user.")
+        yield
 
     def start_generate(self):
         """Instantly set loading state, then kick off background task."""

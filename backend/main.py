@@ -107,6 +107,9 @@ async def get_full_protest(
             
     async def protest_generator():
         print("DEBUG: protest_generator STARTED!")
+        import asyncio
+        from starlette.requests import ClientDisconnect
+        
         try:
             equity_results = {} # Global initialization to prevent NameError
             yield json.dumps({"status": "🔍 Resolver Agent: Locating property and resolving address..."}) + "\n"
