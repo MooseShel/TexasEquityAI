@@ -121,14 +121,24 @@ def tab_overview() -> rx.Component:
             rx.grid(
                 rx.cond(
                     AppState.evidence_image_path != "",
-                    rx.image(
-                        src=rx.get_upload_url(AppState.evidence_image_path),
-                        width="100%",
-                        height="260px",
-                        object_fit="cover",
-                        border_radius=RADIUS_SM,
-                        border=f"1px solid {BORDER}",
-                        box_shadow=SHADOW_SM,
+                    rx.box(
+                        rx.image(
+                            src=rx.get_upload_url(AppState.evidence_image_path),
+                            width="100%",
+                            height="260px",
+                            object_fit="cover",
+                            border_radius=RADIUS_SM,
+                            border=f"1px solid {BORDER}",
+                            box_shadow=SHADOW_SM,
+                        ),
+                        rx.text(
+                            "📷 Google Street View — imagery may not reflect current property condition or recent construction.",
+                            font_size="0.7rem",
+                            color=TEXT_MUTED,
+                            font_style="italic",
+                            margin_top="4px",
+                            text_align="center",
+                        ),
                     ),
                 ),
                 property_card(),
