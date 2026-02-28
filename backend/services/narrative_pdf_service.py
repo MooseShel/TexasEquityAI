@@ -49,11 +49,9 @@ class NarrativeAgent:
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.xai_key = os.getenv("XAI_API_KEY")
-        self.deepseek_key = os.getenv("DEEPSEEK_API")
         self.gemini_client = None
         self.openai_llm = None
         self.xai_llm = None
-        self.deepseek_llm = None
 
         # File-based debug logger for narrative generation
         os.makedirs("outputs", exist_ok=True)
@@ -62,14 +60,7 @@ class NarrativeAgent:
         fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         logger.addHandler(fh)
 
-        logger.info(f"NarrativeAgent init: DEEPSEEK_API={'SET' if self.deepseek_key else 'MISSING'}, OPENAI_API_KEY={'SET' if self.openai_key else 'MISSING'}, GEMINI_API_KEY={'SET' if self.gemini_key else 'MISSING'}, XAI_API_KEY={'SET' if self.xai_key else 'MISSING'}")
-
-        if self.deepseek_key:
-            try:
-                self.deepseek_llm = ChatOpenAI(model="deepseek-chat", api_key=self.deepseek_key, base_url="https://api.deepseek.com/v1", temperature=0.7)
-                logger.info("DeepSeek client initialized.")
-            except Exception as e:
-                logger.error(f"Failed to initialize DeepSeek: {e}")
+        logger.info(f"NarrativeAgent init: GEMINI_API_KEY={'SET' if self.gemini_key else 'MISSING'}, OPENAI_API_KEY={'SET' if self.openai_key else 'MISSING'}, XAI_API_KEY={'SET' if self.xai_key else 'MISSING'}")
 
         if self.gemini_key:
             try:
@@ -89,7 +80,7 @@ class NarrativeAgent:
             except: pass
 
     def generate_protest_narrative(self, property_data: dict, equity_data: dict, vision_data: list, market_value: float = None) -> str:
-        if not self.deepseek_llm and not self.gemini_client and not self.openai_llm and not self.xai_llm:
+        if not self.gemini_client and not self.openai_llm and not self.xai_llm:
             return "Narrative Generation Unavailable: No LLM keys found."
 
         def safe_float(val):
@@ -187,37 +178,9 @@ INSTRUCTIONS:
 6. Be factual and professional — this is for an administrative ARB hearing, NOT a judicial court. Do NOT address them as "Your Honor" or "May it please the court". Instead, address them as "Members of the Appraisal Review Board" or similar.
 7. Do NOT include headers, titles, or bullet points — write continuous prose paragraphs only"""
 
-        # ── LLM Fallback Chain: DeepSeek → OpenAI → Gemini → xAI ──
+        # ── LLM Fallback Chain: Gemini → OpenAI → xAI ──
 
-        # 1. Try DeepSeek first (fastest, cheapest)
-        if self.deepseek_llm:
-            try:
-                from langchain_core.prompts import PromptTemplate
-                from langchain_core.output_parsers import StrOutputParser
-                simple_prompt = PromptTemplate.from_template("{text}")
-                chain = simple_prompt | self.deepseek_llm | StrOutputParser()
-                result = chain.invoke({"text": prompt})
-                if result and len(result.strip()) > 100:
-                    logger.info(f"Narrative generated via DeepSeek ({len(result.strip())} chars)")
-                    return clean_text(result.strip())
-            except Exception as e:
-                logger.warning(f"DeepSeek narrative generation failed: {e}")
-
-        # 2. Try OpenAI
-        if self.openai_llm:
-            try:
-                from langchain_core.prompts import PromptTemplate
-                from langchain_core.output_parsers import StrOutputParser
-                simple_prompt = PromptTemplate.from_template("{text}")
-                chain = simple_prompt | self.openai_llm | StrOutputParser()
-                result = chain.invoke({"text": prompt})
-                if result and len(result.strip()) > 100:
-                    logger.info(f"Narrative generated via OpenAI ({len(result.strip())} chars)")
-                    return clean_text(result.strip())
-            except Exception as e:
-                logger.warning(f"OpenAI narrative generation failed: {e}")
-
-        # 3. Try Gemini (with retry for rate limiting)
+        # 1. Try Gemini first (fastest with Ultra plan, no rate limits)
         if self.gemini_client:
             import time
             for gemini_model in ["gemini-2.0-flash", "gemini-2.0-flash-lite"]:
@@ -240,7 +203,7 @@ INSTRUCTIONS:
                         
                         # Fast-fail on hard quota exhaustion
                         if 'resource_exhausted' in err_str or 'quota' in err_str:
-                            logger.error(f"Gemini quota exhausted. Fast-failing to xAI...")
+                            logger.error(f"Gemini quota exhausted. Fast-failing to OpenAI...")
                             break
                             
                         # Only sleep on transient rate limits
@@ -251,7 +214,21 @@ INSTRUCTIONS:
                                 continue
                         break  # Non-rate-limit error, try next model
 
-        # 4. Try xAI (Grok) as last resort
+        # 2. Try OpenAI
+        if self.openai_llm:
+            try:
+                from langchain_core.prompts import PromptTemplate
+                from langchain_core.output_parsers import StrOutputParser
+                simple_prompt = PromptTemplate.from_template("{text}")
+                chain = simple_prompt | self.openai_llm | StrOutputParser()
+                result = chain.invoke({"text": prompt})
+                if result and len(result.strip()) > 100:
+                    logger.info(f"Narrative generated via OpenAI ({len(result.strip())} chars)")
+                    return clean_text(result.strip())
+            except Exception as e:
+                logger.warning(f"OpenAI narrative generation failed: {e}")
+
+        # 3. Try xAI (Grok) as last resort
         if self.xai_llm:
             try:
                 from langchain_core.prompts import PromptTemplate
