@@ -867,6 +867,264 @@ class PDFService:
                 f"(reduction of {self._fmt(appraised - adj_value)})"
             ), ln=True)
 
+    # ── METHODOLOGY APPENDIX ──────────────────────────────────────────────
+    def _generate_methodology_appendix(self, pdf, property_data, equity_data):
+        """Generates a professional 2-page appendix explaining the full methodology."""
+        
+        # ── PAGE 1: VALUATION APPROACHES & ADJUSTMENTS ──────────────────
+        pdf.add_page()
+        self._draw_header(pdf, property_data, "APPENDIX: METHODOLOGY & JUSTIFICATION")
+        
+        # Title
+        pdf.set_font("Montserrat", 'B', 13)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 9, "Financial Assessment Methodology", ln=True)
+        pdf.ln(2)
+        
+        # Intro
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 4, clean_text(
+            "This appendix documents the methodology used to derive the valuation opinions and protest "
+            "arguments presented in this report. All methods are grounded in authoritative standards "
+            "including the Texas Tax Code, IAAO Standard on Mass Appraisal, and the Uniform Standards "
+            "of Professional Appraisal Practice (USPAP). This analysis is prepared as taxpayer advocacy "
+            "evidence and does not constitute a certified appraisal."
+        ))
+        pdf.ln(3)
+        
+        # Section 1: Three Approaches
+        pdf.set_font("Montserrat", 'B', 10)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "1. Valuation Approaches", ln=True)
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        
+        approaches = [
+            ("Equity Uniformity (TC 41.43(b)(1))",
+             "Compares the subject property's appraised value against a pool of comparable properties "
+             "identified via semantic similarity search. The justified value floor is the median "
+             "of all adjusted comparable values per TC 42.26(a)(3). Adjustments applied for size, "
+             "age/depreciation, grade, land, and sub-area differences."),
+            ("Sales Comparison (TC 41.43(b)(3), TC 23.01)",
+             "Recent arm's-length sales from county records and MLS data within a 2-year lookback. "
+             "Each sales comparable is enriched via database cross-reference and professionally "
+             "adjusted for property-specific differences. The sales target is the adjusted median."),
+            ("Cost Approach (TC 23.011)",
+             "Replacement cost new estimated from Marshall & Swift parameters for the subject's "
+             "building grade and class, less accrued depreciation (physical, functional, and external). "
+             "Serves as a ceiling of value when deterioration is present."),
+        ]
+        
+        for title, desc in approaches:
+            pdf.set_font("Roboto", 'B', 8)
+            pdf.cell(0, 5, f"  {title}", ln=True)
+            pdf.set_font("Roboto", '', 7.5)
+            pdf.set_x(18)
+            pdf.multi_cell(0, 3.5, clean_text(desc))
+            pdf.ln(1.5)
+        
+        pdf.ln(2)
+        
+        # Section 2: Adjustment Methodology
+        pdf.set_font("Montserrat", 'B', 10)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "2. Professional Adjustment Methodology", ln=True)
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        
+        # Get actual rates used
+        adj_method = equity_data.get("adjustment_method", "Default") if isinstance(equity_data, dict) else "Default"
+        adj_r2 = equity_data.get("adjustment_r2", 0) if isinstance(equity_data, dict) else 0
+        
+        pdf.multi_cell(0, 4, clean_text(
+            f"Adjustment rates are derived dynamically using {adj_method} trained on locally "
+            "similar properties via vector similarity search. This approach produces market-derived "
+            "adjustment rates that reflect the specific sub-market characteristics of the subject's "
+            "neighborhood, as required by USPAP Standards Rule 1-4."
+        ))
+        pdf.ln(2)
+        
+        if adj_r2 and float(adj_r2) > 0:
+            pdf.set_font("Roboto", 'I', 7.5)
+            pdf.set_text_color(80, 80, 80)
+            pdf.cell(0, 4, clean_text(
+                f"Model goodness-of-fit: R-squared = {float(adj_r2):.3f} (reported for transparency)"
+            ), ln=True)
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(1)
+        
+        # Adjustment grid summary
+        pdf.set_font("Roboto", 'B', 8)
+        pdf.cell(0, 5, "  Adjustment Categories Applied:", ln=True)
+        pdf.set_font("Roboto", '', 7.5)
+        
+        adj_categories = [
+            ("Size (Building Area)", "Subject vs. comp building area difference x ML-derived $/sqft rate"),
+            ("Age / Depreciation", "Marshall & Swift % good interpolation, applied to improvement value only (land excluded)"),
+            ("Building Grade", "Grade multiplier ratio applied to comp value (A+ through S scale)"),
+            ("Land Value", "ML-derived $/sqft land rate or assessed land value comparison"),
+            ("Deferred Maintenance", "10% penalty: age >20yr + no permits + vision-detected condition issues"),
+            ("Sub Areas / Segments", "Direct dollar adjustment from county records (garages, porches, etc.)"),
+        ]
+        
+        col_w = [55, 135]
+        pdf.set_fill_color(241, 245, 249)
+        for cat, desc in adj_categories:
+            pdf.set_font("Roboto", 'B', 7)
+            pdf.cell(col_w[0], 5, f"    {cat}", 0, 0, 'L')
+            pdf.set_font("Roboto", '', 7)
+            pdf.cell(col_w[1], 5, clean_text(desc), 0, 1, 'L')
+        
+        pdf.ln(3)
+        
+        # Section 3: Target Value Derivation
+        pdf.set_font("Montserrat", 'B', 10)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "3. Target Protest Value Derivation", ln=True)
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 4, clean_text(
+            "The Target Protest Value is derived as the minimum of three independently computed "
+            "value indications: (1) Equity Uniformity floor (adjusted median of comparable appraised values), "
+            "(2) Sales Comparison indication (adjusted median of recent arm's-length sales), and "
+            "(3) Current CAD market value. Additional deductions for physical condition, deferred "
+            "maintenance, and external obsolescence are applied where supported by evidence."
+        ))
+        
+        # ── PAGE 2: AI/ML MODELS & DATA INTEGRITY ───────────────────────
+        pdf.add_page()
+        self._draw_header(pdf, property_data, "APPENDIX: METHODOLOGY & JUSTIFICATION (cont.)")
+        
+        # Section 4: AI/ML Model Inventory
+        pdf.set_font("Montserrat", 'B', 10)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "4. AI & Machine Learning Model Inventory", ln=True)
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 4, clean_text(
+            "The following machine learning models are used to enhance the accuracy and defensibility "
+            "of this analysis. Each model serves a specific role and its contribution is documented "
+            "for transparency."
+        ))
+        pdf.ln(2)
+        
+        # Model table
+        model_col_w = [45, 35, 110]
+        pdf.set_fill_color(10, 25, 47)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Roboto", 'B', 7)
+        pdf.cell(model_col_w[0], 6, " Model", 1, 0, 'L', True)
+        pdf.cell(model_col_w[1], 6, " Type", 1, 0, 'L', True)
+        pdf.cell(model_col_w[2], 6, " Role in Analysis", 1, 1, 'L', True)
+        pdf.set_text_color(0, 0, 0)
+        
+        models = [
+            ("pgvector Similarity", "Embedding KNN", "Identifies comparable properties via semantic vector search across property attributes"),
+            ("Ridge Regression", "L2 Regression", "Computes market-derived $ /sqft and $/year adjustment rates from local market data"),
+            ("XGBoost Classifier", "Gradient Boosting", "Predicts protest win probability trained on 544K+ HCAD ARB hearing outcomes"),
+            ("Calibrated Heuristic", "Log-Odds Model", "Adjusts base probability using property-specific evidence signals"),
+            ("GPT-4V / Gemini Vision", "Computer Vision", "Detects physical condition issues from street-view imagery for depreciation support"),
+        ]
+        
+        pdf.set_font("Roboto", '', 7)
+        for i, (name, mtype, role) in enumerate(models):
+            fill = i % 2 == 0
+            if fill:
+                pdf.set_fill_color(248, 250, 252)
+            pdf.set_font("Roboto", 'B', 7)
+            pdf.cell(model_col_w[0], 5.5, f" {name}", 'B', 0, 'L', fill)
+            pdf.set_font("Roboto", '', 7)
+            pdf.cell(model_col_w[1], 5.5, f" {mtype}", 'B', 0, 'L', fill)
+            pdf.cell(model_col_w[2], 5.5, f" {clean_text(role)}", 'B', 1, 'L', fill)
+        
+        pdf.ln(4)
+        
+        # Section 5: Evidence Signal Framework
+        pdf.set_font("Montserrat", 'B', 10)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "5. Evidence Signal Weights & Legal Basis", ln=True)
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 4, clean_text(
+            "Protest success probability and savings estimates are derived from five independent evidence "
+            "signals, each grounded in a distinct legal and empirical basis. Weights are expert-calibrated "
+            "based on legal standing and historical ARB hearing outcomes."
+        ))
+        pdf.ln(2)
+        
+        sig_col_w = [50, 20, 60, 60]
+        pdf.set_fill_color(10, 25, 47)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Roboto", 'B', 7)
+        pdf.cell(sig_col_w[0], 6, " Evidence Signal", 1, 0, 'L', True)
+        pdf.cell(sig_col_w[1], 6, " Weight", 1, 0, 'C', True)
+        pdf.cell(sig_col_w[2], 6, " Legal Basis", 1, 0, 'L', True)
+        pdf.cell(sig_col_w[3], 6, " Data Source", 1, 1, 'L', True)
+        pdf.set_text_color(0, 0, 0)
+        
+        signals = [
+            ("Equity Uniformity", "40%", "TC 41.43(b)(1), TC 42.26", "HCAD/BCAD records + pgvector"),
+            ("Statistical Anomaly", "20%", "Ratio study analysis", "Z-score vs neighborhood median"),
+            ("Physical Depreciation", "15%", "TC 23.01, Marshall & Swift", "AI vision + permit history"),
+            ("Geo Obsolescence", "10%", "External obsolescence", "Crime, school, walkability data"),
+            ("Flood Zone Impact", "15%", "Environmental factors", "FEMA NFHL flood zone maps"),
+        ]
+        
+        pdf.set_font("Roboto", '', 7)
+        for i, (name, weight, legal, source) in enumerate(signals):
+            fill = i % 2 == 0
+            if fill:
+                pdf.set_fill_color(248, 250, 252)
+            pdf.set_font("Roboto", 'B', 7)
+            pdf.cell(sig_col_w[0], 5.5, f" {name}", 'B', 0, 'L', fill)
+            pdf.set_font("Roboto", '', 7)
+            pdf.cell(sig_col_w[1], 5.5, weight, 'B', 0, 'C', fill)
+            pdf.cell(sig_col_w[2], 5.5, f" {legal}", 'B', 0, 'L', fill)
+            pdf.cell(sig_col_w[3], 5.5, f" {source}", 'B', 1, 'L', fill)
+        
+        pdf.ln(4)
+        
+        # Section 6: Data Integrity
+        pdf.set_font("Montserrat", 'B', 10)
+        pdf.set_text_color(10, 25, 47)
+        pdf.cell(0, 7, "6. Data Integrity & Quality Measures", ln=True)
+        pdf.set_font("Roboto", '', 8)
+        pdf.set_text_color(0, 0, 0)
+        
+        measures = [
+            "Comparable pool size: minimum 5 local properties, expanded to city-wide only when insufficient",
+            "Age compatibility: comps filtered within 20-year age gap of subject property",
+            "Subject exclusion: subject property automatically removed from its own comparable pool",
+            "Deduplication: address-based deduplication prevents double-counting across data sources",
+            "Sales recency: 2-year lookback window for arm's-length transactions per IAAO guidelines",
+            "Adjustment bounds: depreciation capped at 90% (10% minimum condition floor per Marshall & Swift)",
+            "Value verification: zero-price and zero-sqft records excluded before analysis",
+        ]
+        
+        for m in measures:
+            pdf.set_font("Roboto", '', 7.5)
+            pdf.cell(5, 4, "", 0, 0)
+            pdf.cell(3, 4, chr(8226), 0, 0)  # bullet
+            pdf.cell(0, 4, f" {clean_text(m)}", 0, 1)
+        
+        pdf.ln(3)
+        
+        # Standards compliance statement
+        pdf.set_draw_color(180, 180, 180)
+        pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+        pdf.ln(3)
+        pdf.set_font("Roboto", 'I', 7.5)
+        pdf.set_text_color(80, 80, 80)
+        pdf.multi_cell(0, 3.5, clean_text(
+            "Standards Compliance: This methodology is designed to align with the Texas Tax Code "
+            "(Sections 23.01, 41.43, 42.26), IAAO Standard on Mass Appraisal of Real Property, "
+            "and USPAP Standards Rule 1-4 for the Sales Comparison Approach. While this report "
+            "is prepared as advocacy evidence (not a certified appraisal), all valuation methods "
+            "and adjustments are grounded in recognized professional standards."
+        ))
+        pdf.set_text_color(0, 0, 0)
+
     # ══════════════════════════════════════════════════════════════════════════
     # ██  MAIN PDF GENERATOR
     # ══════════════════════════════════════════════════════════════════════════
@@ -2895,6 +3153,12 @@ class PDFService:
             pdf.set_font("Roboto", 'B', 8)
             pdf.cell(0, 6, f"Owner Name: {clean_text(owner_name)}  |  Address: {clean_text(property_data.get('address', ''))}", ln=True)
             pdf.cell(0, 6, f"Account Number: {property_data.get('account_number', '')}  |  {clean_text(property_data.get('address', ''))}", ln=True)
+
+        # ── APPENDIX: METHODOLOGY & JUSTIFICATION ═════════════════════════════
+        try:
+            self._generate_methodology_appendix(pdf, property_data, equity_data)
+        except Exception as e:
+            logger.warning(f"Methodology appendix page failed (non-fatal): {e}")
 
         # ── LEGAL DISCLAIMER ───────────────────────────────────────────────
         pdf.ln(6)
