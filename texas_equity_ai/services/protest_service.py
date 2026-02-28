@@ -400,6 +400,12 @@ async def run_protest_pipeline(
                     else:
                         break
                 street_name = " ".join(addr_parts)
+                
+                # Strip trailing street suffixes for CAD portal compatibility
+                # CADs often fail if you search "Caudill Ln" instead of just "Caudill"
+                import re
+                suffix_pattern = r'\b(?:ST|STREET|AVE|AVENUE|BLVD|BOULEVARD|DR|DRIVE|LN|LANE|RD|ROAD|CT|COURT|PL|PLACE|PKWY|PARKWAY|FWY|FREEWAY|HWY|HIGHWAY|CIR|CIRCLE|TRL|TRAIL|SQ|SQUARE)\b\.?$'
+                street_name = re.sub(suffix_pattern, '', street_name, flags=re.IGNORECASE).strip()
 
                 async def scrape_pool(pool_list, limit=3):
                     sem = asyncio.Semaphore(limit)
