@@ -2896,6 +2896,45 @@ class PDFService:
             pdf.cell(0, 6, f"Owner Name: {clean_text(owner_name)}  |  Address: {clean_text(property_data.get('address', ''))}", ln=True)
             pdf.cell(0, 6, f"Account Number: {property_data.get('account_number', '')}  |  {clean_text(property_data.get('address', ''))}", ln=True)
 
+        # ── LEGAL DISCLAIMER ───────────────────────────────────────────────
+        pdf.ln(6)
+        pdf.set_draw_color(180, 180, 180)
+        pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+        pdf.ln(4)
+        pdf.set_font("Roboto", 'B', 8)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5, "IMPORTANT NOTICES AND DISCLAIMERS", ln=True)
+        pdf.set_font("Roboto", '', 7)
+        pdf.multi_cell(0, 3.5, clean_text(
+            "1. This analysis is for property tax protest purposes only. It does not constitute a certified "
+            "appraisal under the Uniform Standards of Professional Appraisal Practice (USPAP) or Texas "
+            "Occupations Code Chapter 1103. This report is prepared as advocacy evidence, not a balanced "
+            "appraisal opinion."
+        ))
+        pdf.ln(1)
+        pdf.multi_cell(0, 3.5, clean_text(
+            "2. AI-predicted win probabilities are based on historical Harris County Appraisal Review Board "
+            "hearing data (544K+ records) and do not guarantee outcomes. Individual ARB panels exercise "
+            "independent judgment. Past hearing patterns may not predict future results."
+        ))
+        pdf.ln(1)
+        pdf.multi_cell(0, 3.5, clean_text(
+            "3. Comparable property values are sourced from public records and third-party APIs. Sales "
+            "comparables presented as 'unadjusted' represent raw transaction data and have not been adjusted "
+            "for individual property differences per USPAP Standards Rule 1-4. Equity comparables are adjusted "
+            "using ML-derived rates from local market data."
+        ))
+        pdf.ln(1)
+        pdf.multi_cell(0, 3.5, clean_text(
+            "4. ML-derived adjustment rates are dynamically calibrated from local market data via Ridge "
+            "Regression (L2 regularized) and are subject to model uncertainty. The R-squared goodness-of-fit "
+            "score is reported for transparency. Signal weights used in savings estimation are expert-calibrated "
+            "based on legal standing: Equity Uniformity 40% (TC 41.43(b)(1)), Statistical Anomaly 20%, "
+            "Physical Depreciation 15% (TC 23.01), Geo Obsolescence 10%, Flood Zone 15%."
+        ))
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(3)
+
         # Signature block
         pdf.ln(8)
         pdf.set_font("Roboto", '', 9)

@@ -63,6 +63,57 @@ def hero_banner() -> rx.Component:
             spacing="3",
             position="relative",
         ),
+        # ── Methodology Badges ──────────────────────────────────────────
+        rx.cond(
+            AppState.adjustment_method_label != "",
+            rx.hstack(
+                rx.badge(
+                    rx.icon("sparkles", size=12),
+                    " Adjustments: ",
+                    AppState.adjustment_method_label,
+                    color_scheme="purple",
+                    variant="surface",
+                    size="1",
+                ),
+                rx.cond(
+                    AppState.win_predictor_model != "",
+                    rx.badge(
+                        rx.icon("brain", size=12),
+                        " Win Predictor: Hybrid ML (544K HCAD records)",
+                        color_scheme="green",
+                        variant="surface",
+                        size="1",
+                    ),
+                ),
+                spacing="2",
+                margin_top="12px",
+                flex_wrap="wrap",
+                position="relative",
+            ),
+        ),
+        # ── Equity Analysis Warning ─────────────────────────────────────
+        rx.cond(
+            (AppState.equity_analysis_status == "failed") | (AppState.equity_analysis_status == "no_gap"),
+            rx.callout(
+                AppState.equity_analysis_reason,
+                icon="alert_triangle",
+                color_scheme="yellow",
+                margin_top="10px",
+                size="1",
+                position="relative",
+            ),
+        ),
+        # ── Legal Disclaimer ────────────────────────────────────────────
+        rx.text(
+            "This analysis is for property tax protest purposes only. It does not constitute "
+            "a certified appraisal under USPAP or Texas Occupations Code Ch. 1103. "
+            "AI-predicted outcomes are based on historical data and do not guarantee results.",
+            font_size="0.6rem",
+            color="rgba(255,255,255,0.3)",
+            margin_top="10px",
+            position="relative",
+            line_height="1.3",
+        ),
         **hero_banner_style,
     )
 
@@ -273,20 +324,49 @@ def tab_equity_comps() -> rx.Component:
                     width="100%",
                     margin_bottom="12px",
                 ),
-                # Contextual message
+                # Contextual message — equity analysis status
                 rx.cond(
-                    AppState.equity_savings > 0,
+                    AppState.equity_analysis_status == "success",
                     rx.callout(
                         "Equity over-assessment detected! Your appraised value exceeds the justified value floor of comparable properties. This supports a protest under Texas Tax Code §41.43(b)(1).",
                         icon="circle_check",
                         color_scheme="green",
                         margin_bottom="16px",
                     ),
+                    rx.cond(
+                        AppState.equity_analysis_status == "failed",
+                        rx.callout(
+                            rx.text(
+                                "⚠️ Equity analysis could not be completed: ",
+                                rx.text.strong(AppState.equity_analysis_reason),
+                                " The equity target shown equals the current appraised value as a fallback.",
+                            ),
+                            icon="alert_triangle",
+                            color_scheme="yellow",
+                            margin_bottom="16px",
+                        ),
+                        rx.callout(
+                            "No equity over-assessment found. Comparable properties support the current appraised value. The equity argument does not support a reduction at this time.",
+                            icon="info",
+                            color_scheme="blue",
+                            margin_bottom="16px",
+                        ),
+                    ),
+                ),
+                # ML Methodology note
+                rx.cond(
+                    AppState.adjustment_method_label != "",
                     rx.callout(
-                        "No equity over-assessment found. Your appraised value is at or below the justified value of comparable properties. The equity argument does not support a reduction.",
-                        icon="info",
-                        color_scheme="blue",
+                        rx.text(
+                            "📊 Adjustment rates dynamically derived via ",
+                            rx.text.strong(AppState.adjustment_method_label),
+                            " from locally similar properties. This methodology produces market-derived "
+                            "adjustment rates per USPAP Standards Rule 1-4.",
+                        ),
+                        icon="sparkles",
+                        color_scheme="purple",
                         margin_bottom="16px",
+                        size="1",
                     ),
                 ),
                 equity_comp_table(),
@@ -339,7 +419,7 @@ def tab_equity_comps() -> rx.Component:
 # ── Tab: Sales Comps ─────────────────────────────────────────────
 def tab_sales_comps() -> rx.Component:
     return rx.box(
-        rx.heading("💰 Sales Comparables", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
+        rx.heading("💰 Sales Comparables (Unadjusted)", size="7", font_family=FONT_SERIF, margin_bottom="24px", color=TEXT_PRIMARY),
         # Assessment summary callout
         rx.cond(
             AppState.sales_comps.length() > 0,
@@ -390,6 +470,16 @@ def tab_sales_comps() -> rx.Component:
                         color_scheme="blue",
                         margin_bottom="16px",
                     ),
+                ),
+                # F-5/F-6: Unadjusted sales disclosure
+                rx.callout(
+                    "Note: Sale prices shown are unadjusted raw transaction data per §41.43(b)(3). "
+                    "They represent an indicated range and have not been adjusted for property-specific "
+                    "differences (size, condition, age) per USPAP Standards Rule 1-4.",
+                    icon="info",
+                    color_scheme="gray",
+                    margin_bottom="16px",
+                    size="1",
                 ),
                 sales_comp_table(),
                 margin_bottom="20px",

@@ -72,6 +72,8 @@ class EquityAgent:
                         'equity_5': equity_10,
                         'justified_value_floor': justified_value_floor,
                         'subject_value_per_sqft': 0,
+                        'equity_analysis_status': 'success' if justified_value_floor < subj_val else 'no_gap',
+                        'equity_analysis_reason': '' if justified_value_floor < subj_val else 'No equity gap detected (value-only comparison).',
                         'note': 'Value-only comparison (no sqft data available for subject property)'
                     }
             
@@ -79,6 +81,8 @@ class EquityAgent:
                 'equity_5': [],
                 'justified_value_floor': subj_val,
                 'subject_value_per_sqft': 0,
+                'equity_analysis_status': 'failed',
+                'equity_analysis_reason': 'Missing property area. Could not perform square foot analysis.',
                 'error': "Missing Property Area: Could not perform Square Foot analysis. Using current appraisal as baseline."
             }
             
@@ -140,6 +144,8 @@ class EquityAgent:
                 'equity_5': wide_pool or [],
                 'justified_value_floor': subj_val,
                 'subject_value_per_sqft': subj_pps,
+                'equity_analysis_status': 'failed',
+                'equity_analysis_reason': 'Insufficient comparable properties found in database.',
                 'error': f"Insufficient comparable properties found in DB. Using current appraisal as baseline."
             }
         
@@ -242,17 +248,13 @@ class EquityAgent:
                 'equity_5': [],
                 'justified_value_floor': subj_val,
                 'subject_value_per_sqft': subj_pps,
-                'error': "Could not calculate value per squar foot for returned vector matches."
+                'equity_analysis_status': 'failed',
+                'equity_analysis_reason': 'Could not calculate value per square foot for returned vector matches.',
+                'error': "Could not calculate value per square foot for returned vector matches."
             }
 
-        # 3. Sort by 'value_per_sqft' ascending (lowest taxed neighbors first)
-        valid_comps.sort(key=lambda x: x['value_per_sqft'])
-        
-        # 4. Select the top 10 for adjustments
-        equity_10 = valid_comps[:10]
-        
-        # Phase 2: Professional Adjustments
-        logger.info(f"Applying professional adjustments to {len(equity_10)} vector comps...")
+        # Phase 2: Professional Adjustments — apply to ALL valid comps (unbiased)
+        logger.info(f"Applying professional adjustments to {len(valid_comps)} vector comps...")
         
         # 4.5. Get Dynamic ML Adjustment Rates
         logger.info("EquityAgent: Fetching dynamic ML adjustment rates for subject neighborhood...")
@@ -261,7 +263,7 @@ class EquityAgent:
         
         adj_values = []
         
-        for comp in equity_10:
+        for comp in valid_comps:
             try:
                 adjustments = valuation_service.calculate_adjustments(subject_property, comp, local_rates)
                 comp['adjustments'] = adjustments
@@ -274,7 +276,7 @@ class EquityAgent:
         from datetime import datetime, timedelta
         cutoff = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")  # 24 months
         recently_sold_count = 0
-        for comp in equity_10:
+        for comp in valid_comps:
             sale_date = comp.get('last_sale_date')
             if sale_date:
                 comp['recently_sold'] = str(sale_date) >= cutoff
@@ -284,19 +286,45 @@ class EquityAgent:
                 comp['recently_sold'] = False
                 
         if recently_sold_count:
-            logger.info(f"EquityAgent: {recently_sold_count}/{len(equity_10)} comps have recent deed transfers (< 24mo)")
+            logger.info(f"EquityAgent: {recently_sold_count}/{len(valid_comps)} comps have recent deed transfers (< 24mo)")
 
-        # New Justified Value Floor = Median of adjusted total values
+        # F-1 Fix: Justified Value Floor = UNBIASED median of ALL adjusted values
+        # Uses the full pool of valid comps, not just the lowest-valued subset.
+        # This complies with §42.26(a)(3): "median appraised value of a reasonable
+        # number of comparable properties appropriately adjusted."
+        equity_analysis_status = 'success'
+        equity_analysis_reason = ''
+        
         if adj_values:
             adj_values.sort()
             justified_value_floor = adj_values[len(adj_values)//2]
+            logger.info(f"EquityAgent: Unbiased median of {len(adj_values)} adjusted values = ${justified_value_floor:,.0f}")
         else:
             justified_value_floor = subj_val
+            equity_analysis_status = 'failed'
+            equity_analysis_reason = 'Professional adjustments could not be computed for any comparable.'
+
+        # F-2: If justified_value_floor equals subj_val due to median being higher,
+        # that's a legitimate result (comps support the appraised value), not a failure.
+        if equity_analysis_status == 'success' and justified_value_floor >= subj_val:
+            equity_analysis_status = 'no_gap'
+            equity_analysis_reason = 'Comparable properties support the current appraised value. No equity gap detected.'
+            justified_value_floor = subj_val  # Cap at appraised — can't argue for increase
+
+        # 3. Sort by value_per_sqft ascending for DISPLAY only (advocacy presentation)
+        valid_comps.sort(key=lambda x: x.get('value_per_sqft', 0))
+        
+        # Select top 10 for display
+        equity_10 = valid_comps[:10]
 
         return {
             'equity_5': equity_10,
             'justified_value_floor': justified_value_floor,
-            'subject_value_per_sqft': subj_pps
+            'subject_value_per_sqft': subj_pps,
+            'equity_analysis_status': equity_analysis_status,
+            'equity_analysis_reason': equity_analysis_reason,
+            'adjustment_method': local_rates.get('method', 'Default'),
+            'adjustment_r2': local_rates.get('r2_score', 0),
         }
 
     def get_sales_analysis(self, subject_property: Dict) -> Dict:

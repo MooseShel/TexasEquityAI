@@ -150,7 +150,10 @@ class ValuationService:
         
         if comp_pct > 0:
             pct_diff = (subj_pct - comp_pct) / 100
-            adjustments["percent_good"] = round(comp_value * pct_diff)
+            # F-4 Fix: Depreciation applies only to improvement value, not land
+            # Per IAAO/Marshall & Swift, land does not depreciate
+            comp_improvement = max(0, comp_value - float(comp.get('land_value') or 0))
+            adjustments["percent_good"] = round(comp_improvement * pct_diff)
 
         # --- 6.5. Deferred Maintenance Penalty ---
         # If effective_age > 20 years AND permit_count == 0 AND Vision Agent detects issues

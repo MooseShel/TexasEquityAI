@@ -367,6 +367,39 @@ class AppState(rx.State):
         return str(ml.get("win_probability_pct", "—"))
 
     @rx.var
+    def win_predictor_model(self) -> str:
+        """Model version used for win prediction (e.g., 'xgboost_hybrid_v1')."""
+        ml = self.equity_data.get("ml_prediction", {}) if isinstance(self.equity_data, dict) else {}
+        return str(ml.get("model_version", ""))
+
+    @rx.var
+    def equity_analysis_status(self) -> str:
+        """Status of equity analysis: success, no_gap, partial, or failed."""
+        if not isinstance(self.equity_data, dict):
+            return ""
+        return str(self.equity_data.get("equity_analysis_status", ""))
+
+    @rx.var
+    def equity_analysis_reason(self) -> str:
+        """Human-readable reason for equity analysis status."""
+        if not isinstance(self.equity_data, dict):
+            return ""
+        return str(self.equity_data.get("equity_analysis_reason", ""))
+
+    @rx.var
+    def adjustment_method_label(self) -> str:
+        """Label for the adjustment methodology used (ML Ridge or Default)."""
+        if not isinstance(self.equity_data, dict):
+            return ""
+        method = self.equity_data.get("adjustment_method", "")
+        r2 = self.equity_data.get("adjustment_r2", 0)
+        if "ML" in str(method) or "Ridge" in str(method):
+            return f"ML-Derived Rates (R²={r2:.2f})" if r2 else "ML-Derived Rates"
+        elif method:
+            return str(method)
+        return ""
+
+    @rx.var
     def condition_issues(self) -> list[dict]:
         """Vision items excluding the CONDITION_SUMMARY meta-entry."""
         if not isinstance(self.vision_data, list):
