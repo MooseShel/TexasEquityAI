@@ -200,6 +200,8 @@ def tab_overview() -> rx.Component:
         ),
 
         padding_top="8px",
+        width="100%",
+        overflow_x="hidden",
     )
 
 
@@ -279,6 +281,8 @@ def tab_equity_comps() -> rx.Component:
                 ),
                 equity_comp_table(),
                 margin_bottom="20px",
+                width="100%",
+                overflow="hidden",
             ),
             rx.callout(
                 "No equity comparable data available yet.",
@@ -317,6 +321,8 @@ def tab_equity_comps() -> rx.Component:
             ),
         ),
         padding_top="8px",
+        width="100%",
+        overflow_x="hidden",
     )
 
 
@@ -377,6 +383,8 @@ def tab_sales_comps() -> rx.Component:
                 ),
                 sales_comp_table(),
                 margin_bottom="20px",
+                width="100%",
+                overflow="hidden",
             ),
             rx.callout(
                 "No sales comparable data available yet.",
@@ -415,6 +423,8 @@ def tab_sales_comps() -> rx.Component:
             ),
         ),
         padding_top="8px",
+        width="100%",
+        overflow_x="hidden",
     )
 
 
@@ -486,6 +496,8 @@ def tab_condition() -> rx.Component:
             ),
         ),
         padding_top="8px",
+        width="100%",
+        overflow_x="hidden",
     )
 
 
